@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Nikse.SubtitleEdit.Core.BluRaySup;
 using Nikse.SubtitleEdit.Core.Common;
+using Nikse.SubtitleEdit.Core.Forms.FixCommonErrors;
 using Nikse.SubtitleEdit.Core.ContainerFormats;
 using Nikse.SubtitleEdit.Core.ContainerFormats.Matroska;
 using Nikse.SubtitleEdit.Core.ContainerFormats.Mp4.Boxes;
@@ -136,6 +137,7 @@ public partial class OcrViewModel : ObservableObject
     [ObservableProperty] private bool _doPromptForUnknownWords;
     [ObservableProperty] private bool _doTryToGuessUnknownWords;
     [ObservableProperty] private bool _doAutoBreak;
+    [ObservableProperty] private bool _doFixDialogueDashes;
     [ObservableProperty] private bool _isDictionaryLoaded;
     [ObservableProperty] private ObservableCollection<UnknownWordItem> _unknownWords;
     [ObservableProperty] private UnknownWordItem? _selectedUnknownWord;
@@ -318,6 +320,7 @@ public partial class OcrViewModel : ObservableObject
             DoPromptForUnknownWords = ocr.DoPromptForUnknownWords;
             DoTryToGuessUnknownWords = ocr.DoTryToGuessUnknownWords;
             DoAutoBreak = ocr.DoAutoBreak;
+            DoFixDialogueDashes = ocr.DoFixDialogueDashes;
             HasCaptureAlignment = ocr.CaptureAssaPosition;
             NOcrBinaryOcrFallbackDatabase = ocr.NOcrBinaryOcrFallbackDatabase ?? string.Empty;
             BinaryOcrNOcrFallbackDatabase = ocr.BinaryOcrNOcrFallbackDatabase ?? string.Empty;
@@ -353,6 +356,7 @@ public partial class OcrViewModel : ObservableObject
         ocr.DoPromptForUnknownWords = DoPromptForUnknownWords;
         ocr.DoTryToGuessUnknownWords = DoTryToGuessUnknownWords;
         ocr.DoAutoBreak = DoAutoBreak;
+        ocr.DoFixDialogueDashes = DoFixDialogueDashes;
         ocr.CaptureAssaPosition = HasCaptureAlignment;
         ocr.NOcrBinaryOcrFallbackDatabase = NOcrBinaryOcrFallbackDatabase ?? string.Empty;
         ocr.BinaryOcrNOcrFallbackDatabase = BinaryOcrNOcrFallbackDatabase ?? string.Empty;
@@ -3641,6 +3645,11 @@ public partial class OcrViewModel : ObservableObject
             item.Text = Utilities.AutoBreakLine(item.Text);
         }
 
+        if (DoFixDialogueDashes)
+        {
+            item.Text = DialogueDashFixer.Analyze(item.Text).FixedText;
+        }
+
         if (SelectedDictionary != null &&
             SelectedDictionary.Name != GetDictionaryNameNone() &&
             _ocrFixEngine.IsLoaded() && DoFixOcrErrors)
@@ -3730,6 +3739,11 @@ public partial class OcrViewModel : ObservableObject
         if (DoAutoBreak)
         {
             item.Text = Utilities.AutoBreakLine(item.Text);
+        }
+
+        if (DoFixDialogueDashes)
+        {
+            item.Text = DialogueDashFixer.Analyze(item.Text).FixedText;
         }
 
         var unknownWords = new List<UnknownWordItem>();

@@ -43,6 +43,7 @@ public class LanguageOcr
     public string PromptForUknownWords { get; set; }
     public string TryToGuessUnknownWords { get; set; }
     public string AutoBreakIfMoreThanXLines { get; set; }
+    public string FixDialogueDashesAfterOcr { get; set; }
     public string UnknownWords { get; set; }
     public string AllFixes { get; set; }
     public string GuessesUsed { get; set; }
@@ -156,6 +157,7 @@ public class LanguageOcr
         PromptForUknownWords = "Prompt for unknown words";
         TryToGuessUnknownWords = "Try to guess unknown words";
         AutoBreakIfMoreThanXLines = "Auto break if more than {0} lines";
+        FixDialogueDashesAfterOcr = "Auto-fix dialogue dashes after OCR";
         UnknownWords = "Unknown words";
         AllFixes = "All fixes";
         GuessesUsed = "Guesses used";
