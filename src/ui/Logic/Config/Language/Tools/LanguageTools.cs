@@ -23,6 +23,7 @@ public class LanguageTools
     public LanguageSplitBreakLongLines SplitBreakLongLines { get; set; } = new();
     public LanguageMergeShortLines MergeShortLines { get; set; } = new();
     public LanguageMergeContinuationLines MergeContinuationLines { get; set; } = new();
+    public LanguageFixDialogueDashes FixDialogueDashes { get; set; } = new();
     public LanguageMergeLineswithSameText MergeLinesWithSameText { get; set; } = new();
     public LanguageMergeLineswithSameTimeCodes MergeLinesWithSameTimeCodes { get; set; } = new();
     public LanguageNetflixCheckAndFix NetflixCheckAndFix { get; set; } = new();
