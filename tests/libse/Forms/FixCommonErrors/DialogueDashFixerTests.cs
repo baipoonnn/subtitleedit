@@ -197,4 +197,51 @@ public class DialogueDashFixerTests
         Assert.False(result.Changed);
         Assert.Equal(input, result.FixedText);
     }
+
+    // Google Lens OCR often emits Unicode dashes (en dash U+2013, em dash U+2014,
+    // hyphen U+2010) instead of ASCII hyphen-minus for dialogue markers.
+    [Theory]
+    [InlineData('\u2013')] // en dash –
+    [InlineData('\u2014')] // em dash —
+    [InlineData('\u2010')] // hyphen ‐
+    public void Analyze_AsymmetricUnicodeDash_AddsAsciiDashAndNormalizes(char unicodeDash)
+    {
+        var input = "เอื้อมเด็ดยากมาก" + Environment.NewLine +
+                    unicodeDash + " แม่ผมก็เหมือนกัน";
+
+        var result = DialogueDashFixer.Analyze(input);
+
+        Assert.True(result.Changed);
+        Assert.Equal("- เอื้อมเด็ดยากมาก" + Environment.NewLine + "- แม่ผมก็เหมือนกัน", result.FixedText);
+    }
+
+    [Theory]
+    [InlineData('\u2013')]
+    [InlineData('\u2014')]
+    [InlineData('\u2010')]
+    public void Analyze_OrphanUnicodeDashBeforePlainLine_MergesForward(char unicodeDash)
+    {
+        var input = unicodeDash.ToString() + Environment.NewLine +
+                    "ผมอยากหาอะไรมาปิดตัว" + Environment.NewLine +
+                    "- ฉันมีน้องชายน่า";
+
+        var result = DialogueDashFixer.Analyze(input);
+
+        Assert.True(result.Changed);
+        Assert.Equal("- ผมอยากหาอะไรมาปิดตัว" + Environment.NewLine + "- ฉันมีน้องชายน่า", result.FixedText);
+    }
+
+    [Theory]
+    [InlineData('\u2013')]
+    [InlineData('\u2014')]
+    public void Analyze_SymmetricUnicodeDashes_NormalizesToAscii(char unicodeDash)
+    {
+        var input = unicodeDash + " Hello" + Environment.NewLine +
+                    unicodeDash + " There";
+
+        var result = DialogueDashFixer.Analyze(input);
+
+        Assert.True(result.Changed);
+        Assert.Equal("- Hello" + Environment.NewLine + "- There", result.FixedText);
+    }
 }

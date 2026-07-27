@@ -25,6 +25,10 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
     /// </summary>
     public static class DialogueDashFixer
     {
+        // Same set as ContinuationUtilities.DashPrefixes. Google Lens OCR frequently
+        // emits the Unicode forms instead of ASCII hyphen-minus for dialogue markers.
+        private const string DialogueDashChars = "-‐–—"; // U+002D, U+2010, U+2013, U+2014
+
         public static DialogueDashFixResult Analyze(string text)
         {
             if (string.IsNullOrEmpty(text))
@@ -49,6 +53,7 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
 
             MergeOrphanDashes(lines);
             EnforceDashInvariant(lines);
+            NormalizeDashPrefixes(lines);
 
             if (LinesEqual(original, lines))
             {
@@ -113,22 +118,57 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
             }
         }
 
-        private static bool IsDashOnly(string line) => line.Trim() == "-";
+        /// <summary>
+        /// Rewrites any recognized dialogue-dash prefix (ASCII or Unicode) to the canonical
+        /// ASCII "- " form so OCR en/em dashes don't linger after a structural fix.
+        /// Leaves the unsupported no-space style ("-Hi") untouched.
+        /// </summary>
+        private static void NormalizeDashPrefixes(List<string> lines)
+        {
+            for (var i = 0; i < lines.Count; i++)
+            {
+                var trimmed = lines[i].Trim();
+                if (IsDashOnly(trimmed))
+                {
+                    lines[i] = "-";
+                    continue;
+                }
+
+                if (!IsDashText(trimmed))
+                {
+                    continue;
+                }
+
+                var content = trimmed.Substring(1).TrimStart();
+                lines[i] = "- " + content;
+            }
+        }
+
+        private static bool IsDialogueDashChar(char c) => DialogueDashChars.IndexOf(c) >= 0;
+
+        private static bool IsDashOnly(string line)
+        {
+            var trimmed = line.Trim();
+            return trimmed.Length == 1 && IsDialogueDashChar(trimmed[0]);
+        }
 
         private static bool IsDashText(string line)
         {
             var trimmed = line.Trim();
-            return trimmed.StartsWith("- ", StringComparison.Ordinal) && trimmed.Length > 2;
+            // dash + whitespace + content (ASCII or Unicode dash)
+            return trimmed.Length > 2
+                   && IsDialogueDashChar(trimmed[0])
+                   && char.IsWhiteSpace(trimmed[1]);
         }
 
         private static bool IsPlain(string line)
         {
-            // Any line that starts with "-" at all (dash-only, "- text", or the
+            // Any line that starts with a dialogue dash at all (dash-only, "- text", or the
             // unsupported no-space "-text" style) is never plain: we don't want to
             // prepend a second dash onto something that already looks dash-prefixed,
             // even if we don't (yet) normalize its exact style.
             var trimmed = line.Trim();
-            return trimmed.Length > 0 && !trimmed.StartsWith("-", StringComparison.Ordinal);
+            return trimmed.Length > 0 && !IsDialogueDashChar(trimmed[0]);
         }
 
         private static bool LinesEqual(List<string> a, List<string> b)

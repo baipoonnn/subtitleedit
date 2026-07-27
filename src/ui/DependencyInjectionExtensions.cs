@@ -118,6 +118,7 @@ using Nikse.SubtitleEdit.Features.Tools.ConvertActors;
 using Nikse.SubtitleEdit.Features.Tools.FixCommonErrors;
 using Nikse.SubtitleEdit.Features.Tools.FixNetflixErrors;
 using Nikse.SubtitleEdit.Features.Tools.JoinSubtitles;
+using Nikse.SubtitleEdit.Features.Tools.FixDialogueDashes;
 using Nikse.SubtitleEdit.Features.Tools.MergeContinuationLines;
 using Nikse.SubtitleEdit.Features.Tools.MergeShortLines;
 using Nikse.SubtitleEdit.Features.Tools.MergeTwoSubtitles;
@@ -421,6 +422,7 @@ public static class DependencyInjectionExtensions
         collection.AddTransient<MergeSameTimeCodesViewModel>();
         collection.AddTransient<MergeShortLinesViewModel>();
         collection.AddTransient<MergeContinuationLinesViewModel>();
+        collection.AddTransient<FixDialogueDashesViewModel>();
         collection.AddTransient<MergeTwoSubtitlesViewModel>();
         collection.AddTransient<ModifySelectionViewModel>();
         collection.AddTransient<MultipleReplaceViewModel>();
