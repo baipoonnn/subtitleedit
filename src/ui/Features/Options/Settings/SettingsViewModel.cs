@@ -221,11 +221,13 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private int _colorTextTooWideFontSize;
     [ObservableProperty] private string _colorTextTooWideFontName;
     [ObservableProperty] private bool _colorTextTooManyLines;
+    [ObservableProperty] private bool _colorTextDialogueDashError;
     [ObservableProperty] private bool _colorCharactersPerSecond;
     [ObservableProperty] private bool _colorWordsPerMinute;
     [ObservableProperty] private bool _colorOverlap;
     [ObservableProperty] private bool _colorGapTooShort;
     [ObservableProperty] private Color _errorColor;
+    [ObservableProperty] private Color _dialogueDashErrorColor;
 
     [ObservableProperty] private ObservableCollection<VideoPlayerItem> _videoPlayers;
     [ObservableProperty] private VideoPlayerItem _selectedVideoPlayer;
@@ -942,11 +944,13 @@ public partial class SettingsViewModel : ObservableObject
         ColorTextTooWideFontName = general.ColorTextTooWideFontName;
         ColorTextTooWideFontSize = general.ColorTextTooWideFontSize;
         ColorTextTooManyLines = general.ColorTextTooManyLines;
+        ColorTextDialogueDashError = general.ColorTextDialogueDashError;
         ColorCharactersPerSecond = general.ColorCharactersPerSecond;
         ColorWordsPerMinute = general.ColorWordsPerMinute;
         ColorOverlap = general.ColorTimeCodeOverlap;
         ColorGapTooShort = general.ColorGapTooShort;
         ErrorColor = general.ErrorColor.FromHexToColor();
+        DialogueDashErrorColor = general.DialogueDashErrorColor.FromHexToColor();
 
         _editCustomContinuationStyle = new CustomContinuationStyle(general.CustomContinuationStyle);
 
@@ -1663,11 +1667,13 @@ public partial class SettingsViewModel : ObservableObject
         general.ColorTextTooWideFontName = ColorTextTooWideFontName;
         general.ColorTextTooWideFontSize = ColorTextTooWideFontSize;
         general.ColorTextTooManyLines = ColorTextTooManyLines;
+        general.ColorTextDialogueDashError = ColorTextDialogueDashError;
         general.ColorCharactersPerSecond = ColorCharactersPerSecond;
         general.ColorWordsPerMinute = ColorWordsPerMinute;
         general.ColorTimeCodeOverlap = ColorOverlap;
         general.ColorGapTooShort = ColorGapTooShort;
         general.ErrorColor = ErrorColor.FromColorToHex();
+        general.DialogueDashErrorColor = DialogueDashErrorColor.FromColorToHex();
 
         general.CustomContinuationStyle = new CustomContinuationStyle(_editCustomContinuationStyle);
 
@@ -2420,11 +2426,13 @@ public partial class SettingsViewModel : ObservableObject
                 Se.Settings.General.ColorTextTooLong = g.ColorTextTooLong;
                 Se.Settings.General.ColorTextTooWide = g.ColorTextTooWide;
                 Se.Settings.General.ColorTextTooManyLines = g.ColorTextTooManyLines;
+                Se.Settings.General.ColorTextDialogueDashError = g.ColorTextDialogueDashError;
                 Se.Settings.General.ColorCharactersPerSecond = g.ColorCharactersPerSecond;
                 Se.Settings.General.ColorWordsPerMinute = g.ColorWordsPerMinute;
                 Se.Settings.General.ColorTimeCodeOverlap = g.ColorTimeCodeOverlap;
                 Se.Settings.General.ColorGapTooShort = g.ColorGapTooShort;
                 Se.Settings.General.ErrorColor = g.ErrorColor;
+                Se.Settings.General.DialogueDashErrorColor = g.DialogueDashErrorColor;
             }
         }
 

@@ -128,6 +128,7 @@ public class LanguageSettings
     public string ColorTextTooWide { get; set; }
     public string ColorTextTooManyLines { get; set; }
     public string ColorTextTooManyLinesX { get; set; }
+    public string ColorTextDialogueDashError { get; set; }
     public string ColorCharactersPerSecond { get; set; }
     public string ColorWordsPerMinute { get; set; }
     public string ColorOverlap { get; set; }
@@ -460,6 +461,7 @@ public class LanguageSettings
         ColorTextTooWide = "Color text if too wide (pixels)";
         ColorTextTooManyLines = "Color text if more than 2 lines";
         ColorTextTooManyLinesX = "Color text if more than {0} lines";
+        ColorTextDialogueDashError = "Color text if dialogue dash mismatch";
         ColorCharactersPerSecond = "Color characters/sec if too high";
         ColorWordsPerMinute = "Color words/min if too high";
         ColorOverlap = "Color time code overlap";

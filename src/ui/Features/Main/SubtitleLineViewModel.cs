@@ -1,6 +1,7 @@
 using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Nikse.SubtitleEdit.Core.Common;
+using Nikse.SubtitleEdit.Core.Forms.FixCommonErrors;
 using Nikse.SubtitleEdit.Core.SubtitleFormats;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
@@ -93,6 +94,17 @@ public partial class SubtitleLineViewModel : ObservableObject
             _errorBrush = new SolidColorBrush(value);
         }
     } = Se.Settings.General.ErrorColor.FromHexToColor();
+
+    private static SolidColorBrush _dialogueDashErrorBrush = new SolidColorBrush(Se.Settings.General.DialogueDashErrorColor.FromHexToColor());
+    public static Color DialogueDashErrorColor
+    {
+        get => field;
+        set
+        {
+            field = value;
+            _dialogueDashErrorBrush = new SolidColorBrush(value);
+        }
+    } = Se.Settings.General.DialogueDashErrorColor.FromHexToColor();
 
     public SubtitleLineViewModel()
     {
@@ -354,6 +366,7 @@ public partial class SubtitleLineViewModel : ObservableObject
     private string? _textErrorCacheText;
     private TextErrorSettings _textErrorCacheSettings;
     private bool _textErrorCacheValue;
+    private bool _dialogueDashErrorCacheValue;
 
     private readonly record struct TextErrorSettings(
         bool ColorTextTooLong,
@@ -364,7 +377,8 @@ public partial class SubtitleLineViewModel : ObservableObject
         int FontSize,
         bool ColorTextTooManyLines,
         int MaxNumberOfLines,
-        string? LengthStrategy)
+        string? LengthStrategy,
+        bool ColorTextDialogueDashError)
     {
         public static TextErrorSettings Current()
         {
@@ -379,7 +393,8 @@ public partial class SubtitleLineViewModel : ObservableObject
                 general.ColorTextTooManyLines,
                 general.MaxNumberOfLines,
                 // GetLineLength counts through this strategy, so it belongs in the key too.
-                Configuration.Settings.General.CpsLineLengthStrategy);
+                Configuration.Settings.General.CpsLineLengthStrategy,
+                general.ColorTextDialogueDashError);
         }
     }
 
@@ -398,10 +413,26 @@ public partial class SubtitleLineViewModel : ObservableObject
                 _textErrorCacheText = Text;
                 _textErrorCacheSettings = settings;
                 _textErrorCacheValue = HasTextError(Text, settings);
+                _dialogueDashErrorCacheValue = settings.ColorTextDialogueDashError && HasDialogueDashError(Text);
             }
 
-            return _textErrorCacheValue ? _errorBrush : _transparentBrush;
+            if (_textErrorCacheValue)
+            {
+                return _errorBrush;
+            }
+
+            if (_dialogueDashErrorCacheValue)
+            {
+                return _dialogueDashErrorBrush;
+            }
+
+            return _transparentBrush;
         }
+    }
+
+    private static bool HasDialogueDashError(string text)
+    {
+        return DialogueDashFixer.Analyze(text).Changed;
     }
 
     private static bool HasTextError(string text, TextErrorSettings settings)
@@ -864,6 +895,11 @@ public partial class SubtitleLineViewModel : ObservableObject
         if (lineCount > general.MaxNumberOfLines && Se.Settings.General.ColorTextTooManyLines)
         {
             errors.AppendLine("Max #lines: " + lineCount + " >" + general.MaxNumberOfLines);
+        }
+
+        if (Se.Settings.General.ColorTextDialogueDashError && DialogueDashFixer.Analyze(Text).Changed)
+        {
+            errors.AppendLine("Dialogue dash mismatch");
         }
 
         var cpsRounded = Math.Round(CharactersPerSecond, 2, MidpointRounding.AwayFromZero);

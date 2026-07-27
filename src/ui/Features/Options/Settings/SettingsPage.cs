@@ -384,6 +384,7 @@ public class SettingsPage : UserControl
 
             MakeCheckboxSetting(Se.Language.Options.Settings.ColorTextTooManyLines, nameof(_vm.ColorTextTooManyLines),
                 labelBindingPath: nameof(_vm.ColorTextTooManyLinesLabel)),
+            MakeCheckboxSetting(Se.Language.Options.Settings.ColorTextDialogueDashError, nameof(_vm.ColorTextDialogueDashError)),
             MakeSeparator(),
             MakeCheckboxSetting(Se.Language.Options.Settings.ColorCharactersPerSecond, nameof(_vm.ColorCharactersPerSecond)),
             MakeCheckboxSetting(Se.Language.Options.Settings.ColorWordsPerMinute, nameof(_vm.ColorWordsPerMinute)),
@@ -393,6 +394,7 @@ public class SettingsPage : UserControl
             MakeCheckboxSetting(Se.Language.Options.Settings.ColorGapTooShort, nameof(_vm.ColorGapTooShort)),
             MakeSeparator(),
             new SettingsItem(Se.Language.Options.Settings.ErrorBackgroundColor, () => UiUtil.MakeColorPickerButton(_vm, nameof(_vm.ErrorColor))),
+            new SettingsItem(Se.Language.Options.Settings.ColorTextDialogueDashError, () => UiUtil.MakeColorPickerButton(_vm, nameof(_vm.DialogueDashErrorColor))),
         ]));
 
         sections.Add(new SettingsSection(Se.Language.General.VideoPlayer, IconNames.PlayBox, "#a78bfa",

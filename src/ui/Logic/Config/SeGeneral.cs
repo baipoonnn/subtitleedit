@@ -80,11 +80,13 @@ public class SeGeneral
     public string ColorTextTooWideFontName { get; set; }
     public int ColorTextTooWideFontSize { get; set; }
     public bool ColorTextTooManyLines { get; set; }
+    public bool ColorTextDialogueDashError { get; set; }
     public bool ColorCharactersPerSecond { get; set; }
     public bool ColorWordsPerMinute { get; set; }
     public bool ColorTimeCodeOverlap { get; set; }
     public bool ColorGapTooShort { get; set; }
     public string ErrorColor { get; set; }
+    public string DialogueDashErrorColor { get; set; }
 
     public string FfmpegPath { get; set; }
     public bool FfmpegUseCenterChannelOnly { get; set; }
@@ -195,11 +197,13 @@ public class SeGeneral
         ColorTextTooWideFontName = "Arial";
         ColorTextTooWideFontSize = 40;
         ColorTextTooManyLines = true;
+        ColorTextDialogueDashError = true;
         ColorCharactersPerSecond = true;
         ColorWordsPerMinute = true;
         ColorTimeCodeOverlap = true;
         ColorGapTooShort = true;
         ErrorColor = Color.FromArgb(50, 255, 0, 0).FromColorToHex();
+        DialogueDashErrorColor = Color.FromArgb(50, 255, 165, 0).FromColorToHex();
 
         FfmpegPath = string.Empty;
         LibMpvPath = string.Empty;
