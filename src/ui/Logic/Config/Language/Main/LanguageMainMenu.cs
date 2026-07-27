@@ -60,6 +60,7 @@ public class LanguageMainMenu
     public string EvenlyDistributeLines { get; set; }
     public string MergeShortLines { get; set; }
     public string MergeContinuationLines { get; set; }
+    public string FixDialogueDashes { get; set; }
     public string SnapAllTimesToFrames { get; set; }
     public string Renumber { get; set; }
     public string RemoveTextForHearingImpaired { get; set; }
@@ -193,6 +194,7 @@ public class LanguageMainMenu
         EvenlyDistributeLines = "Evenly distribute lines (by CPS)";
         MergeShortLines = "Merge short lines...";
         MergeContinuationLines = "Merge continuation lines...";
+        FixDialogueDashes = "Fix dialogue dashes...";
         SnapAllTimesToFrames = "Snap all times to frames";
         Renumber = "Renumber...";
         RemoveTextForHearingImpaired = "_Remove text for hearing impaired...";

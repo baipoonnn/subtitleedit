@@ -503,6 +503,11 @@ public static class InitMenu
             },
             new MenuItem
             {
+                Header = l.FixDialogueDashes,
+                Command = vm.ShowToolsFixDialogueDashesCommand,
+            },
+            new MenuItem
+            {
                 Header = l.SnapAllTimesToFrames,
                 Command = vm.SnapAllTimesToFramesCommand,
             },
