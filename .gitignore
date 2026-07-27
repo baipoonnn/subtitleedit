@@ -413,5 +413,8 @@ FodyWeavers.xsd
 # Claude AI settings (local, not project config)
 .claude/
 
+# Superpowers subagent-driven-development scratch workspace
+.superpowers/
+
 # macOS Finder metadata
 .DS_Store
