@@ -57,4 +57,12 @@ public class FixDialogueDashesHelperTests
         Assert.Equal("- ผมอยากหาอะไรมาปิดตัว" + Environment.NewLine + "- ฉันมีน้องชายน่า", result[0].Text);
         Assert.Equal("เอื้อมเด็ดยากมาก" + Environment.NewLine + "- แม่ผมก็เหมือนกัน", result[1].Text); // unchanged
     }
+
+    [Fact]
+    public void Apply_NullSubtitles_ReturnsEmptyList()
+    {
+        var result = FixDialogueDashesHelper.Apply(null!, new List<FixDialogueDashesCandidate>());
+
+        Assert.Empty(result);
+    }
 }

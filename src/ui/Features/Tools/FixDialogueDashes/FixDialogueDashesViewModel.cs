@@ -13,7 +13,6 @@ namespace Nikse.SubtitleEdit.Features.Tools.FixDialogueDashes;
 public partial class FixDialogueDashesViewModel : ObservableObject
 {
     [ObservableProperty] private ObservableCollection<FixDialogueDashesCandidate> _candidates;
-    [ObservableProperty] private FixDialogueDashesCandidate? _selectedCandidate;
     [ObservableProperty] private string _candidatesInfo;
 
     public Window? Window { get; set; }

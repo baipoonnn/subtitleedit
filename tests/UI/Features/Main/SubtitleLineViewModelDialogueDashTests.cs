@@ -79,4 +79,41 @@ public class SubtitleLineViewModelDialogueDashTests
             Se.Settings = originalSettings;
         }
     }
+
+    [AvaloniaFact]
+    public void TextBackgroundBrush_TooManyLinesAndDialogueDashIssue_TooManyLinesColorWins()
+    {
+        var originalSettings = Se.Settings;
+        var originalErrorColor = SubtitleLineViewModel.ErrorColor;
+        var originalDialogueDashColor = SubtitleLineViewModel.DialogueDashErrorColor;
+        try
+        {
+            Se.Settings = new Se();
+            Se.Settings.General.ColorTextTooManyLines = true;
+            Se.Settings.General.MaxNumberOfLines = 2;
+            Se.Settings.General.ColorTextDialogueDashError = true;
+            SubtitleLineViewModel.ErrorColor = Colors.Red;
+            SubtitleLineViewModel.DialogueDashErrorColor = Colors.Orange;
+
+            // 3 plain-text lines (over the 2-line max) where only one line carries
+            // a dash - this is both a "too many lines" error and a dialogue dash
+            // mismatch. The pre-existing too-many-lines red must win over the newer
+            // dash-error color. No tags here, since finding #1's fix makes tagged
+            // paragraphs a no-op for the dash fixer.
+            var vm = new SubtitleLineViewModel
+            {
+                Text = "- Line one" + Environment.NewLine +
+                       "Line two" + Environment.NewLine +
+                       "Line three",
+            };
+
+            Assert.Equal(Colors.Red, ColorOf(vm.TextBackgroundBrush));
+        }
+        finally
+        {
+            SubtitleLineViewModel.ErrorColor = originalErrorColor;
+            SubtitleLineViewModel.DialogueDashErrorColor = originalDialogueDashColor;
+            Se.Settings = originalSettings;
+        }
+    }
 }

@@ -3640,14 +3640,18 @@ public partial class OcrViewModel : ObservableObject
     {
         var result = new OcrFixLineResultTemp();
 
-        if (DoAutoBreak)
-        {
-            item.Text = Utilities.AutoBreakLine(item.Text);
-        }
-
+        // Dash-fix first: it collapses orphan-dash mis-splits (e.g. a bare "-" line
+        // separated from its dialogue) back down to the correct 2 lines, so that
+        // AutoBreakLine's 2-line dialogue-preserving guard gets a chance to act on
+        // the corrected text instead of the mangled 3+ line OCR split.
         if (DoFixDialogueDashes)
         {
             item.Text = DialogueDashFixer.Analyze(item.Text).FixedText;
+        }
+
+        if (DoAutoBreak)
+        {
+            item.Text = Utilities.AutoBreakLine(item.Text);
         }
 
         if (SelectedDictionary != null &&
@@ -3736,14 +3740,16 @@ public partial class OcrViewModel : ObservableObject
 
     private List<UnknownWordItem> OcrFixLineAndSetText(int i, OcrSubtitleItem item)
     {
-        if (DoAutoBreak)
-        {
-            item.Text = Utilities.AutoBreakLine(item.Text);
-        }
-
+        // Dash-fix first: see comment in OcrFixLine for why this must run before
+        // auto-break.
         if (DoFixDialogueDashes)
         {
             item.Text = DialogueDashFixer.Analyze(item.Text).FixedText;
+        }
+
+        if (DoAutoBreak)
+        {
+            item.Text = Utilities.AutoBreakLine(item.Text);
         }
 
         var unknownWords = new List<UnknownWordItem>();

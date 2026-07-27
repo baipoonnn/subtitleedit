@@ -40,12 +40,20 @@ public static class FixDialogueDashesHelper
         IReadOnlyList<SubtitleLineViewModel> subtitles,
         IReadOnlyList<FixDialogueDashesCandidate> candidates)
     {
-        var fixedByIndex = new Dictionary<int, string>();
-        foreach (var c in candidates)
+        if (subtitles == null)
         {
-            if (c.IsSelected)
+            return new List<SubtitleLineViewModel>();
+        }
+
+        var fixedByIndex = new Dictionary<int, string>();
+        if (candidates != null)
+        {
+            foreach (var c in candidates)
             {
-                fixedByIndex[c.Index] = c.FixedText;
+                if (c.IsSelected)
+                {
+                    fixedByIndex[c.Index] = c.FixedText;
+                }
             }
         }
 

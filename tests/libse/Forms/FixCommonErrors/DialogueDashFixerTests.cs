@@ -128,4 +128,73 @@ public class DialogueDashFixerTests
         Assert.False(result.Changed);
         Assert.Equal(string.Empty, result.FixedText);
     }
+
+    [Fact]
+    public void Analyze_HtmlTagHidesDash_LeftUnchanged()
+    {
+        // "<i>- Hello" is already correctly dashed once you look past the tag, but the
+        // raw-line classifier can't see past "<i>" - it must bail out rather than
+        // prepend a second dash and corrupt the formatting.
+        var input = "<i>- Hello" + Environment.NewLine + "- Goodbye</i>";
+
+        var result = DialogueDashFixer.Analyze(input);
+
+        Assert.False(result.Changed);
+        Assert.Equal(input, result.FixedText);
+    }
+
+    [Fact]
+    public void Analyze_AssOverrideTagHidesDash_LeftUnchanged()
+    {
+        var input = "{\\an8}- Hello" + Environment.NewLine + "- Goodbye";
+
+        var result = DialogueDashFixer.Analyze(input);
+
+        Assert.False(result.Changed);
+        Assert.Equal(input, result.FixedText);
+    }
+
+    [Fact]
+    public void Analyze_ItalicTagOnOneLineOnly_LeftUnchanged()
+    {
+        var input = "- What?" + Environment.NewLine + "<i>- I said no.</i>";
+
+        var result = DialogueDashFixer.Analyze(input);
+
+        Assert.False(result.Changed);
+        Assert.Equal(input, result.FixedText);
+    }
+
+    [Fact]
+    public void Analyze_NoSpaceDashStyle_NotCorrupted()
+    {
+        // "-Hi" uses a no-space dash style that this fixer doesn't (yet) normalize -
+        // but it must never get a second dash prepended ("- -Hi").
+        var input = "-Hi" + Environment.NewLine + "- There";
+
+        var result = DialogueDashFixer.Analyze(input);
+
+        Assert.False(result.Changed);
+        Assert.Equal(input, result.FixedText);
+    }
+
+    [Fact]
+    public void Analyze_SingleOrphanDash_NoConfidentFix_ReturnsUnchanged()
+    {
+        var result = DialogueDashFixer.Analyze("-");
+
+        Assert.False(result.Changed);
+        Assert.Equal("-", result.FixedText);
+    }
+
+    [Fact]
+    public void Analyze_AllOrphanDashes_NoConfidentFix_ReturnsUnchanged()
+    {
+        var input = "-" + Environment.NewLine + "-";
+
+        var result = DialogueDashFixer.Analyze(input);
+
+        Assert.False(result.Changed);
+        Assert.Equal(input, result.FixedText);
+    }
 }

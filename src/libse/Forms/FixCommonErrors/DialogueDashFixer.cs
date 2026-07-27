@@ -33,6 +33,18 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
             }
 
             var lines = text.SplitToLines();
+
+            // Conservative scope limit: the classification below looks at raw line text,
+            // so a dash hidden behind a formatting tag (e.g. "<i>- Hello" or "{\an8}- Hello")
+            // would be misclassified as plain and get a second dash prepended, corrupting
+            // already-correct formatted dialogue. Properly parsing tags is out of scope for
+            // this pass, so just bail out whenever any line might contain one - a false
+            // positive here only means "skip this paragraph," which is always safe.
+            if (lines.Any(HasTag))
+            {
+                return new DialogueDashFixResult(false, text);
+            }
+
             var original = new List<string>(lines);
 
             MergeOrphanDashes(lines);
@@ -43,8 +55,19 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
                 return new DialogueDashFixResult(false, text);
             }
 
-            return new DialogueDashFixResult(true, string.Join(Environment.NewLine, lines));
+            var fixedText = string.Join(Environment.NewLine, lines);
+            if (string.IsNullOrWhiteSpace(fixedText))
+            {
+                // All lines collapsed to nothing (e.g. the whole "paragraph" was orphan
+                // dashes with no plain text to attach to) - that's not a confident fix,
+                // it's data loss. Leave the original text untouched.
+                return new DialogueDashFixResult(false, text);
+            }
+
+            return new DialogueDashFixResult(true, fixedText);
         }
+
+        private static bool HasTag(string line) => line.Contains('<') || line.Contains('{');
 
         private static void MergeOrphanDashes(List<string> lines)
         {
@@ -100,8 +123,12 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
 
         private static bool IsPlain(string line)
         {
+            // Any line that starts with "-" at all (dash-only, "- text", or the
+            // unsupported no-space "-text" style) is never plain: we don't want to
+            // prepend a second dash onto something that already looks dash-prefixed,
+            // even if we don't (yet) normalize its exact style.
             var trimmed = line.Trim();
-            return trimmed.Length > 0 && !IsDashOnly(line) && !IsDashText(line);
+            return trimmed.Length > 0 && !trimmed.StartsWith("-", StringComparison.Ordinal);
         }
 
         private static bool LinesEqual(List<string> a, List<string> b)
