@@ -1,4 +1,6 @@
-﻿using Nikse.SubtitleEdit.Logic.Ocr.GoogleLens;
+﻿using Nikse.SubtitleEdit.Core.Common;
+using Nikse.SubtitleEdit.Logic.Ocr.GoogleLens;
+using SkiaSharp;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -19,6 +21,8 @@ public class GoogleLensOcrSharp
 
     private Lock _lockObject = new Lock();
 
+    private static readonly int[] RetryDelaysMs = { 1000, 2000, 4000 };
+
     public async Task OcrBatch(List<PaddleOcrBatchInput> input, string language, IProgress<PaddleOcrBatchProgress> progress, CancellationToken cancellationToken)
     {
         _batchProgress = progress;
@@ -35,9 +39,7 @@ public class GoogleLensOcrSharp
                 continue;
             }
 
-            var result = await _lens.ScanByBitmap(bmpInput.Bitmap, language);
-
-            var lines = result.Segments.Select(x => x.Text).ToList();
+            var lines = await ScanWithRetry(bmpInput.Bitmap, language);
 
             //join "-" with next line
             for (int i = 0; i < lines.Count; i++)
@@ -77,6 +79,34 @@ public class GoogleLensOcrSharp
                 _batchProgress?.Report(progressReport);
             }
         }
+    }
+
+    /// <summary>
+    /// Scans one bitmap, retrying transient failures with backoff. A single item that
+    /// still fails after all retries returns an empty result instead of throwing, so the
+    /// rest of the batch keeps running (previously, any exception here escaped the
+    /// foreach in OcrBatch and silently killed the whole remaining batch).
+    /// </summary>
+    private async Task<List<string>> ScanWithRetry(SKBitmap bitmap, string language)
+    {
+        for (var attempt = 0; attempt <= RetryDelaysMs.Length; attempt++)
+        {
+            try
+            {
+                var result = await _lens.ScanByBitmap(bitmap, language);
+                return result.Segments.Select(x => x.Text).ToList();
+            }
+            catch (Exception ex)
+            {
+                SeLogger.Error(ex, $"GoogleLensOcrSharp: OCR attempt {attempt + 1}/{RetryDelaysMs.Length + 1} failed");
+                if (attempt < RetryDelaysMs.Length)
+                {
+                    await Task.Delay(RetryDelaysMs[attempt]);
+                }
+            }
+        }
+
+        return new List<string>();
     }
 
     public static List<OcrLanguage2> GetLanguages()
