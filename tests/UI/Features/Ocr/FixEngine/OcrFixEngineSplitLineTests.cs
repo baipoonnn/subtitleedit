@@ -36,4 +36,18 @@ public class OcrFixEngineSplitLineTests
         Assert.Equal("</i>", tags[1].Word);
         Assert.Equal("<i>Hello</i>", string.Concat(result.Words.Select(w => w.Word)));
     }
+
+    [Fact]
+    public void SplitLine_ThaiCombiningMarks_StayInsideWord()
+    {
+        // "ทับถมไว้" contains upper vowels/tone marks (NonspacingMark). Those must not
+        // split the token or AttaCut/unknown-words see single consonants like ท / บ.
+        const string line = "การโกหกหลายชั้น ทับถมไว้";
+        var result = OcrFixEngine.SplitLine(line, 0);
+
+        Assert.Equal(line, string.Concat(result.Words.Select(w => w.Word)));
+        var words = result.Words.Where(w => w.LinePartType == OcrFixLinePartType.Word).Select(w => w.Word).ToList();
+        Assert.Equal(new[] { "การโกหกหลายชั้น", "ทับถมไว้" }, words);
+        Assert.DoesNotContain(words, w => w.Length == 1);
+    }
 }

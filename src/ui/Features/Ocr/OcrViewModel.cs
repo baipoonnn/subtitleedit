@@ -2258,6 +2258,24 @@ public partial class OcrViewModel : ObservableObject
             }
 
             _ocrFixEngine.Initialize(fixSubtitle, threeLetterCode, SelectedDictionary);
+
+            // Warm up Thai tokenizer quietly — never prompt for CPU/GPU here (that is only
+            // when the user picks AttaCut in the Word break combo).
+            if (string.Equals(
+                    SpellCheckDictionaryDisplay.GetTwoLetterLanguageCode(SelectedDictionary),
+                    "th",
+                    StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(Se.Settings.SpellCheck.ThaiSegmenter, ThaiSegmenterKinds.None, StringComparison.OrdinalIgnoreCase)
+                && Window != null)
+            {
+                var kind = Se.Settings.SpellCheck.ThaiSegmenter ?? ThaiSegmenterKinds.None;
+                var ready = await ThaiSpellEnsureHelper.EnsureReadyAsync(
+                    Window, _windowService, _thaiSpellDownloadService, kind, promptForBackend: false);
+                if (ready)
+                {
+                    await ThaiSpellEnsureHelper.WarmUpTokenizerAsync(Window, _windowService, kind);
+                }
+            }
         }
         else
         {
@@ -4908,7 +4926,8 @@ public partial class OcrViewModel : ObservableObject
             return;
         }
 
-        var ok = await ThaiSpellEnsureHelper.EnsureReadyAsync(Window, _windowService, _thaiSpellDownloadService, value.Id);
+        var ok = await ThaiSpellEnsureHelper.EnsureReadyAsync(
+            Window, _windowService, _thaiSpellDownloadService, value.Id, promptForBackend: true);
         if (!ok)
         {
             _thaiWordBreakChanging = true;
@@ -4936,6 +4955,85 @@ public partial class OcrViewModel : ObservableObject
         Se.SaveSettings();
         ThaiTokenizerService.Reset();
         await ThaiSpellEnsureHelper.WarmUpTokenizerAsync(Window, _windowService, value.Id);
+
+        if (!string.Equals(value.Id, ThaiSegmenterKinds.None, StringComparison.OrdinalIgnoreCase)
+            && ThaiTokenizerService.GetActiveTokenizer() == null)
+        {
+            await MessageBox.Show(
+                Window,
+                "Thai word breaker",
+                "The selected word breaker could not be loaded. Falling back to \"None (spaces only)\".",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+
+            _thaiWordBreakChanging = true;
+            try
+            {
+                Se.Settings.SpellCheck.ThaiSegmenter = ThaiSegmenterKinds.None;
+                Se.SaveSettings();
+                SelectedThaiWordBreak = ThaiWordBreaks.FirstOrDefault(t =>
+                    string.Equals(t.Id, ThaiSegmenterKinds.None, StringComparison.OrdinalIgnoreCase))
+                    ?? ThaiWordBreaks[0];
+            }
+            finally
+            {
+                _thaiWordBreakChanging = false;
+            }
+
+            return;
+        }
+
+        RefreshOcrAfterThaiWordBreakChange();
+    }
+
+    /// <summary>
+    /// Re-initializes the OCR fix engine and re-tokenizes existing OCR lines so unknown-word
+    /// highlights follow the newly selected Thai word breaker without re-running OCR.
+    /// </summary>
+    private void RefreshOcrAfterThaiWordBreakChange()
+    {
+        if (SelectedDictionary == null || !IsDictionaryLoaded || SelectedDictionary.Name == GetDictionaryNameNone())
+        {
+            return;
+        }
+
+        var twoLetter = SpellCheckDictionaryDisplay.GetTwoLetterLanguageCode(SelectedDictionary);
+        _spellCheckManager.Initialize(SelectedDictionary.DictionaryFileName, twoLetter);
+
+        if (!DoFixOcrErrors)
+        {
+            return;
+        }
+
+        var threeLetterCode = SelectedDictionary.GetThreeLetterCode();
+        var fixSubtitle = new Subtitle();
+        foreach (var ocrItem in OcrSubtitleItems)
+        {
+            fixSubtitle.Paragraphs.Add(new Paragraph(
+                new TimeCode(ocrItem.StartTime),
+                new TimeCode(ocrItem.EndTime),
+                ocrItem.Text));
+        }
+
+        _ocrFixEngine.Initialize(fixSubtitle, threeLetterCode, SelectedDictionary);
+
+        UnknownWords.Clear();
+        for (var i = 0; i < OcrSubtitleItems.Count; i++)
+        {
+            var item = OcrSubtitleItems[i];
+            if (string.IsNullOrWhiteSpace(item.Text))
+            {
+                item.FixResult = null;
+                continue;
+            }
+
+            var result = _ocrFixEngine.FixOcrErrors(i, item.Text, doTryToGuessUnknownWords: false);
+            item.FixResult = result;
+            foreach (var unknownWordItem in GetUnknownWordItems(item, result))
+            {
+                UnknownWords.Add(unknownWordItem);
+            }
+        }
     }
 
     private void UpdateThaiWordBreakVisibility()

@@ -12,7 +12,10 @@
 
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
-    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.23.0" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.23.0">
+      <!-- Managed API only; natives download into AppData on first AttaCut use. -->
+      <ExcludeAssets>native</ExcludeAssets>
+    </PackageReference>
     <PackageReference Include="SkiaSharp.HarfBuzz" Version="3.119.4" />
     <PackageReference Include="WeCantSpell.Hunspell" Version="7.0.1" />
   </ItemGroup>
@@ -20,5 +23,19 @@
   <ItemGroup>
     <ProjectReference Include="..\libse\LibSE.csproj" />
   </ItemGroup>
+
+  <!-- NuGet still copies RID natives for some consumers; strip so installer/publish do not ship them. -->
+  <Target Name="RemoveOnnxRuntimeNatives" AfterTargets="CopyFilesToOutputDirectory">
+    <ItemGroup>
+      <_OrtNative Include="$(TargetDir)onnxruntime.dll" />
+      <_OrtNative Include="$(TargetDir)onnxruntime_providers_shared.dll" />
+      <_OrtNative Include="$(TargetDir)onnxruntime.lib" />
+      <_OrtNative Include="$(TargetDir)DirectML.dll" />
+      <_OrtNative Include="$(TargetDir)DirectML.Debug.dll" />
+      <_OrtNative Include="$(TargetDir)DirectML.pdb" />
+      <_OrtNative Include="$(TargetDir)DirectML.Debug.pdb" />
+    </ItemGroup>
+    <Delete Files="@(_OrtNative)" TreatErrorsAsWarnings="true" />
+  </Target>
 
 </Project>

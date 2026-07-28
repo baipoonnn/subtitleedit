@@ -6,6 +6,11 @@ public static class ThaiSpellPaths
     public const string AttacutOnnxFileName = "attacut-c.onnx";
     public const string AttacutCharactersFileName = "attacut-c-characters.json";
     public const string Nlpo3WordsFileName = "words.txt";
+    public const string OnnxRuntimeFileName = "onnxruntime.dll";
+    public const string OnnxProvidersSharedFileName = "onnxruntime_providers_shared.dll";
+
+    /// <summary>Must match the Microsoft.ML.OnnxRuntime.DirectML package version in LibUiLogic.csproj.</summary>
+    public const string OnnxRuntimePackageVersion = "1.23.0";
 
     public const string AttacutOnnxUrl =
         "https://raw.githubusercontent.com/PyThaiNLP/LEKCut/main/lekcut/model/attacut-c.onnx";
@@ -16,6 +21,9 @@ public static class ThaiSpellPaths
     /// <summary>PyThaiNLP-style word list used by dictionary maximal matching (nlpo3/newmm family).</summary>
     public const string Nlpo3WordsUrl =
         "https://raw.githubusercontent.com/PyThaiNLP/LEKCut/main/lekcut/model/oskut-words.txt";
+
+    public static string GetOnnxRuntimeNupkgUrl() =>
+        $"https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.directml/{OnnxRuntimePackageVersion}/microsoft.ml.onnxruntime.directml.{OnnxRuntimePackageVersion}.nupkg";
 
     public static string GetRootFolder()
     {
@@ -32,11 +40,17 @@ public static class ThaiSpellPaths
 
     public static string GetNlpo3Folder() => Path.Combine(GetRootFolder(), "nlpo3");
 
+    public static string GetOnnxRuntimeFolder() => Path.Combine(GetRootFolder(), "onnxruntime");
+
     public static string GetAttacutOnnxPath() => Path.Combine(GetAttacutFolder(), AttacutOnnxFileName);
 
     public static string GetAttacutCharactersPath() => Path.Combine(GetAttacutFolder(), AttacutCharactersFileName);
 
     public static string GetNlpo3WordsPath() => Path.Combine(GetNlpo3Folder(), Nlpo3WordsFileName);
+
+    public static string GetOnnxRuntimeDllPath() => Path.Combine(GetOnnxRuntimeFolder(), OnnxRuntimeFileName);
+
+    public static string GetOnnxProvidersSharedDllPath() => Path.Combine(GetOnnxRuntimeFolder(), OnnxProvidersSharedFileName);
 
     public static bool IsAttacutInstalled()
     {
@@ -44,6 +58,14 @@ public static class ThaiSpellPaths
         var chars = GetAttacutCharactersPath();
         return File.Exists(onnx) && new FileInfo(onnx).Length > 10_000
                && File.Exists(chars) && new FileInfo(chars).Length > 100;
+    }
+
+    public static bool IsOnnxRuntimeInstalled()
+    {
+        var main = GetOnnxRuntimeDllPath();
+        var shared = GetOnnxProvidersSharedDllPath();
+        return File.Exists(main) && new FileInfo(main).Length > 1_000_000
+               && File.Exists(shared) && new FileInfo(shared).Length > 1_000;
     }
 
     public static bool IsNlpo3Installed()

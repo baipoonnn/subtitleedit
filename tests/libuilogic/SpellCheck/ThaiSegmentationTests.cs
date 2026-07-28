@@ -99,6 +99,36 @@ public class ThaiSegmentationTests
     }
 
     [Fact]
+    public void OnnxRuntime_IsInstalled_RequiresBothDlls()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "se-thai-ort-" + Guid.NewGuid().ToString("N"));
+        SpellCheckConfig.ThaiSpellFolder = () => root;
+        try
+        {
+            Assert.False(ThaiSpellPaths.IsOnnxRuntimeInstalled());
+            Directory.CreateDirectory(ThaiSpellPaths.GetOnnxRuntimeFolder());
+            File.WriteAllBytes(ThaiSpellPaths.GetOnnxRuntimeDllPath(), new byte[1_000_001]);
+            Assert.False(ThaiSpellPaths.IsOnnxRuntimeInstalled());
+            File.WriteAllBytes(ThaiSpellPaths.GetOnnxProvidersSharedDllPath(), new byte[2_000]);
+            Assert.True(ThaiSpellPaths.IsOnnxRuntimeInstalled());
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(root))
+                {
+                    Directory.Delete(root, true);
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+    }
+
+    [Fact]
     public void Split_WithNoneSegmenter_KeepsThaiBlob()
     {
         SpellCheckConfig.ActiveTwoLetterLanguage = () => "th";

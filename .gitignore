@@ -400,6 +400,7 @@ FodyWeavers.xsd
 *.sln.iml
 .idea/
 /installer/WindowsInno/SubtitleEdit-*-Setup.exe
+/SubtitleEdit-Windows-x64-Setup.exe
 
 # Flatpak: downloaded generator tool and CI-generated icon copy
 /installer/flatpak/flatpak-dotnet-generator.py
@@ -418,3 +419,6 @@ FodyWeavers.xsd
 
 # macOS Finder metadata
 .DS_Store
+
+# Local Thai spell-check bench / experiments (not part of SE)
+_thai_spell_bench/

@@ -187,12 +187,12 @@ public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
                 });
                 continue;
             }
-            // Check for words (letters and digits)
+            // Check for words (letters and digits). Thai combining marks (upper/lower vowels,
+            // tone marks) are NonspacingMarks — keep them inside the word token.
             if (char.IsLetterOrDigit(line[i]) && line[i] != '"')
             {
                 var wordStart = i;
-                while (i < line.Length &&
-                       (char.IsLetterOrDigit(line[i]) || line[i] == '\'' || line[i] == '-'))
+                while (i < line.Length && ThaiScript.IsWordChar(line[i]))
                 {
                     i++;
                 }
@@ -210,6 +210,7 @@ public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
             i++; // consume at least one char so a stray '<' (no matching '>') cannot cause an infinite loop
             while (i < line.Length &&
                    !char.IsLetterOrDigit(line[i]) &&
+                   !ThaiScript.IsThaiCombiningMark(line[i]) &&
                    !char.IsWhiteSpace(line[i]) &&
                    line[i] != '<' &&
                    !(i < line.Length - 1 && line[i] == '{' && line[i + 1] == '\\'))
@@ -231,17 +232,30 @@ public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
     /// <summary>
     /// When Thai spell-check language + word breaker are active, expand glued Thai word parts
     /// into separate OCR word tokens so Hunspell sees dictionary words.
+    /// Uses the engine's language (not only the global SpellCheckConfig cache) so OCR keeps
+    /// working even if another window last initialized spell-check for a different language.
     /// </summary>
-    private static void ExpandThaiWords(OcrFixLineResult splitLine)
+    private void ExpandThaiWords(OcrFixLineResult splitLine)
     {
-        if (!ThaiSegmentation.IsThaiLanguageActive())
+        if (!string.Equals(_twoLetterIsoLanguageName, "th", StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
 
+        // Keep the global seam in sync for helpers that still read SpellCheckConfig.
+        SpellCheckConfig.ActiveTwoLetterLanguage = () => "th";
+
         var kind = SpellCheckConfig.ThaiSegmenter() ?? ThaiSegmenterKinds.None;
         if (string.Equals(kind, ThaiSegmenterKinds.None, StringComparison.OrdinalIgnoreCase))
         {
+            return;
+        }
+
+        var tokenizer = ThaiTokenizerService.GetActiveTokenizer();
+        if (tokenizer == null)
+        {
+            SpellCheckConfig.LogError(
+                $"Thai word breaker '{kind}' is selected but the tokenizer is not ready; OCR will not resegment Thai.");
             return;
         }
 
@@ -256,7 +270,7 @@ public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
                 continue;
             }
 
-            var spans = ThaiSegmentation.SegmentWord(part.Word, part.WordIndex);
+            var spans = tokenizer.Segment(part.Word);
             if (spans.Count <= 1)
             {
                 expanded.Add(part);
@@ -273,13 +287,25 @@ public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
                 expanded.Add(new OcrFixLinePartResult
                 {
                     LinePartType = OcrFixLinePartType.Word,
-                    WordIndex = span.Index,
+                    WordIndex = part.WordIndex + span.Index,
                     Word = span.Text,
                 });
             }
         }
 
         splitLine.Words = expanded;
+    }
+
+    private bool IsThaiWordBreakerActive()
+    {
+        if (!string.Equals(_twoLetterIsoLanguageName, "th", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var kind = SpellCheckConfig.ThaiSegmenter() ?? ThaiSegmenterKinds.None;
+        return !string.Equals(kind, ThaiSegmenterKinds.None, StringComparison.OrdinalIgnoreCase)
+               && ThaiTokenizerService.GetActiveTokenizer() != null;
     }
 
     private static int FindTagEnd(string text, int startIndex)
@@ -401,7 +427,7 @@ public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
             {
                 var guesses = new List<string>();
 
-                if (w.Length > 4 && SpellCheckConfig.UseWordSplitList())
+                if (w.Length > 4 && SpellCheckConfig.UseWordSplitList() && !IsThaiWordBreakerActive())
                 {
                     if (_threeLetterIsoLanguageName == "eng" &&
                         w.EndsWith("in", StringComparison.Ordinal) &&
@@ -423,7 +449,8 @@ public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
                 // Heuristic (affix/particle/phonetic) splitting of merged words is un-compositing too, so
                 // it must obey the same "word split list" toggle - otherwise turning that off still left this
                 // path splitting words unconditionally, which over-corrects more than it fixes (#12243).
-                if (SpellCheckConfig.UseWordSplitList())
+                // When a Thai word breaker is active it owns segmentation; do not also run SE's Latin-oriented splitter.
+                if (SpellCheckConfig.UseWordSplitList() && !IsThaiWordBreakerActive())
                 {
                     var autoSplitGuesses = UnknownWordGuesser.CreateGuessesFromLetters(result, _threeLetterIsoLanguageName);
                     if (autoSplitGuesses.Any())

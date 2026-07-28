@@ -12,7 +12,7 @@
 #define app_copyright_start  "2001"
 #define app_copyright_end    GetDateTimeString('yyyy','','')
 
-; Version constants — updated by installer/WindowsInno/update-version.ps1
+; Version constants â€” updated by installer/WindowsInno/update-version.ps1
 
 #define app_ver         "5.1.0"
 #define app_ver_suffix  "rc17"

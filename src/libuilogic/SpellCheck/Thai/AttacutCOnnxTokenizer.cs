@@ -48,6 +48,12 @@ public sealed class AttacutCOnnxTokenizer : IThaiTokenizer, IDisposable
             return null;
         }
 
+        if (!OnnxNativeBootstrap.TryEnsureLoaded())
+        {
+            SpellCheckConfig.LogError("AttaCut ONNX init skipped: onnxruntime natives not available.");
+            return null;
+        }
+
         try
         {
             return new AttacutCOnnxTokenizer(

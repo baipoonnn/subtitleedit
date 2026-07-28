@@ -90,4 +90,18 @@
 			<_Parameter1>UITests</_Parameter1>
 		</AssemblyAttribute>
 	</ItemGroup>
+
+	<!-- AttaCut downloads ONNX Runtime into AppData; do not ship natives with the app/installer. -->
+	<Target Name="RemoveOnnxRuntimeNativesFromPublish" AfterTargets="Publish">
+		<ItemGroup>
+			<_OrtNativePublish Include="$(PublishDir)onnxruntime.dll" />
+			<_OrtNativePublish Include="$(PublishDir)onnxruntime_providers_shared.dll" />
+			<_OrtNativePublish Include="$(PublishDir)onnxruntime.lib" />
+			<_OrtNativePublish Include="$(PublishDir)DirectML.dll" />
+			<_OrtNativePublish Include="$(PublishDir)DirectML.Debug.dll" />
+			<_OrtNativePublish Include="$(PublishDir)DirectML.pdb" />
+			<_OrtNativePublish Include="$(PublishDir)DirectML.Debug.pdb" />
+		</ItemGroup>
+		<Delete Files="@(_OrtNativePublish)" TreatErrorsAsWarnings="true" />
+	</Target>
 </Project>

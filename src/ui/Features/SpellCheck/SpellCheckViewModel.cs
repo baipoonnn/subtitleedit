@@ -222,7 +222,8 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
             return;
         }
 
-        var ok = await ThaiSpellEnsureHelper.EnsureReadyAsync(Window, _windowService, _thaiSpellDownloadService, value.Id);
+        var ok = await ThaiSpellEnsureHelper.EnsureReadyAsync(
+            Window, _windowService, _thaiSpellDownloadService, value.Id, promptForBackend: true);
         if (!ok)
         {
             _thaiWordBreakChanging = true;

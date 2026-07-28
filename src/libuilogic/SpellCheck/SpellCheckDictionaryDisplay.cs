@@ -177,6 +177,12 @@ public class SpellCheckDictionaryDisplay
             return "ko";
         }
 
+        if (fileNameOnly.Contains("Thai", StringComparison.OrdinalIgnoreCase)
+            || language.Name.Contains("Thai", StringComparison.OrdinalIgnoreCase))
+        {
+            return "th";
+        }
+
         if (fileNameOnly.Length >= 2)
         {
             try
