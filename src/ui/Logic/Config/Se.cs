@@ -156,6 +156,8 @@ public class Se
         get => _dictionariesFolder ?? Path.Combine(DataFolder, "Dictionaries");
         set => _dictionariesFolder = value;
     }
+
+    public static string ThaiSpellFolder => Path.Combine(DataFolder, "ThaiSpell");
     public static string ThemesFolder => Path.Combine(DataFolder, "Themes");
     public static string AutoBackupFolder => Path.Combine(DataFolder, "AutoBackup");
     public static string FfmpegFolder => Path.Combine(DataFolder, "ffmpeg");

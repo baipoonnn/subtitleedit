@@ -19,8 +19,10 @@ using Nikse.SubtitleEdit.Features.SpellCheck.EditWholeText;
 using Nikse.SubtitleEdit.Features.SpellCheck.GetDictionaries;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
+using Nikse.SubtitleEdit.Logic.Download;
 using Nikse.SubtitleEdit.Logic.Media;
 using Nikse.SubtitleEdit.Logic.Ocr;
+using Nikse.SubtitleEdit.Logic.SpellCheck;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -30,6 +32,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Web;
 using Nikse.SubtitleEdit.UiLogic.SpellCheck;
+using Nikse.SubtitleEdit.UiLogic.SpellCheck.Thai;
 
 namespace Nikse.SubtitleEdit.Features.SpellCheck;
 
@@ -50,6 +53,9 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
     [ObservableProperty] private string _statusText;
     [ObservableProperty] private ObservableCollection<SpellCheckDictionaryDisplay> _dictionaries;
     [ObservableProperty] private SpellCheckDictionaryDisplay? _selectedDictionary;
+    [ObservableProperty] private ObservableCollection<ThaiWordBreakDisplay> _thaiWordBreaks;
+    [ObservableProperty] private ThaiWordBreakDisplay? _selectedThaiWordBreak;
+    [ObservableProperty] private bool _isThaiWordBreakVisible;
     [ObservableProperty] private ObservableCollection<string> _suggestions;
     [ObservableProperty] private string _selectedSuggestion;
     [ObservableProperty] private bool _areSuggestionsAvailable;
@@ -82,6 +88,7 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
     private readonly IFileHelper _fileHelper;
     private readonly IBluRayHelper _bluRayHelper;
     private readonly IOcrImageSourceHolder _ocrImageSourceHolder;
+    private readonly IThaiSpellDownloadService _thaiSpellDownloadService;
     private IFocusSubtitleLine? _focusSubtitleLine;
 
     // Optional source image (Blu-ray .sup) loaded via the context menu so the original
@@ -105,12 +112,13 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
     // "continue spell check from current line?" has something to continue from.
     private bool _sessionInProgress;
 
-    public SpellCheckViewModel(ISpellCheckManager spellCheckManager, IWindowService windowService, IFileHelper fileHelper, IBluRayHelper bluRayHelper, IOcrImageSourceHolder ocrImageSourceHolder)
+    public SpellCheckViewModel(ISpellCheckManager spellCheckManager, IWindowService windowService, IFileHelper fileHelper, IBluRayHelper bluRayHelper, IOcrImageSourceHolder ocrImageSourceHolder, IThaiSpellDownloadService thaiSpellDownloadService)
     {
         _spellCheckManager = spellCheckManager;
         _fileHelper = fileHelper;
         _bluRayHelper = bluRayHelper;
         _ocrImageSourceHolder = ocrImageSourceHolder;
+        _thaiSpellDownloadService = thaiSpellDownloadService;
         if (Se.Settings.SpellCheck.SpellCheckProvider == SeSpellCheck.SpellCheckMsWord && WordSpellCheck.IsWordInstalled())
         {
             _spellCheckManager.WordSpellChecker = new WordSpellCheck();
@@ -129,6 +137,10 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
         WordNotFoundOriginal = string.Empty;
         Dictionaries = new ObservableCollection<SpellCheckDictionaryDisplay>();
         SelectedDictionary = new SpellCheckDictionaryDisplay();
+        ThaiWordBreaks = new ObservableCollection<ThaiWordBreakDisplay>(ThaiWordBreakDisplay.GetAll());
+        SelectedThaiWordBreak = ThaiWordBreaks.FirstOrDefault(t =>
+            string.Equals(t.Id, Se.Settings.SpellCheck.ThaiSegmenter, StringComparison.OrdinalIgnoreCase))
+            ?? ThaiWordBreaks[0];
         Suggestions = new ObservableCollection<string>();
         SelectedSuggestion = string.Empty;
         PanelWholeText = new StackPanel();
@@ -139,6 +151,7 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
         _currentSpellCheckWord = new SpellCheckWord();
 
         LoadDictionaries();
+        UpdateThaiWordBreakVisibility();
     }
 
     private void UpdateChangedWordInUi(string fromWord, string toWord, int wordIndex, SubtitleLineViewModel paragraph)
@@ -182,6 +195,97 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
         }
 
         ReCheckCurrentWordAfterDictionaryChange();
+        UpdateThaiWordBreakVisibility();
+    }
+
+    partial void OnSelectedDictionaryChanged(SpellCheckDictionaryDisplay? value)
+    {
+        UpdateThaiWordBreakVisibility();
+    }
+
+    private bool _thaiWordBreakChanging;
+
+    partial void OnSelectedThaiWordBreakChanged(ThaiWordBreakDisplay? value)
+    {
+        if (_thaiWordBreakChanging)
+        {
+            return;
+        }
+
+        _ = OnThaiWordBreakChangedAsync(value);
+    }
+
+    private async Task OnThaiWordBreakChangedAsync(ThaiWordBreakDisplay? value)
+    {
+        if (value == null || Window == null)
+        {
+            return;
+        }
+
+        var ok = await ThaiSpellEnsureHelper.EnsureReadyAsync(Window, _windowService, _thaiSpellDownloadService, value.Id);
+        if (!ok)
+        {
+            _thaiWordBreakChanging = true;
+            try
+            {
+                var fallbackId = Se.Settings.SpellCheck.ThaiSegmenter ?? ThaiSegmenterKinds.None;
+                if (string.Equals(fallbackId, value.Id, StringComparison.OrdinalIgnoreCase))
+                {
+                    fallbackId = ThaiSegmenterKinds.None;
+                }
+
+                SelectedThaiWordBreak = ThaiWordBreaks.FirstOrDefault(t =>
+                    string.Equals(t.Id, fallbackId, StringComparison.OrdinalIgnoreCase))
+                    ?? ThaiWordBreaks[0];
+            }
+            finally
+            {
+                _thaiWordBreakChanging = false;
+            }
+
+            return;
+        }
+
+        Se.Settings.SpellCheck.ThaiSegmenter = value.Id;
+        Se.SaveSettings();
+        ThaiTokenizerService.Reset();
+        await ThaiSpellEnsureHelper.WarmUpTokenizerAsync(Window, _windowService, value.Id);
+        ReCheckAfterThaiWordBreakChange();
+    }
+
+    private void UpdateThaiWordBreakVisibility()
+    {
+        var code = SelectedDictionary == null
+            ? string.Empty
+            : SpellCheckDictionaryDisplay.GetTwoLetterLanguageCode(SelectedDictionary);
+        IsThaiWordBreakVisible = string.Equals(code, "th", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Re-scans from the start of the current line after the Thai word-breaker changes.
+    /// Word indices shift when segmentation changes, so resuming from the old word index
+    /// would skip or mis-highlight tokens.
+    /// </summary>
+    private void ReCheckAfterThaiWordBreakChange()
+    {
+        if (_lastSpellCheckResult == null || SelectedParagraph == null)
+        {
+            return;
+        }
+
+        var lineIndex = Paragraphs.IndexOf(SelectedParagraph);
+        if (lineIndex < 0)
+        {
+            return;
+        }
+
+        _lastSpellCheckResult = new SpellCheckResult
+        {
+            LineIndex = lineIndex,
+            WordIndex = -1,
+            Paragraph = SelectedParagraph,
+        };
+        DoSpellCheck();
     }
 
     /// <summary>

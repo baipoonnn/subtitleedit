@@ -743,6 +743,23 @@ public class OcrWindow : Window
             }
         };
 
+        var labelWordBreak = UiUtil.MakeLabel("Word break")
+            .WithBindIsVisible(nameof(vm.IsThaiWordBreakVisible));
+        var comboBoxWordBreak = UiUtil.MakeComboBox(vm.ThaiWordBreaks, vm, nameof(vm.SelectedThaiWordBreak))
+            .WithWidth(175)
+            .WithBindIsVisible(nameof(vm.IsThaiWordBreakVisible));
+        var panelWordBreak = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                labelWordBreak,
+                comboBoxWordBreak,
+            }
+        };
+
         var checkBoxFixOcrErrors = UiUtil.MakeCheckBox(Se.Language.Ocr.FixOcrErrors, vm, nameof(vm.DoFixOcrErrors))
             .WithBindIsVisible(nameof(vm.IsDictionaryLoaded));
         var checkBoxPromptForUnknownWords = UiUtil.MakeCheckBox(Se.Language.Ocr.PromptForUknownWords, vm, nameof(vm.DoPromptForUnknownWords))
@@ -761,6 +778,7 @@ public class OcrWindow : Window
             Children =
             {
                 panelDictionary,
+                panelWordBreak,
                 checkBoxFixOcrErrors,
                 checkBoxPromptForUnknownWords,
                 checkBoxTryToGuessUnknownWords,

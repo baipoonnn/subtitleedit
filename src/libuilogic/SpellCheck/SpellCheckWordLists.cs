@@ -396,7 +396,7 @@ public class SpellCheckWordLists
             AddWord(list, sb.ToString(), s.Length - sb.Length);
         }
 
-        return list;
+        return Thai.ThaiSegmentation.ApplyToSplitWords(list);
     }
 
     // A token consisting solely of apostrophes/quote marks (e.g. the trailing ' in "...universum.'")

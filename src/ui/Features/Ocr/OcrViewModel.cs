@@ -45,6 +45,7 @@ using Nikse.SubtitleEdit.Logic.LlamaCpp;
 using Nikse.SubtitleEdit.Logic.Media;
 using Nikse.SubtitleEdit.Logic.Ocr;
 using Nikse.SubtitleEdit.Logic.Ocr.GoogleLens;
+using Nikse.SubtitleEdit.Logic.SpellCheck;
 using Nikse.SubtitleEdit.UiLogic.Ocr;
 using SkiaSharp;
 using System;
@@ -60,6 +61,7 @@ using System.Threading.Tasks;
 using Nikse.SubtitleEdit.UiLogic.LlamaCpp;
 using Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine;
 using Nikse.SubtitleEdit.UiLogic.SpellCheck;
+using Nikse.SubtitleEdit.UiLogic.SpellCheck.Thai;
 
 namespace Nikse.SubtitleEdit.Features.Ocr;
 
@@ -133,6 +135,9 @@ public partial class OcrViewModel : ObservableObject
     [ObservableProperty] private bool _hasMultipleLinesSelected;
     [ObservableProperty] private ObservableCollection<SpellCheckDictionaryDisplay> _dictionaries;
     [ObservableProperty] private SpellCheckDictionaryDisplay? _selectedDictionary;
+    [ObservableProperty] private ObservableCollection<ThaiWordBreakDisplay> _thaiWordBreaks;
+    [ObservableProperty] private ThaiWordBreakDisplay? _selectedThaiWordBreak;
+    [ObservableProperty] private bool _isThaiWordBreakVisible;
     [ObservableProperty] private bool _doFixOcrErrors;
     [ObservableProperty] private bool _doPromptForUnknownWords;
     [ObservableProperty] private bool _doTryToGuessUnknownWords;
@@ -182,6 +187,7 @@ public partial class OcrViewModel : ObservableObject
     private readonly IOcrFixEngine _ocrFixEngine;
     private readonly IBinaryOcrMatcher _binaryOcrMatcher;
     private readonly IOcrImageSourceHolder _ocrImageSourceHolder;
+    private readonly IThaiSpellDownloadService _thaiSpellDownloadService;
     private PreProcessingSettings? _preProcessingSettings;
     private bool _isCtrlDown;
     private bool _textBoxFontIsCustom;
@@ -208,7 +214,8 @@ public partial class OcrViewModel : ObservableObject
         ISpellCheckManager spellCheckManager,
         IOcrFixEngine ocrFixEngine,
         IBinaryOcrMatcher binaryOcrMatcher,
-        IOcrImageSourceHolder ocrImageSourceHolder)
+        IOcrImageSourceHolder ocrImageSourceHolder,
+        IThaiSpellDownloadService thaiSpellDownloadService)
     {
         _nOcrCaseFixer = nOcrCaseFixer;
         _windowService = windowService;
@@ -217,6 +224,7 @@ public partial class OcrViewModel : ObservableObject
         _ocrFixEngine = ocrFixEngine;
         _binaryOcrMatcher = binaryOcrMatcher;
         _ocrImageSourceHolder = ocrImageSourceHolder;
+        _thaiSpellDownloadService = thaiSpellDownloadService;
 
         Title = Se.Language.Ocr.Ocr;
         OcrEngines = new ObservableCollection<OcrEngineItem>(OcrEngineItem.GetOcrEngines());
@@ -255,6 +263,10 @@ public partial class OcrViewModel : ObservableObject
         PaddleOcrLanguages = new ObservableCollection<OcrLanguage2>(PaddleOcr.GetLanguages().OrderBy(p => p.ToString()));
         OcredSubtitle = new List<SubtitleLineViewModel>();
         Dictionaries = new ObservableCollection<SpellCheckDictionaryDisplay>();
+        ThaiWordBreaks = new ObservableCollection<ThaiWordBreakDisplay>(ThaiWordBreakDisplay.GetAll());
+        SelectedThaiWordBreak = ThaiWordBreaks.FirstOrDefault(t =>
+            string.Equals(t.Id, Se.Settings.SpellCheck.ThaiSegmenter, StringComparison.OrdinalIgnoreCase))
+            ?? ThaiWordBreaks[0];
         UnknownWords = new ObservableCollection<UnknownWordItem>();
         AllFixes = new ObservableCollection<ReplacementUsedItem>();
         AllGuesses = new ObservableCollection<GuessUsedItem>();
@@ -4868,6 +4880,70 @@ public partial class OcrViewModel : ObservableObject
         // Calling Dictionaries.First() there threw and aborted LoadDictionaries before it re-added any
         // items, leaving the Dictionary combo permanently empty after a download.
         IsDictionaryLoaded = SelectedDictionary != null && Dictionaries.IndexOf(SelectedDictionary) > 0;
+        UpdateThaiWordBreakVisibility();
+        if (SelectedDictionary != null && IsDictionaryLoaded)
+        {
+            _spellCheckManager.Initialize(
+                SelectedDictionary.DictionaryFileName,
+                SpellCheckDictionaryDisplay.GetTwoLetterLanguageCode(SelectedDictionary));
+        }
+    }
+
+    private bool _thaiWordBreakChanging;
+
+    partial void OnSelectedThaiWordBreakChanged(ThaiWordBreakDisplay? value)
+    {
+        if (_thaiWordBreakChanging)
+        {
+            return;
+        }
+
+        _ = OnThaiWordBreakChangedAsync(value);
+    }
+
+    private async Task OnThaiWordBreakChangedAsync(ThaiWordBreakDisplay? value)
+    {
+        if (value == null || Window == null)
+        {
+            return;
+        }
+
+        var ok = await ThaiSpellEnsureHelper.EnsureReadyAsync(Window, _windowService, _thaiSpellDownloadService, value.Id);
+        if (!ok)
+        {
+            _thaiWordBreakChanging = true;
+            try
+            {
+                var fallbackId = Se.Settings.SpellCheck.ThaiSegmenter ?? ThaiSegmenterKinds.None;
+                if (string.Equals(fallbackId, value.Id, StringComparison.OrdinalIgnoreCase))
+                {
+                    fallbackId = ThaiSegmenterKinds.None;
+                }
+
+                SelectedThaiWordBreak = ThaiWordBreaks.FirstOrDefault(t =>
+                    string.Equals(t.Id, fallbackId, StringComparison.OrdinalIgnoreCase))
+                    ?? ThaiWordBreaks[0];
+            }
+            finally
+            {
+                _thaiWordBreakChanging = false;
+            }
+
+            return;
+        }
+
+        Se.Settings.SpellCheck.ThaiSegmenter = value.Id;
+        Se.SaveSettings();
+        ThaiTokenizerService.Reset();
+        await ThaiSpellEnsureHelper.WarmUpTokenizerAsync(Window, _windowService, value.Id);
+    }
+
+    private void UpdateThaiWordBreakVisibility()
+    {
+        var code = SelectedDictionary == null || !IsDictionaryLoaded
+            ? string.Empty
+            : SpellCheckDictionaryDisplay.GetTwoLetterLanguageCode(SelectedDictionary);
+        IsThaiWordBreakVisible = string.Equals(code, "th", StringComparison.OrdinalIgnoreCase);
     }
 
     internal void OnLoaded()

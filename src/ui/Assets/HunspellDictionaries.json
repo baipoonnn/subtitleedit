@@ -748,7 +748,7 @@
       "https://raw.githubusercontent.com/LibreOffice/dictionaries/master/th_TH/th_TH.aff",
       "https://raw.githubusercontent.com/LibreOffice/dictionaries/master/th_TH/th_TH.dic"
     ],
-    "Description": "Thai spell checker (LibreOffice)"
+    "Description": "Thai spell checker (LibreOffice). For glued Thai text, also choose Word break (AttaCut/nlpo3) in Spell Check."
   },
   {
     "EnglishName": "Tibetan",

@@ -109,6 +109,7 @@ public class SpellChecker : ISpellChecker, IDoSpell
     {
         SkipAllList.Clear();
         _twoLetterLanguageCode = twoLetterLanguageCode ?? string.Empty;
+        SpellCheckConfig.ActiveTwoLetterLanguage = () => _twoLetterLanguageCode;
 
         if (!File.Exists(dictionaryFile))
         {

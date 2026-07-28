@@ -2,6 +2,7 @@
 using Nikse.SubtitleEdit.Core.Dictionaries;
 using Nikse.SubtitleEdit.Core.Interfaces;
 using Nikse.SubtitleEdit.UiLogic.SpellCheck;
+using Nikse.SubtitleEdit.UiLogic.SpellCheck.Thai;
 
 namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine;
 
@@ -76,6 +77,7 @@ public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
 
         var replacedLine = ReplaceLineFixes(index, text, wordsToIgnore);
         var splitLine = SplitLine(replacedLine, index);
+        ExpandThaiWords(splitLine);
         if (replacedLine != text)
         {
             splitLine.ReplacementUsed = new ReplacementUsedItem(text, replacedLine, index);
@@ -224,6 +226,60 @@ public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// When Thai spell-check language + word breaker are active, expand glued Thai word parts
+    /// into separate OCR word tokens so Hunspell sees dictionary words.
+    /// </summary>
+    private static void ExpandThaiWords(OcrFixLineResult splitLine)
+    {
+        if (!ThaiSegmentation.IsThaiLanguageActive())
+        {
+            return;
+        }
+
+        var kind = SpellCheckConfig.ThaiSegmenter() ?? ThaiSegmenterKinds.None;
+        if (string.Equals(kind, ThaiSegmenterKinds.None, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var expanded = new List<OcrFixLinePartResult>(splitLine.Words.Count * 2);
+        foreach (var part in splitLine.Words)
+        {
+            if (part.LinePartType != OcrFixLinePartType.Word
+                || !ThaiScript.ContainsThai(part.Word)
+                || part.Word.Length < 2)
+            {
+                expanded.Add(part);
+                continue;
+            }
+
+            var spans = ThaiSegmentation.SegmentWord(part.Word, part.WordIndex);
+            if (spans.Count <= 1)
+            {
+                expanded.Add(part);
+                continue;
+            }
+
+            foreach (var span in spans)
+            {
+                if (string.IsNullOrEmpty(span.Text))
+                {
+                    continue;
+                }
+
+                expanded.Add(new OcrFixLinePartResult
+                {
+                    LinePartType = OcrFixLinePartType.Word,
+                    WordIndex = span.Index,
+                    Word = span.Text,
+                });
+            }
+        }
+
+        splitLine.Words = expanded;
     }
 
     private static int FindTagEnd(string text, int startIndex)

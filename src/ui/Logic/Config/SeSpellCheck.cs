@@ -13,6 +13,12 @@ public class SeSpellCheck
     public bool TreatInQuoteASIng { get; set; } = true;
     public bool ShowCompletedMessage { get; set; } = true;
 
+    /// <summary>none | attacut-c | nlpo3</summary>
+    public string ThaiSegmenter { get; set; } = "none";
+
+    /// <summary>cpu | directml | cuda</summary>
+    public string ThaiOnnxProvider { get; set; } = "cpu";
+
     public SeSpellCheck()
     {
         SpellCheckProvider = SpellCheckHunspell;        

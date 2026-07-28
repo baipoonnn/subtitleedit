@@ -18,4 +18,16 @@ public static class SpellCheckConfig
 
     /// <summary>Error sink (the UI routes this to Se.LogError; seconv can ignore or print).</summary>
     public static Action<string> LogError { get; set; } = _ => { };
+
+    /// <summary>Folder for Thai segmenter packs (AttaCut ONNX, nlpo3 word list), under AppData/ThaiSpell.</summary>
+    public static Func<string> ThaiSpellFolder { get; set; } = () => string.Empty;
+
+    /// <summary>Active Thai segmenter: none | attacut-c | nlpo3.</summary>
+    public static Func<string> ThaiSegmenter { get; set; } = () => Thai.ThaiSegmenterKinds.None;
+
+    /// <summary>ONNX EP preference: cpu | directml | cuda.</summary>
+    public static Func<string> ThaiOnnxProvider { get; set; } = () => Thai.ThaiOnnxProviders.Cpu;
+
+    /// <summary>Two-letter language of the active Hunspell dictionary (e.g. "th").</summary>
+    public static Func<string> ActiveTwoLetterLanguage { get; set; } = () => string.Empty;
 }

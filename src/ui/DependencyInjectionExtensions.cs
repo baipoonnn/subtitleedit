@@ -256,6 +256,7 @@ public static class DependencyInjectionExtensions
         collection.AddHttpClient<IPaddleOcrDownloadService, PaddleOcrDownloadService>();
         collection.AddHttpClient<ICrispEmbedDownloadService, CrispEmbedDownloadService>();
         collection.AddHttpClient<ISpellCheckDictionaryDownloadService, SpellCheckDictionaryDownloadService>();
+        collection.AddHttpClient<IThaiSpellDownloadService, ThaiSpellDownloadService>();
         collection.AddHttpClient<ITesseractDownloadService, TesseractDownloadService>();
         collection.AddHttpClient<IWhisperDownloadService, WhisperDownloadService>();
         collection.AddHttpClient<IYtDlpDownloadService, YtDlpDownloadService>();

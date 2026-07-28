@@ -90,6 +90,9 @@ namespace Nikse.SubtitleEdit
                 SpellCheckConfig.UseWordSplitList = () => Se.Settings.Ocr.UseWordSplitList;
                 SpellCheckConfig.TreatInApostropheAsIng = () => Se.Settings.Tools.SpellCheckEnglishTreatInApostropheAsIng;
                 SpellCheckConfig.LogError = msg => Se.LogError(msg);
+                SpellCheckConfig.ThaiSpellFolder = () => Se.ThaiSpellFolder;
+                SpellCheckConfig.ThaiSegmenter = () => Se.Settings.SpellCheck.ThaiSegmenter ?? "none";
+                SpellCheckConfig.ThaiOnnxProvider = () => Se.Settings.SpellCheck.ThaiOnnxProvider ?? "cpu";
 
                 // Load the UI translation before any window or the macOS native menu bar is built,
                 // so the menu bar isn't constructed with the default English strings (issue #11505).

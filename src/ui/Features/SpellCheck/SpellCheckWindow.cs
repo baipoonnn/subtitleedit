@@ -303,6 +303,23 @@ public class SpellCheckWindow : Window
             }
         };
 
+        var labelWordBreak = new Label
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            Content = "Word break",
+            Margin = new Thickness(0, 8, 0, 0),
+            [!Visual.IsVisibleProperty] = new Binding(nameof(SpellCheckViewModel.IsThaiWordBreakVisible)),
+        };
+
+        var comboBoxWordBreak = new ComboBox
+        {
+            [!ComboBox.ItemsSourceProperty] = new Binding(nameof(SpellCheckViewModel.ThaiWordBreaks)) { Mode = BindingMode.OneWay },
+            [!ComboBox.SelectedItemProperty] = new Binding(nameof(SpellCheckViewModel.SelectedThaiWordBreak)) { Mode = BindingMode.TwoWay },
+            VerticalAlignment = VerticalAlignment.Center,
+            Width = 200,
+            [!Visual.IsVisibleProperty] = new Binding(nameof(SpellCheckViewModel.IsThaiWordBreakVisible)),
+        };
+
         var labelSuggestions = new Label
         {
             VerticalAlignment = VerticalAlignment.Center,
@@ -371,6 +388,8 @@ public class SpellCheckWindow : Window
             {
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
+                new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
+                new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Star) },
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
             },
@@ -381,9 +400,11 @@ public class SpellCheckWindow : Window
         };
 
         grid.Add(panelDictionary, 0, 0);
-        grid.Add(labelSuggestions, 1, 0);
-        grid.Add(borderSuggestions, 2, 0);
-        grid.Add(panelButtons, 3, 0);
+        grid.Add(labelWordBreak, 1, 0);
+        grid.Add(comboBoxWordBreak, 2, 0);
+        grid.Add(labelSuggestions, 3, 0);
+        grid.Add(borderSuggestions, 4, 0);
+        grid.Add(panelButtons, 5, 0);
 
         return grid;
     }
