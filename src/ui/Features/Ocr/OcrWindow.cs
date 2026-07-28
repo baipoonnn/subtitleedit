@@ -43,11 +43,11 @@ public class OcrWindow : Window
         var editView = MakeEditView(vm);
         var buttonView = MakeBottomView(vm);
 
-        var editViewHeight = 215;
+        var editViewHeight = 280;
         var editViewRow = new RowDefinition
         {
             Height = new GridLength(editViewHeight, GridUnitType.Pixel),
-            MinHeight = 150
+            MinHeight = 200
         };
 
         var grid = new Grid
@@ -103,7 +103,7 @@ public class OcrWindow : Window
                         {
                             // Restore to saved height (ensure it's valid)
                             var heightToRestore = savedHeight > 0 ? savedHeight : editViewHeight;
-                            editViewRow.MinHeight = 150;
+                            editViewRow.MinHeight = 200;
                             editViewRow.Height = new GridLength(heightToRestore, GridUnitType.Pixel);
                         }
                     }
@@ -774,7 +774,7 @@ public class OcrWindow : Window
         {
             Orientation = Orientation.Vertical,
             HorizontalAlignment = HorizontalAlignment.Left,
-            VerticalAlignment = VerticalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Top,
             Children =
             {
                 panelDictionary,
@@ -785,6 +785,18 @@ public class OcrWindow : Window
                 checkBoxAutoBreak,
                 checkBoxFixDialogueDashes,
             }
+        };
+
+        // Options grew (Thai word break + dialogue-dash checkbox). Keep them reachable when the
+        // splitter pane is shorter than the stack by scrolling this column only.
+        var panelOptionsScroller = new ScrollViewer
+        {
+            Content = panelOptions,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            Margin = new Thickness(0, 0, 8, 0),
         };
 
         var tabControl = new TabControl
@@ -828,7 +840,7 @@ public class OcrWindow : Window
         tabControl.Bind(TabControl.IsVisibleProperty, new Binding(nameof(vm.IsDictionaryLoaded)));
 
         grid.Add(panelText, 0, 0);
-        grid.Add(panelOptions, 0, 1);
+        grid.Add(panelOptionsScroller, 0, 1);
         grid.Add(tabControl, 0, 2);
 
         var border = UiUtil.MakeBorderForControl(grid).WithMarginBottom(5);
