@@ -76,9 +76,14 @@ Add a private helper on `OcrViewModel`, e.g.
 multiple words and refresh lines matching any of them (one `ReloadNames`, one pass over
 affected lines — union of matching unknown entries).
 
-If the dialog does not expose the final added list to the caller, pass the word(s) the
-user intended to add (single `Name` or parsed `MultiNames` lines). Matching against
-`UnknownWords` only affects lines that had those strings as unknowns.
+After `OkPressed`, the caller reads the intended word(s) from the dialog VM:
+
+- Single mode: `result.Name`
+- Multi mode: non-empty trimmed lines from `result.MultiNames`
+
+Matching against `UnknownWords` only affects lines that had those strings as unknowns.
+Words that failed to add (already present) still refresh harmlessly if they were already
+known, or no-op if they never appeared as unknowns.
 
 ### Edge cases
 
