@@ -244,4 +244,41 @@ public class DialogueDashFixerTests
         Assert.True(result.Changed);
         Assert.Equal("- Hello" + Environment.NewLine + "- There", result.FixedText);
     }
+
+    [Fact]
+    public void Analyze_DoubleDashPrefixWithMissingFirstDash_CollapsesAndAdds()
+    {
+        // OCR sometimes emits "- - speech" (dash, space, dash) on the second line while
+        // the first speaker line has no dash at all.
+        var input = "ฟหกฟไ" + Environment.NewLine +
+                    "- - ฟหกฟไก";
+
+        var result = DialogueDashFixer.Analyze(input);
+
+        Assert.True(result.Changed);
+        Assert.Equal("- ฟหกฟไ" + Environment.NewLine + "- ฟหกฟไก", result.FixedText);
+    }
+
+    [Fact]
+    public void Analyze_DoubleDashPrefixBothLines_CollapsesToSingle()
+    {
+        var input = "- - Hello" + Environment.NewLine +
+                    "- - There";
+
+        var result = DialogueDashFixer.Analyze(input);
+
+        Assert.True(result.Changed);
+        Assert.Equal("- Hello" + Environment.NewLine + "- There", result.FixedText);
+    }
+
+    [Fact]
+    public void Analyze_TripleDashPrefix_CollapsesToSingle()
+    {
+        var input = "- - - Only one speaker left";
+
+        var result = DialogueDashFixer.Analyze(input);
+
+        Assert.True(result.Changed);
+        Assert.Equal("- Only one speaker left", result.FixedText);
+    }
 }

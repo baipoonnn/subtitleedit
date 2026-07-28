@@ -121,6 +121,7 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
         /// <summary>
         /// Rewrites any recognized dialogue-dash prefix (ASCII or Unicode) to the canonical
         /// ASCII "- " form so OCR en/em dashes don't linger after a structural fix.
+        /// Also collapses repeated OCR prefixes like "- - text" / "-- text" down to a single "- ".
         /// Leaves the unsupported no-space style ("-Hi") untouched.
         /// </summary>
         private static void NormalizeDashPrefixes(List<string> lines)
@@ -139,9 +140,24 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
                     continue;
                 }
 
-                var content = trimmed.Substring(1).TrimStart();
-                lines[i] = "- " + content;
+                var content = StripLeadingDialogueDashes(trimmed);
+                lines[i] = string.IsNullOrEmpty(content) ? "-" : "- " + content;
             }
+        }
+
+        /// <summary>
+        /// Removes one or more leading dialogue dashes (and the whitespace after each) so
+        /// OCR artifacts like "- - Hello" / "– – Hello" become "Hello".
+        /// </summary>
+        private static string StripLeadingDialogueDashes(string trimmed)
+        {
+            var content = trimmed;
+            while (content.Length > 0 && IsDialogueDashChar(content[0]))
+            {
+                content = content.Substring(1).TrimStart();
+            }
+
+            return content;
         }
 
         private static bool IsDialogueDashChar(char c) => DialogueDashChars.IndexOf(c) >= 0;
