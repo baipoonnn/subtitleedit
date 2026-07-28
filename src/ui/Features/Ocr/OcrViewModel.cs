@@ -607,7 +607,11 @@ public partial class OcrViewModel : ObservableObject
 
         if (result.OkPressed)
         {
-            _ocrFixEngine.ReloadNames();
+            IEnumerable<string> wordsToRefresh = result.IsMultiMode
+                ? result.MultiNames.SplitToLines()
+                : new[] { result.Name };
+
+            RefreshSpellCheckAfterDictionaryWordAdded(wordsToRefresh);
         }
 
         _isCtrlDown = false;
@@ -627,7 +631,8 @@ public partial class OcrViewModel : ObservableObject
 
         if (result.OkPressed)
         {
-            _ocrFixEngine.ReloadNames();
+            // Match UnknownWords with the OCR casing, not the lowercased dictionary form.
+            RefreshSpellCheckAfterDictionaryWordAdded(new[] { selectedWord.Word.Word });
         }
 
         _isCtrlDown = false;
@@ -3444,6 +3449,65 @@ public partial class OcrViewModel : ObservableObject
 
         var updatedResult = _ocrFixEngine.FixOcrErrors(lineIndex, item.Text, DoTryToGuessUnknownWords);
         item.FixResult = updatedResult;
+    }
+
+    private void RefreshSpellCheckAfterDictionaryWordAdded(IEnumerable<string> words)
+    {
+        var normalized = NormalizeWordsForSpellCheckRefresh(words);
+        if (normalized.Count == 0)
+        {
+            return;
+        }
+
+        if (!_ocrFixEngine.IsLoaded() ||
+            SelectedDictionary == null ||
+            SelectedDictionary.Name == GetDictionaryNameNone())
+        {
+            return;
+        }
+
+        _ocrFixEngine.ReloadNames();
+
+        var affectedItems = CollectItemsWithMatchingUnknownWords(UnknownWords, normalized);
+        if (affectedItems.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var item in affectedItems)
+        {
+            var lineIndex = _allOcrSubtitleItems.IndexOf(item);
+            if (lineIndex < 0)
+            {
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(item.Text))
+            {
+                item.FixResult = null;
+                var emptyRemovals = UnknownWords.Where(uw => uw.Item == item).ToList();
+                foreach (var uw in emptyRemovals)
+                {
+                    UnknownWords.Remove(uw);
+                }
+
+                continue;
+            }
+
+            var result = _ocrFixEngine.FixOcrErrors(lineIndex, item.Text, doTryToGuessUnknownWords: false);
+            item.FixResult = result;
+
+            var removals = UnknownWords.Where(uw => uw.Item == item).ToList();
+            foreach (var uw in removals)
+            {
+                UnknownWords.Remove(uw);
+            }
+
+            foreach (var unknownWordItem in GetUnknownWordItems(item, result))
+            {
+                UnknownWords.Add(unknownWordItem);
+            }
+        }
     }
 
     private List<UnknownWordItem> GetUnknownWordItems(OcrSubtitleItem item, OcrFixLineResult result)
