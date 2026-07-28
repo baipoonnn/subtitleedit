@@ -3702,6 +3702,8 @@ public partial class OcrViewModel : ObservableObject
                     if (result.AddToNamesListPressed)
                     {
                         _ocrFixEngine.AddName(result.Word);
+                        // Refresh other already-OCR'd lines; current line is re-checked by GetNextUnknownWord.
+                        RefreshSpellCheckAfterDictionaryWordAdded(new[] { result.Word });
                         continue;
                     }
 
@@ -3712,7 +3714,8 @@ public partial class OcrViewModel : ObservableObject
                             UserWordsHelper.AddToUserDictionary(result.Word, SelectedDictionary.GetFiveLetterLanguageName() ?? "en_US");
                         }
 
-                        _ocrFixEngine.ReloadNames();
+                        // Prefer unknownWord.Word.Word so Ordinal match finds the OCR casing in UnknownWords.
+                        RefreshSpellCheckAfterDictionaryWordAdded(new[] { unknownWord.Word.Word });
                         continue;
                     }
 
