@@ -3460,6 +3460,55 @@ public partial class OcrViewModel : ObservableObject
         return unknownWords;
     }
 
+    internal static List<string> NormalizeWordsForSpellCheckRefresh(IEnumerable<string> words)
+    {
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var word in words)
+        {
+            if (string.IsNullOrWhiteSpace(word))
+            {
+                continue;
+            }
+
+            var trimmed = word.Trim();
+            if (seen.Add(trimmed))
+            {
+                result.Add(trimmed);
+            }
+        }
+
+        return result;
+    }
+
+    internal static List<OcrSubtitleItem> CollectItemsWithMatchingUnknownWords(
+        IEnumerable<UnknownWordItem> unknownWords,
+        IEnumerable<string> words)
+    {
+        var wordSet = new HashSet<string>(NormalizeWordsForSpellCheckRefresh(words), StringComparer.Ordinal);
+        if (wordSet.Count == 0)
+        {
+            return new List<OcrSubtitleItem>();
+        }
+
+        var items = new List<OcrSubtitleItem>();
+        var seenItems = new HashSet<OcrSubtitleItem>();
+        foreach (var unknownWord in unknownWords)
+        {
+            if (!wordSet.Contains(unknownWord.Word.Word))
+            {
+                continue;
+            }
+
+            if (seenItems.Add(unknownWord.Item))
+            {
+                items.Add(unknownWord.Item);
+            }
+        }
+
+        return items;
+    }
+
     private UnknownWordItem? GetNextUnknownWord(int lineIndex, OcrSubtitleItem item, HashSet<string> skipOnceWords, HashSet<string> skipAllWords)
     {
         if (!_ocrFixEngine.IsLoaded() ||
