@@ -3122,7 +3122,7 @@ public partial class OcrViewModel : ObservableObject
         for (var i = 0; i < matches.Count - 1; i++)
         {
             var match = matches[i];
-            if (match.Text.EndsWith("1", StringComparison.Ordinal) && !match.Italic)
+            if (match.Text.EndsWith('1') && !match.Italic)
             {
                 var pixelsLess = 0;
                 if (pixelsAreSpace > 7)
@@ -4930,21 +4930,32 @@ public partial class OcrViewModel : ObservableObject
         {
             e.Cancel = true;
 
-            var result = await MessageBox.Show(
-                Window!,
-                "Discard OCR result?",
-                "Some items have OCR text. Close and discard the OCR result?",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Question);
-
-            if (result == MessageBoxResult.Yes)
+            try
             {
-                _forceClose = true;
-                SaveSettings();
-                UiUtil.SaveWindowPosition(Window);
-                Window?.Close();
+                var result = await MessageBox.Show(
+                    Window!,
+                    "Discard OCR result?",
+                    "Some items have OCR text. Close and discard the OCR result?",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question);
+
+                if (result != MessageBoxResult.Yes)
+                {
+                    return;
+                }
+            }
+            catch (Exception exception)
+            {
+                // async void closing handler: a throw after e.Cancel = true would
+                // otherwise leave a window that can never be closed. Log and fall
+                // through to force close.
+                Se.LogError(exception, "OCR close prompt failed");
             }
 
+            _forceClose = true;
+            SaveSettings();
+            UiUtil.SaveWindowPosition(Window);
+            Window?.Close();
             return;
         }
 

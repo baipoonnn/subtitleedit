@@ -17,7 +17,7 @@ public class Se
 {
     internal const int CurrentMacOsFontMigrationVersion = 1;
 
-    public static string Version { get; set; } = "v5.1.0-rc17";
+    public static string Version { get; set; } = "v5.1.0";
 
     public SeGeneral General { get; set; } = new();
     public List<SeShortCut> Shortcuts { get; set; } = new();
@@ -583,6 +583,9 @@ public class Se
 
         Configuration.Settings.Proxy.ProxyAddress = Settings.General.ProxyAddress ?? string.Empty;
         Configuration.Settings.Proxy.UserName = Settings.General.ProxyUserName ?? string.Empty;
+        Configuration.Settings.Proxy.Domain = Settings.General.ProxyDomain ?? string.Empty;
+        Configuration.Settings.Proxy.UseDefaultCredentials = Settings.General.ProxyUseDefaultCredentials;
+        Configuration.Settings.Proxy.BypassList = Settings.General.ProxyBypassList ?? string.Empty;
         if (!string.IsNullOrEmpty(Settings.General.ProxyPassword))
         {
             Configuration.Settings.Proxy.EncodePassword(Settings.General.ProxyPassword);
@@ -591,6 +594,12 @@ public class Se
         {
             Configuration.Settings.Proxy.Password = null;
         }
+
+        Configuration.Settings.Tools.AutoBreakLineEndingEarly = Settings.Tools.AutoBreakLineEndingEarly;
+        Configuration.Settings.Tools.AutoBreakCommaBreakEarly = Settings.Tools.AutoBreakCommaBreakEarly;
+        Configuration.Settings.Tools.AutoBreakDashEarly = Settings.Tools.AutoBreakDashEarly;
+        Configuration.Settings.Tools.AutoBreakUsePixelWidth = Settings.Tools.AutoBreakUsePixelWidth;
+        Configuration.Settings.Tools.AutoBreakPreferBottomHeavy = Settings.Tools.AutoBreakPreferBottomHeavy;
 
         var stt = Settings.Tools.AudioToText;
         Configuration.Settings.Tools.WhisperChoice = stt.WhisperChoice;
@@ -643,6 +652,7 @@ public class Se
         Configuration.Settings.Tools.DashScopeSttTimeoutSeconds = Settings.Tools.DashScopeSttTimeoutSeconds;
 
         Configuration.Settings.Tools.AutoTranslateLastName = Settings.AutoTranslate.AutoTranslateLastName;
+        Configuration.Settings.Tools.AutoTranslateDelaySeconds = (int)Math.Round(Settings.AutoTranslate.RequestDelaySeconds, MidpointRounding.AwayFromZero);
 
         // BeautifyTimeCodes profile: skip apply on a fresh install so libse's built-in
         // default-preset values stay intact. Once the user clicks OK in the profile editor,

@@ -1,4 +1,4 @@
-﻿using System.Net.Http;
+using System.Net.Http;
 using System.Net;
 
 namespace Nikse.SubtitleEdit.Core.Common
@@ -7,21 +7,37 @@ namespace Nikse.SubtitleEdit.Core.Common
     {
         public static HttpClient CreateHttpClientWithProxy()
         {
-
-            var proxyAddress = Configuration.Settings.Proxy.ProxyAddress;
+            var proxySettings = Configuration.Settings.Proxy;
+            var proxyAddress = proxySettings.ProxyAddress;
             if (string.IsNullOrEmpty(proxyAddress))
             {
-                return new HttpClient();
+#if NETSTANDARD
+                var systemProxy = WebRequest.DefaultWebProxy;
+#else
+                var systemProxy = HttpClient.DefaultProxy;
+#endif
+                if (systemProxy == null)
+                {
+                    return new HttpClient();
+                }
+
+                var defaultHandler = new HttpClientHandler
+                {
+                    UseProxy = true,
+                    Proxy = new BypassingWebProxy(systemProxy, proxySettings.BypassList),
+                };
+
+                return new HttpClient(defaultHandler);
             }
 
             var handler = new HttpClientHandler();
             var proxy = new WebProxy(proxyAddress);
 
-            var userName = Configuration.Settings.Proxy.UserName;
-            var password = Configuration.Settings.Proxy.DecodePassword();
-            var domain = Configuration.Settings.Proxy.Domain;
+            var userName = proxySettings.UserName;
+            var password = proxySettings.DecodePassword();
+            var domain = proxySettings.Domain;
 
-            if (!string.IsNullOrEmpty(userName))
+            if (!proxySettings.UseDefaultCredentials && !string.IsNullOrEmpty(userName))
             {
                 proxy.Credentials = string.IsNullOrEmpty(domain)
                     ? new NetworkCredential(userName, password)
@@ -33,7 +49,7 @@ namespace Nikse.SubtitleEdit.Core.Common
             }
 
             handler.UseProxy = true;
-            handler.Proxy = proxy;
+            handler.Proxy = new BypassingWebProxy(proxy, proxySettings.BypassList);
 
             return new HttpClient(handler);
         }
