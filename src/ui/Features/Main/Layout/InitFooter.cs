@@ -3,6 +3,7 @@ using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Data;
 using Avalonia.Layout;
+using Avalonia.Media;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
 using Optris.Icons.Avalonia;
@@ -45,9 +46,39 @@ public static class InitFooter
         var labelWaveFormText = UiUtil.MakeLabel()
             .WithBindText(vm, vm => vm.WaveformGeneratingText)
             .WithBindVisible(vm, vm => vm.IsWaveformGenerating)
-            .WithMarginRight(15);
+            .WithMarginRight(4);
         labelWaveFormText.Opacity = 0.5;
-        grid.Add(labelWaveFormText, 0, 1);
+
+        // Cancel button (X) shown next to the "Extracting wave info... NN%" status while generating.
+        var cancelLabel = Se.Language.General.Cancel.Replace("_", string.Empty);
+        var buttonCancelWaveform = new Button
+        {
+            Content = new Icon
+            {
+                Value = IconNames.Close,
+                FontSize = 14,
+                [ToolTip.TipProperty] = cancelLabel,
+            },
+            [AutomationProperties.NameProperty] = cancelLabel,
+            // Transparent, not null: a null background is not hit-testable, so clicks would only
+            // register on the thin strokes of the X glyph itself.
+            Background = Brushes.Transparent,
+            BorderBrush = null,
+            Padding = new Thickness(4, 2, 4, 2),
+            Margin = new Thickness(0, 0, 15, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            DataContext = vm,
+            [!Button.CommandProperty] = new Binding(nameof(vm.CancelWaveformExtractionCommand)),
+            [!Visual.IsVisibleProperty] = new Binding(nameof(vm.IsWaveformGenerating)),
+        };
+
+        var waveformStatusPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children = { labelWaveFormText, buttonCancelWaveform },
+        };
+        grid.Add(waveformStatusPanel, 0, 1);
 
         vm.StatusTextLeftLabel = new TextBlock
         {
@@ -75,12 +106,45 @@ public static class InitFooter
             VerticalAlignment = VerticalAlignment.Center,
             Children =
             {
+                new Button
+                {
+                    Content = new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        Spacing = 4,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Children =
+                        {
+                            new Icon
+                            {
+                                Value = IconNames.CloudDownload,
+                                FontSize = 18,
+                                VerticalAlignment = VerticalAlignment.Center,
+                            },
+                            UiUtil.MakeLabel().WithBindText(vm, vm => vm.UpdateAvailableText),
+                        },
+                    },
+                    [AutomationProperties.NameProperty] = Se.Language.Help.CheckForUpdates,
+                    [!Visual.IsVisibleProperty] = new Binding(nameof(vm.IsUpdateAvailable)),
+                    [!Button.CommandProperty] = new Binding(nameof(vm.ShowCheckForUpdatesCommand)),
+
+                    // Transparent, not null, so the whole button (not just the glyph strokes)
+                    // is hit-testable.
+                    Background = Brushes.Transparent,
+                    BorderBrush = null,
+                    Padding = new Thickness(4, 2, 4, 2),
+                    Margin = new Thickness(0, 0, 15, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                },
+
                 new Icon
                 {
                     Value = IconNames.LockClock,
                     FontSize = 20,
                     [ToolTip.TipProperty] = Se.Language.General.LockTimeCodes,
-                    [!Visual.IsVisibleProperty] = new Binding(nameof(vm.LockTimeCodes)),
+                    // The effective lock, so the padlock also shows while the original's
+                    // non-matching lines are on screen (#13449).
+                    [!Visual.IsVisibleProperty] = new Binding(nameof(vm.AreTimeCodesLocked)),
                     Margin = new Thickness(0, 0, 15, 0),
                 },
 

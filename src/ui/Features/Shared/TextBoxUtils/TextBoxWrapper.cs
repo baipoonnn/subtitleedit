@@ -3,6 +3,7 @@ using Avalonia.Input;
 using Nikse.SubtitleEdit.Controls;
 using Nikse.SubtitleEdit.Features.SpellCheck;
 using Nikse.SubtitleEdit.Logic;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Nikse.SubtitleEdit.UiLogic.SpellCheck;
@@ -102,6 +103,28 @@ public class TextBoxWrapper : ITextBoxWrapper
         _textBox.ClearSelection();
     }
 
+    public void DeleteForward()
+    {
+        if (_textBox.SelectionStart != _textBox.SelectionEnd)
+        {
+            _textBox.SelectedText = string.Empty;
+            return;
+        }
+
+        var text = _textBox.Text ?? string.Empty;
+        var caret = _textBox.CaretIndex;
+        if (caret >= text.Length)
+        {
+            return;
+        }
+
+        // Delete a whole text element so CRLF, surrogate pairs, and combining marks go together.
+        var length = System.Globalization.StringInfo.GetNextTextElementLength(text.AsSpan(caret));
+        _textBox.SelectionStart = caret;
+        _textBox.SelectionEnd = caret + length;
+        _textBox.SelectedText = string.Empty;
+    }
+
     public void SetAlignment(Avalonia.Media.TextAlignment alignment)
     {
         _textBox.TextAlignment = alignment;
@@ -172,7 +195,7 @@ public class TextBoxWrapper : ITextBoxWrapper
             return false;
         }
 
-        return SpellCheckUnderlineTransformer.IsWordMisspelled(word, Text, spellCheckManager);
+        return SpellCheckWordScanner.IsWordMisspelled(word, Text, spellCheckManager);
     }
 
     public List<string>? GetSuggestionsForWordAtOffset(int offset)

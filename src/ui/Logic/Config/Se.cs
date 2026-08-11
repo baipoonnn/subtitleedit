@@ -1,5 +1,6 @@
 ﻿using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Core.Forms.FixCommonErrors;
+using Nikse.SubtitleEdit.Core.SubtitleFormats;
 using Nikse.SubtitleEdit.Features.Main;
 using Nikse.SubtitleEdit.Logic.Config.Language;
 using System;
@@ -16,11 +17,13 @@ namespace Nikse.SubtitleEdit.Logic.Config;
 public class Se
 {
     internal const int CurrentMacOsFontMigrationVersion = 1;
+    internal const int CurrentShortcutsMigrationVersion = 2;
 
-    public static string Version { get; set; } = "v5.1.0";
+    public static string Version { get; set; } = "v5.2.0-beta10";
 
     public SeGeneral General { get; set; } = new();
     public List<SeShortCut> Shortcuts { get; set; } = new();
+    public int? ShortcutsMigrationVersion { get; set; }
     public string Color1 { get; set; } = "#ffff00ff";
     public string Color2 { get; set; } = "#ff0000ff";
     public string Color3 { get; set; } = "#00ff00ff";
@@ -159,6 +162,7 @@ public class Se
 
     public static string ThaiSpellFolder => Path.Combine(DataFolder, "ThaiSpell");
     public static string ThemesFolder => Path.Combine(DataFolder, "Themes");
+    public static string FontsFolder => Path.Combine(DataFolder, "Fonts");
     public static string AutoBackupFolder => Path.Combine(DataFolder, "AutoBackup");
     public static string FfmpegFolder => Path.Combine(DataFolder, "ffmpeg");
     public static string TextToSpeechFolder => Path.Combine(DataFolder, "TextToSpeech");
@@ -257,6 +261,8 @@ public class Se
 
     public void InitializeMainShortcuts(MainViewModel vm)
     {
+        MigrateShortcuts();
+
         var defaults = ShortcutsMain.GetDefaultShortcuts(vm);
 
         if (Shortcuts.Count == 0)
@@ -271,6 +277,56 @@ public class Se
             if (!existing.Contains(def.ActionName))
             {
                 Shortcuts.Add(def);
+            }
+        }
+    }
+
+    /// <summary>
+    /// One-time shortcut migrations, versioned like <see cref="MigrateMacOsFontSettings"/> so a
+    /// binding the user re-assigns afterwards is never touched again.
+    ///
+    /// Version 1: v5.0.0 - v5.2.0-beta1 shipped F10 as the default for "set end and go to next",
+    /// and any visit to the Shortcuts window persisted that default to Settings.json. Once the
+    /// F10-suppression check from #12504 landed, the persisted default permanently disabled the
+    /// standard F10 menu-bar activation (#13083). The default is gone now, and the stale persisted
+    /// copy - indistinguishable from a user assignment - is cleared here once; users who really
+    /// want F10 on the action can assign it again and it will stick.
+    ///
+    /// Version 2: "Text box: Delete selection (no clipboard)" grew into the forward-delete
+    /// (Delete key) command and was renamed; the persisted entry is renamed with it so user
+    /// assignments - including a deliberately cleared binding - survive.
+    /// </summary>
+    internal void MigrateShortcuts()
+    {
+        var fromVersion = ShortcutsMigrationVersion.GetValueOrDefault();
+        if (fromVersion >= CurrentShortcutsMigrationVersion)
+        {
+            return;
+        }
+
+        ShortcutsMigrationVersion = CurrentShortcutsMigrationVersion;
+
+        if (fromVersion < 1)
+        {
+            foreach (var shortcut in Shortcuts)
+            {
+                if (shortcut.ActionName == nameof(MainViewModel.WaveformSetEndAndGoToNextCommand) &&
+                    shortcut.Keys.Count == 1 &&
+                    shortcut.Keys[0].Equals(nameof(Avalonia.Input.Key.F10), StringComparison.OrdinalIgnoreCase))
+                {
+                    shortcut.Keys.Clear();
+                }
+            }
+        }
+
+        if (fromVersion < 2)
+        {
+            foreach (var shortcut in Shortcuts)
+            {
+                if (shortcut.ActionName == "TextBoxDeleteSelectionCommand")
+                {
+                    shortcut.ActionName = nameof(MainViewModel.TextBoxDeleteForwardCommand);
+                }
             }
         }
     }
@@ -575,10 +631,9 @@ public class Se
         }
     }
 
-    private static void UpdateLibSeSettings()
+    internal static void UpdateLibSeSettings()
     {
         Configuration.Settings.General.FFmpegLocation = Settings.General.FfmpegPath;
-        Configuration.Settings.General.UseDarkTheme = Settings.Appearance.Theme == "Dark";
         Configuration.Settings.General.UseTimeFormatHHMMSSFF = Settings.General.UseFrameMode;
 
         Configuration.Settings.Proxy.ProxyAddress = Settings.General.ProxyAddress ?? string.Empty;
@@ -600,58 +655,20 @@ public class Se
         Configuration.Settings.Tools.AutoBreakDashEarly = Settings.Tools.AutoBreakDashEarly;
         Configuration.Settings.Tools.AutoBreakUsePixelWidth = Settings.Tools.AutoBreakUsePixelWidth;
         Configuration.Settings.Tools.AutoBreakPreferBottomHeavy = Settings.Tools.AutoBreakPreferBottomHeavy;
+        Configuration.Settings.Tools.AutoBreakPreferBottomPercent = Settings.Tools.AutoBreakPreferBottomPercent;
+        Configuration.Settings.Tools.UseNoLineBreakAfter = Settings.Tools.UseNoLineBreakAfter;
 
         var stt = Settings.Tools.AudioToText;
         Configuration.Settings.Tools.WhisperChoice = stt.WhisperChoice;
-        Configuration.Settings.Tools.WhisperIgnoreVersion = stt.WhisperIgnoreVersion;
-        Configuration.Settings.Tools.WhisperDeleteTempFiles = stt.WhisperDeleteTempFiles;
-        Configuration.Settings.Tools.WhisperModel = stt.WhisperModel;
-        Configuration.Settings.Tools.WhisperLanguageCode = stt.WhisperLanguageCode;
         Configuration.Settings.Tools.WhisperLocation = stt.WhisperLocation;
         Configuration.Settings.Tools.WhisperCtranslate2Location = stt.WhisperCtranslate2Location;
-        Configuration.Settings.Tools.WhisperPurfviewFasterWhisperLocation = stt.WhisperPurfviewFasterWhisperLocation;
-        Configuration.Settings.Tools.WhisperPurfviewFasterWhisperDefaultCmd = stt.WhisperPurfviewFasterWhisperDefaultCmd;
         Configuration.Settings.Tools.WhisperXLocation = stt.WhisperXLocation;
         Configuration.Settings.Tools.WhisperStableTsLocation = stt.WhisperStableTsLocation;
         Configuration.Settings.Tools.WhisperCppModelLocation = stt.WhisperCppModelLocation;
-        Configuration.Settings.Tools.WhisperExtraSettings = stt.WhisperCustomCommandLineArguments;
-        Configuration.Settings.Tools.WhisperExtraSettingsHistory = stt.WhisperExtraSettingsHistory;
-        Configuration.Settings.Tools.WhisperAutoAdjustTimings = stt.WhisperAutoAdjustTimings;
-        Configuration.Settings.Tools.WhisperUseLineMaxChars = stt.WhisperUseLineMaxChars;
-        Configuration.Settings.Tools.WhisperPostProcessingAddPeriods = stt.WhisperPostProcessingAddPeriods;
-        Configuration.Settings.Tools.WhisperPostProcessingMergeLines = stt.WhisperPostProcessingMergeLines;
-        Configuration.Settings.Tools.WhisperPostProcessingSplitLines = stt.WhisperPostProcessingSplitLines;
-        Configuration.Settings.Tools.WhisperPostProcessingFixCasing = stt.WhisperPostProcessingFixCasing;
-        Configuration.Settings.Tools.WhisperPostProcessingFixShortDuration = stt.WhisperPostProcessingFixShortDuration;
-        Configuration.Settings.Tools.VoskPostProcessing = stt.PostProcessing;
 
-        Configuration.Settings.Tools.OpenAiCompatibleSttUrl = Settings.Tools.OpenAiCompatibleSttUrl;
-        Configuration.Settings.Tools.OpenAiCompatibleSttApiKey = Settings.Tools.OpenAiCompatibleSttApiKey;
-        Configuration.Settings.Tools.OpenAiCompatibleSttModel = Settings.Tools.OpenAiCompatibleSttModel;
-        Configuration.Settings.Tools.OpenAiCompatibleSttExtraHeaders = Settings.Tools.OpenAiCompatibleSttExtraHeaders;
-        Configuration.Settings.Tools.OpenAiCompatibleSttTimeoutSeconds = Settings.Tools.OpenAiCompatibleSttTimeoutSeconds;
-        Configuration.Settings.Tools.OpenAiCompatibleSttLanguage = Settings.Tools.OpenAiCompatibleSttLanguage;
-        Configuration.Settings.Tools.OpenAiCompatibleSttTemperature = Settings.Tools.OpenAiCompatibleSttTemperature;
-        Configuration.Settings.Tools.OpenAiCompatibleSttPrompt = Settings.Tools.OpenAiCompatibleSttPrompt;
-        Configuration.Settings.Tools.OpenAiCompatibleSttAutoTranscribeOnAudioSelection = Settings.Tools.OpenAiCompatibleSttAutoTranscribeOnAudioSelection;
-        Configuration.Settings.Tools.OpenAiCompatibleSttStream = Settings.Tools.OpenAiCompatibleSttStream;
-        Configuration.Settings.Tools.OpenAiCompatibleSttAudioFormat = Settings.Tools.OpenAiCompatibleSttAudioFormat;
 
-        Configuration.Settings.Tools.OpenRouterSttApiKey = Settings.Tools.OpenRouterSttApiKey;
-        Configuration.Settings.Tools.OpenRouterSttModel = Settings.Tools.OpenRouterSttModel;
-        Configuration.Settings.Tools.OpenRouterSttLanguage = Settings.Tools.OpenRouterSttLanguage;
-        Configuration.Settings.Tools.OpenRouterSttTemperature = Settings.Tools.OpenRouterSttTemperature;
-        Configuration.Settings.Tools.OpenRouterSttPrompt = Settings.Tools.OpenRouterSttPrompt;
-        Configuration.Settings.Tools.OpenRouterSttTimeoutSeconds = Settings.Tools.OpenRouterSttTimeoutSeconds;
 
-        Configuration.Settings.Tools.DashScopeSttApiKey = Settings.Tools.DashScopeSttApiKey;
-        Configuration.Settings.Tools.DashScopeSttModel = Settings.Tools.DashScopeSttModel;
-        Configuration.Settings.Tools.DashScopeSttLanguage = Settings.Tools.DashScopeSttLanguage;
-        Configuration.Settings.Tools.DashScopeSttRegion = Settings.Tools.DashScopeSttRegion;
-        Configuration.Settings.Tools.DashScopeSttEnableWords = Settings.Tools.DashScopeSttEnableWords;
-        Configuration.Settings.Tools.DashScopeSttTimeoutSeconds = Settings.Tools.DashScopeSttTimeoutSeconds;
 
-        Configuration.Settings.Tools.AutoTranslateLastName = Settings.AutoTranslate.AutoTranslateLastName;
         Configuration.Settings.Tools.AutoTranslateDelaySeconds = (int)Math.Round(Settings.AutoTranslate.RequestDelaySeconds, MidpointRounding.AwayFromZero);
 
         // BeautifyTimeCodes profile: skip apply on a fresh install so libse's built-in
@@ -662,20 +679,6 @@ public class Se
             Settings.BeautifyTimeCodes.ApplyTo(Configuration.Settings.BeautifyTimeCodes);
         }
 
-        Configuration.Settings.Tools.ImportTextSplitting = Settings.Tools.ImportTextSplitting;
-        Configuration.Settings.Tools.ImportTextSplittingLineMode = Settings.Tools.ImportTextSplittingLineMode;
-        Configuration.Settings.Tools.ImportTextLineBreak = Settings.Tools.ImportTextLineBreak;
-        Configuration.Settings.Tools.ImportTextMergeShortLines = Settings.Tools.ImportTextMergeShortLines;
-        Configuration.Settings.Tools.ImportTextAutoSplitAtBlank = Settings.Tools.ImportTextAutoSplitAtBlank;
-        Configuration.Settings.Tools.ImportTextRemoveLinesNoLetters = Settings.Tools.ImportTextRemoveLinesNoLetters;
-        Configuration.Settings.Tools.ImportTextGenerateTimeCodes = Settings.Tools.ImportTextGenerateTimeCodes;
-        Configuration.Settings.Tools.ImportTextAutoBreak = Settings.Tools.ImportTextAutoBreak;
-        Configuration.Settings.Tools.ImportTextAutoBreakAtEnd = Settings.Tools.ImportTextAutoBreakAtEnd;
-        Configuration.Settings.Tools.ImportTextGap = Settings.Tools.ImportTextGap;
-        Configuration.Settings.Tools.ImportTextAutoSplitNumberOfLines = Settings.Tools.ImportTextAutoSplitNumberOfLines;
-        Configuration.Settings.Tools.ImportTextAutoBreakAtEndMarkerText = Settings.Tools.ImportTextAutoBreakAtEndMarkerText;
-        Configuration.Settings.Tools.ImportTextDurationAuto = Settings.Tools.ImportTextDurationAuto;
-        Configuration.Settings.Tools.ImportTextFixedDuration = Settings.Tools.ImportTextFixedDuration;
 
         Configuration.Settings.Tools.MusicSymbol = Settings.Tools.MusicSymbol;
         Configuration.Settings.Tools.MusicSymbolReplace = Settings.Tools.MusicSymbolReplace;
@@ -727,6 +730,61 @@ public class Se
         }
 
         (g.CustomContinuationStyle ?? new CustomContinuationStyle()).ApplyToGeneralSettings(Configuration.Settings.General);
+    }
+
+    /// <summary>
+    /// Copies every rule in <paramref name="profile"/> into the general settings; callers still
+    /// need to run the libse bridge afterwards. Kept in one place because the profile picker used
+    /// to apply the fields inline and quietly dropped the two duration limits.
+    /// </summary>
+    public static void ApplyRuleProfile(RulesProfile profile)
+    {
+        var g = Settings.General;
+
+        g.CurrentProfile = profile.Name;
+        g.SubtitleLineMaximumLength = profile.SubtitleLineMaximumLength;
+        g.SubtitleMaximumCharactersPerSeconds = (double)profile.SubtitleMaximumCharactersPerSeconds;
+        g.SubtitleOptimalCharactersPerSeconds = (double)profile.SubtitleOptimalCharactersPerSeconds;
+        g.SubtitleMaximumWordsPerMinute = (double)profile.SubtitleMaximumWordsPerMinute;
+        g.SubtitleMinimumDisplayMilliseconds = profile.SubtitleMinimumDisplayMilliseconds;
+        g.SubtitleMaximumDisplayMilliseconds = profile.SubtitleMaximumDisplayMilliseconds;
+        g.MinimumBetweenLines.Milliseconds = profile.MinimumMillisecondsBetweenLines;
+        g.MinimumBetweenLines.Frames = SubtitleFormat.MillisecondsToFrames(profile.MinimumMillisecondsBetweenLines);
+        g.MaxNumberOfLines = profile.MaxNumberOfLines;
+        g.UnbreakLinesShorterThan = profile.MergeLinesShorterThan;
+        g.DialogStyle = profile.DialogStyle.ToString();
+        g.ContinuationStyle = profile.ContinuationStyle.ToString();
+        g.CpsLineLengthStrategy = profile.CpsLineLengthStrategy;
+        g.CustomContinuationStyle = new CustomContinuationStyle(profile.CustomContinuationStyle);
+    }
+
+    /// <summary>
+    /// Pushes the rule settings into libse's Configuration, which is what the fix/merge engines
+    /// and the duration helpers read. Sits next to <see cref="ApplyRuleProfile"/> so the two
+    /// field lists stay in step - the duration limits were missing here for the same reason.
+    /// </summary>
+    public static void ApplyRuleSettingsToLibSe()
+    {
+        var g = Settings.General;
+        var libSe = Configuration.Settings.General;
+
+        libSe.SubtitleLineMaximumLength = g.SubtitleLineMaximumLength;
+        libSe.SubtitleMaximumCharactersPerSeconds = g.SubtitleMaximumCharactersPerSeconds;
+        libSe.SubtitleOptimalCharactersPerSeconds = g.SubtitleOptimalCharactersPerSeconds;
+        libSe.SubtitleMaximumWordsPerMinute = g.SubtitleMaximumWordsPerMinute;
+        libSe.SubtitleMinimumDisplayMilliseconds = g.SubtitleMinimumDisplayMilliseconds;
+        libSe.SubtitleMaximumDisplayMilliseconds = g.SubtitleMaximumDisplayMilliseconds;
+        libSe.MinimumMillisecondsBetweenLines = g.MinimumBetweenLines.GetMilliseconds();
+        libSe.MaxNumberOfLines = g.MaxNumberOfLines;
+        libSe.MergeLinesShorterThan = g.UnbreakLinesShorterThan;
+        libSe.CpsLineLengthStrategy = g.CpsLineLengthStrategy;
+
+        if (Enum.TryParse<Core.Enums.DialogType>(g.DialogStyle, out var dt))
+        {
+            libSe.DialogStyle = dt;
+        }
+
+        ApplyContinuationStyleToLibSe();
     }
 
     public static string GetErrorLogFilePath()

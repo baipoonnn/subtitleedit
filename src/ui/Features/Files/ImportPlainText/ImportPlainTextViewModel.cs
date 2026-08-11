@@ -19,6 +19,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Timers;
+using Nikse.SubtitleEdit.UiLogic.Media;
 
 namespace Nikse.SubtitleEdit.Features.Files.ImportPlainText;
 
@@ -35,7 +36,6 @@ public partial class ImportPlainTextViewModel : ObservableObject, IClosingCleanu
     [ObservableProperty] private bool _useFixedDuration;
     [ObservableProperty] private int _fixedDurationMs;
     [ObservableProperty] private string _plainText;
-    [ObservableProperty] private string _numberOfSubtitles;
     [ObservableProperty] private bool _isAligning;
     [ObservableProperty] private string _alignProgress;
     [ObservableProperty] private double _alignPercent;
@@ -69,7 +69,6 @@ public partial class ImportPlainTextViewModel : ObservableObject, IClosingCleanu
         SelectedSplitAtOption = SplitAtOptions[0];
         PlainText = string.Empty;
         MinGapMs = Se.Settings.General.MinimumBetweenLines.GetMilliseconds();
-        NumberOfSubtitles = string.Empty;
         AlignProgress = string.Empty;
         FixedDurationMs = (int)Math.Round(Se.Settings.Tools.AdjustDurations.AdjustDurationFixed * 1000.0, MidpointRounding.AwayFromZero);
 
@@ -144,15 +143,6 @@ public partial class ImportPlainTextViewModel : ObservableObject, IClosingCleanu
                     var subtitle = subtitles[i];
                     subtitle.Number = i + 1;
                     Subtitles.Add(subtitle);
-                }
-
-                if (Subtitles.Count > 0)
-                {
-                    NumberOfSubtitles = string.Format(Se.Language.File.Import.NumberOfSubtitlesX, Subtitles.Count);
-                }
-                else
-                {
-                    NumberOfSubtitles = string.Empty;
                 }
 
                 TaskCompletionSource? toSignal;
@@ -616,6 +606,11 @@ public partial class ImportPlainTextViewModel : ObservableObject, IClosingCleanu
         if (e.Key == Key.Escape)
         {
             Close();
+        }
+        else if (UiUtil.IsHelp(e))
+        {
+            e.Handled = true;
+            UiUtil.ShowHelp("features/import-plain-text");
         }
     }
 

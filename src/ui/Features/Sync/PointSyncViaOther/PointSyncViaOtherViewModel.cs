@@ -8,6 +8,7 @@ using Nikse.SubtitleEdit.Core.SubtitleFormats;
 using Nikse.SubtitleEdit.Features.Main;
 using Nikse.SubtitleEdit.Features.Shared;
 using Nikse.SubtitleEdit.Features.Shared.FindText;
+using Nikse.SubtitleEdit.Features.Sync.PointSync.SetSyncPoint;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
 using Nikse.SubtitleEdit.Logic.Media;
@@ -36,6 +37,12 @@ public partial class PointSyncViaOtherViewModel : ObservableObject
     public List<SubtitleLineViewModel> SyncedSubtitles { get; private set; }
     public bool OkPressed { get; private set; }
     public string WindowTitle { get; private set; }
+
+    /// <summary>
+    /// The video in use when the window closed - the caller adopts it, so a video opened from
+    /// "Set sync point via video" also reaches the main window (issue #13341).
+    /// </summary>
+    public string VideoFileName => _videoFileName;
 
     /// <summary>Set by the window; scrolls the "other subtitle" grid to a line without selecting it.</summary>
     public Action<SubtitleLineViewModel>? ScrollOtherToLine { get; set; }
@@ -91,7 +98,12 @@ public partial class PointSyncViaOtherViewModel : ObservableObject
             return;
         }
 
-        var leftTime = value.StartTime;
+        // Compare in original-time space: sync points store original left times, and the
+        // grid line may show previewed times after "Apply" (#12942).
+        var leftIndexInGrid = Subtitles.IndexOf(value);
+        var leftTime = leftIndexInGrid >= 0 && leftIndexInGrid < _originalSubtitles.Count
+            ? _originalSubtitles[leftIndexInGrid].StartTime
+            : value.StartTime;
         SyncPoint? nearestPoint = null;
         var nearestDistance = TimeSpan.MaxValue;
         foreach (var syncPoint in SyncPoints)
@@ -191,12 +203,67 @@ public partial class PointSyncViaOtherViewModel : ObservableObject
             return;
         }
 
-        var syncPoint = new SyncPoint(
-            left, Subtitles.IndexOf(left),
-            right, Othersubtitles.IndexOf(right));
+        // Sync points are applied to the original timings, so the left time must come from
+        // the original line - the grid line may already show previewed times after "Apply",
+        // which would bake the previous offset into the new point (#12942).
+        var leftIndex = Subtitles.IndexOf(left);
+        AddSyncPoint(new SyncPoint(
+            _originalSubtitles[leftIndex], leftIndex,
+            right, Othersubtitles.IndexOf(right)));
+    }
 
-        // A line has at most one sync point (setting it again re-points it), and the list
-        // stays in chronological order (#12529).
+    /// <summary>
+    /// Sets a sync point from the video instead of from the other subtitle - for lines the other
+    /// file has no counterpart for, and for when there is no other file at all yet (issue #13341).
+    /// </summary>
+    [RelayCommand]
+    private async Task SetSyncPointViaVideo()
+    {
+        var left = SelectedSubtitle;
+        if (left == null || Window == null)
+        {
+            return;
+        }
+
+        var result = await _windowService.ShowDialogAsync<SetSyncPointWindow, SetSyncPointViewModel>(Window, vm =>
+        {
+            vm.Initialize(Subtitles.ToList(), left, _videoFileName, FileName, null);
+        });
+
+        // Keep a video opened (or found) in there - also when the dialog was cancelled.
+        if (!string.IsNullOrEmpty(result.VideoFileName))
+        {
+            _videoFileName = result.VideoFileName;
+        }
+
+        if (!result.OkPressed)
+        {
+            return;
+        }
+
+        // As in SetSyncPoint: the left time has to come from the original line, since the grid may
+        // already show previewed times after "Apply" (#12942). The right side is the video
+        // position, carried on a copy of the line - there is no other-subtitle line for it.
+        var leftIndex = Subtitles.IndexOf(left);
+        if (leftIndex < 0 || leftIndex >= _originalSubtitles.Count)
+        {
+            return;
+        }
+
+        var right = new SubtitleLineViewModel(_originalSubtitles[leftIndex])
+        {
+            StartTime = TimeSpan.FromSeconds(result.SyncPosition),
+        };
+
+        AddSyncPoint(new SyncPoint(_originalSubtitles[leftIndex], leftIndex, right, leftIndex));
+    }
+
+    /// <summary>
+    /// A line has at most one sync point (setting it again re-points it), and the list stays in
+    /// chronological order (#12529).
+    /// </summary>
+    private void AddSyncPoint(SyncPoint syncPoint)
+    {
         var existing = SyncPoints.FirstOrDefault(p => p.LeftIndex == syncPoint.LeftIndex);
         if (existing != null)
         {

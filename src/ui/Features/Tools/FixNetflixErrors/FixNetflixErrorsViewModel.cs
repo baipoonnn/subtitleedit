@@ -19,6 +19,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Timers;
+using Nikse.SubtitleEdit.UiLogic.Media;
 
 namespace Nikse.SubtitleEdit.Features.Tools.FixNetflixErrors;
 
@@ -57,6 +58,8 @@ public partial class FixNetflixErrorsViewModel : ObservableObject
     [ObservableProperty] private FixNetflixErrorsItem? _selectedFix;
     [ObservableProperty] private string _fixText;
     [ObservableProperty] private bool _fixTextEnabled;
+    [ObservableProperty] private bool _isChildrenProgram;
+    [ObservableProperty] private bool _isSdh;
 
     // New: selectable list of Netflix checks
     [ObservableProperty] private ObservableCollection<NetflixCheckDisplayItem> _checks = new();
@@ -121,6 +124,8 @@ public partial class FixNetflixErrorsViewModel : ObservableObject
 
     private void LoadSettings()
     {
+        IsChildrenProgram = Se.Settings.Tools.FixNetflixErrors.IsChildrenProgram;
+        IsSdh = Se.Settings.Tools.FixNetflixErrors.IsSdh;
     }
 
     private void SaveSettings()
@@ -129,6 +134,8 @@ public partial class FixNetflixErrorsViewModel : ObservableObject
             .Where(c => c.IsSelected)
             .Select(c => c.Checker.GetType().Name)
             .ToList();
+        Se.Settings.Tools.FixNetflixErrors.IsChildrenProgram = IsChildrenProgram;
+        Se.Settings.Tools.FixNetflixErrors.IsSdh = IsSdh;
         Se.SaveSettings();
     }
 
@@ -257,6 +264,9 @@ public partial class FixNetflixErrorsViewModel : ObservableObject
         {
             Language = SelectedLanguage?.Code ?? "en",
             FrameRate = (double)(_mediaInfo?.FramesRate ?? (decimal)Configuration.Settings.General.CurrentFrameRate),
+            VideoFileName = _videoFileName,
+            IsChildrenProgram = IsChildrenProgram,
+            IsSDH = IsSdh,
         };
 
         controller.RunChecks(_subtitle, selectedChecks);
@@ -316,6 +326,16 @@ public partial class FixNetflixErrorsViewModel : ObservableObject
     }
 
     partial void OnSelectedLanguageChanged(LanguageItem? value)
+    {
+        SetDirty();
+    }
+
+    partial void OnIsChildrenProgramChanged(bool value)
+    {
+        SetDirty();
+    }
+
+    partial void OnIsSdhChanged(bool value)
     {
         SetDirty();
     }

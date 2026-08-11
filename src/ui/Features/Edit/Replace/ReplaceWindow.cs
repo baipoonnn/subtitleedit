@@ -16,7 +16,7 @@ public class ReplaceWindow : Window
     public ReplaceWindow(ReplaceViewModel vm)
     {
         UiUtil.InitializeWindow(this, GetType().Name);
-        Title = Se.Language.Edit.Find.ReplaceTitle;
+        Title = Se.Language.General.Replace;
         SizeToContent = SizeToContent.WidthAndHeight;
         CanResize = false;
         vm.Window = this;
@@ -57,7 +57,7 @@ public class ReplaceWindow : Window
 
         var labelReplaceWith = new TextBlock
         {
-            Text = Se.Language.Edit.Find.ReplaceWith,
+            Text = Se.Language.General.ReplaceWith,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 0, 3)
         };
@@ -70,6 +70,7 @@ public class ReplaceWindow : Window
             PlaceholderText = Se.Language.Edit.Find.ReplaceTextWatermark,
             [!TextBox.TextProperty] = new Binding(nameof(vm.ReplaceText)) { Mode = BindingMode.TwoWay }
         };
+        textBoxReplace.KeyDown += vm.ReplaceTextBoxKeyDown;
 
         var panelReplace = new StackPanel
         {
@@ -86,7 +87,7 @@ public class ReplaceWindow : Window
         var valueConverter = new FindModeValueConverter();
         var radioButtonNormal = new RadioButton
         {
-            Content = Se.Language.Edit.Find.CaseSensitive,
+            Content = Se.Language.General.CaseSensitive,
             VerticalAlignment = VerticalAlignment.Center,
             [!RadioButton.IsCheckedProperty] = new Binding(nameof(vm.FindMode))
             {
@@ -98,7 +99,7 @@ public class ReplaceWindow : Window
 
         var radioButtonCaseInsensitive = new RadioButton
         {
-            Content = Se.Language.Edit.Find.CaseInsensitive,
+            Content = Se.Language.General.CaseInsensitive,
             VerticalAlignment = VerticalAlignment.Center,
             [!RadioButton.IsCheckedProperty] = new Binding(nameof(vm.FindMode))
             {
@@ -131,6 +132,26 @@ public class ReplaceWindow : Window
                 radioButtonCaseInsensitive,
                 radioButtonRegularExpression
             }
+        };
+
+        // Only relevant while an editable original text column is on screen, so the whole block
+        // stays hidden the rest of the time instead of offering choices with no effect.
+        var panelScope = new StackPanel
+        {
+            Orientation = Orientation.Vertical,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 10, 0, 0),
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = Se.Language.Edit.Find.ReplaceIn,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 0, 3),
+                },
+                UiUtil.MakeComboBox(vm.Scopes, vm, nameof(vm.SelectedScope)).WithMinWidth(200),
+            },
+            [!Visual.IsVisibleProperty] = new Binding(nameof(vm.IsScopeVisible)) { Source = vm },
         };
 
         var buttonFindNext = UiUtil.MakeButton(Se.Language.Edit.Find.FindNext, vm.FindNextCommand)
@@ -178,6 +199,7 @@ public class ReplaceWindow : Window
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
+                new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
             },
             ColumnDefinitions =
             {
@@ -193,7 +215,8 @@ public class ReplaceWindow : Window
         grid.Add(panelFind, 0, 0);
         grid.Add(panelReplace, 1, 0);
         grid.Add(panelFindTypes, 2, 0);
-        grid.Add(panelButtons, 0, 1, 3, 1);
+        grid.Add(panelScope, 3, 0);
+        grid.Add(panelButtons, 0, 1, 4, 1);
 
         Content = grid;
 

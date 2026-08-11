@@ -244,6 +244,8 @@ public partial class ShortcutsViewModel : ObservableObject
         _configurableCommands.Add(vm.SetActor8Command);
         _configurableCommands.Add(vm.SetActor9Command);
         _configurableCommands.Add(vm.SetActor10Command);
+        _configurableCommands.Add(vm.GoToFirstLineCommand);
+        _configurableCommands.Add(vm.GoToLastLineCommand);
     }
 
     private void BuildGroupTiles()
@@ -284,7 +286,7 @@ public partial class ShortcutsViewModel : ObservableObject
         {
             ShortcutCategory.SubtitleGridAndTextBox => language.CategorySubtitleGridAndTextBox,
             ShortcutCategory.SubtitleGrid => language.CategorySubtitleGrid,
-            ShortcutCategory.Waveform => language.CategoryWaveform,
+            ShortcutCategory.Waveform => Se.Language.General.Waveform,
             ShortcutCategory.TextBox => language.CategoryTextBox,
             _ => language.ActiveInEverywhere,
         };
@@ -602,6 +604,24 @@ public partial class ShortcutsViewModel : ObservableObject
         if (actorSlotIndex >= 0)
         {
             await ConfigureActorSlot(node, actorSlotIndex);
+            return;
+        }
+
+        // "Go to first/last line" share one option: whether the video position follows (#13194).
+        if (node.ShortCut.Action == MainViewModel.GoToFirstLineCommand ||
+            node.ShortCut.Action == MainViewModel.GoToLastLineCommand)
+        {
+            var result = await _windowService.ShowDialogAsync<Nikse.SubtitleEdit.Features.Shared.PromptCheckBox.PromptCheckBoxWindow,
+                Nikse.SubtitleEdit.Features.Shared.PromptCheckBox.PromptCheckBoxViewModel>(Window, vm =>
+            {
+                vm.Initialize(node.Title, Se.Language.Options.Shortcuts.AlsoSetVideoPosition,
+                    Se.Settings.Tools.GoToFirstAndLastLineAlsoSetVideoPosition);
+            });
+            if (result.OkPressed)
+            {
+                Se.Settings.Tools.GoToFirstAndLastLineAlsoSetVideoPosition = result.IsChecked;
+            }
+
             return;
         }
 
@@ -1228,7 +1248,7 @@ public partial class ShortcutsViewModel : ObservableObject
                ShortcutManager.GetKeyDisplayName(key).Contains(normalizedToken, StringComparison.OrdinalIgnoreCase);
     }
 
-    internal void ShortcutsDataGrid_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+    internal void ShortcutsGrid_SelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (e.AddedItems == null || e.AddedItems.Count == 0 || e.AddedItems[0] is not ShortcutTreeNode node ||
             node.ShortCut == null)
@@ -1317,7 +1337,7 @@ public partial class ShortcutsViewModel : ObservableObject
         UpdateVisibleShortcuts(SearchText);
     }
 
-    internal void ShortcutsDataGridDoubleTapped(object? sender, TappedEventArgs e)
+    internal void ShortcutsGridDoubleTapped(object? sender, TappedEventArgs e)
     {
         _ = ShowGetKey();
     }

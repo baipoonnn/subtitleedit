@@ -9,6 +9,7 @@ using SkiaSharp;
 using SkiaSharp.HarfBuzz;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 
@@ -17,7 +18,24 @@ namespace Nikse.SubtitleEdit.Features.Main;
 public partial class SubtitleLineViewModel : ObservableObject
 {
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(NumberDisplay))]
     private int _number;
+
+    /// <summary>
+    /// A display-only row: it exists so that a line in the read-only reference original that has no
+    /// counterpart in the working subtitle is still visible in the grid, side by side with the rest
+    /// (issue #13449). It is never part of the working subtitle - it is filtered out of
+    /// <see cref="MainViewModel.GetUpdateSubtitle"/> (so it can never be saved), out of the change
+    /// hash, out of numbering and out of the waveform. Only <see cref="OriginalText"/> and the time
+    /// codes carry data; <see cref="Text"/> stays empty and cannot be typed into.
+    /// </summary>
+    public bool IsReferenceOnly { get; set; }
+
+    /// <summary>
+    /// The number column's text: blank for a reference-only row, which has no number because it is
+    /// not part of the working subtitle.
+    /// </summary>
+    public string NumberDisplay => IsReferenceOnly ? string.Empty : Number.ToString(CultureInfo.InvariantCulture);
 
     [ObservableProperty]
     private string? _bookmark;
@@ -125,17 +143,25 @@ public partial class SubtitleLineViewModel : ObservableObject
 
     public SubtitleLineViewModel(SubtitleLineViewModel p, bool generateNewId = false)
     {
-        Text = p.Text;
-        OriginalText = p.OriginalText;
-        StartTime = p.StartTime;
-        EndTime = p.EndTime;
-        UpdateDuration();
+        // The observable properties are written as backing fields, not through their setters.
+        // Nothing can be subscribed to an object still inside its own constructor, so every
+        // notification the setters raise is discarded - but ObservableObject allocates a
+        // PropertyChanging/PropertyChangedEventArgs for each one anyway, and the Text and
+        // StartTime/EndTime setters fan out to a dozen more raises via their partial hooks.
+        // That was ~40 dead allocations per line, and undo snapshots this whole collection
+        // (issue #13234). The hooks are notification-only apart from UpdateDuration, which is
+        // what _duration is set to below.
+        _text = p.Text;
+        _originalText = p.OriginalText;
+        _startTime = p.StartTime;
+        _endTime = p.EndTime;
+        _duration = p.EndTime - p.StartTime;
+        _style = p.Style;
+        _actor = p.Actor;
+        _layer = p.Layer;
+        _number = p.Number;
         Language = p.Language;
         Region = p.Region;
-        Style = p.Style;
-        Actor = p.Actor;
-        Layer = p.Layer;
-        Number = p.Number;
         Extra = p.Extra;
         Effect = p.Effect;
         IsComment = p.IsComment;
@@ -144,7 +170,8 @@ public partial class SubtitleLineViewModel : ObservableObject
         MarginV = p.MarginV;
         NewSection = p.NewSection;
         Forced = p.Forced;
-        Bookmark = p.Bookmark;
+        _bookmark = p.Bookmark;
+        IsReferenceOnly = p.IsReferenceOnly;
 
         Id = generateNewId ? Guid.NewGuid() : p.Id;
 
@@ -192,7 +219,10 @@ public partial class SubtitleLineViewModel : ObservableObject
             Number = Number,
             StartTime = new TimeCode(StartTime),
             EndTime = new TimeCode(EndTime),
-            Text = Text,
+            // TrimEnd: the edit text box is bound raw, so a trailing Enter lives in Text
+            // until the row loses selection - it must never reach saved files or tools
+            // (SE4 kept the same invariant by trimming in the TextChanged handler) - #13389.
+            Text = Text.TrimEnd(),
             Actor = Actor,
             Style = Style,
             Language = Language,
@@ -223,7 +253,7 @@ public partial class SubtitleLineViewModel : ObservableObject
             Number = Number,
             StartTime = new TimeCode(StartTime),
             EndTime = new TimeCode(EndTime),
-            Text = OriginalText,
+            Text = OriginalText.TrimEnd(),
             Actor = Actor,
             Style = Style,
             Language = Language,
@@ -245,6 +275,84 @@ public partial class SubtitleLineViewModel : ObservableObject
         }
 
         return p;
+    }
+
+    // Read-time memo for the html-stripped, line-split text: the pixel width column, the text
+    // error verdict, GetErrors and the edit box's line-length panel all need it, and each used
+    // to strip and split the text again - three times per line for a single error scan. Keyed
+    // on the text instance like the memos below. The returned string/list are shared, so
+    // callers must only read them.
+    private string? _strippedLinesCacheText;
+    private string? _strippedTextCacheValue;
+    private List<string>? _strippedLinesCacheValue;
+
+    private void EnsureStrippedCache()
+    {
+        if (_strippedLinesCacheValue == null || !ReferenceEquals(_strippedLinesCacheText, Text))
+        {
+            _strippedTextCacheValue = SubtitleTextInfoHelper.StripHtml(Text);
+            _strippedLinesCacheValue = _strippedTextCacheValue.SplitToLines();
+            _strippedLinesCacheText = Text;
+        }
+    }
+
+    internal string GetStrippedText()
+    {
+        EnsureStrippedCache();
+        return _strippedTextCacheValue!;
+    }
+
+    internal List<string> GetStrippedLines()
+    {
+        EnsureStrippedCache();
+        return _strippedLinesCacheValue!;
+    }
+
+    // Read-time memos for the two WebVTT grid columns below, keyed on the text instance like
+    // the memos around them - both parse the text, and a cell binding re-reads its value on
+    // every repaint.
+    private string? _webVttStyleCacheText;
+    private string? _webVttStyleCacheValue;
+    private string? _webVttVoiceCacheText;
+    private string? _webVttVoiceCacheValue;
+
+    /// <summary>
+    /// The WebVTT cue classes of this line ("&lt;c.loud.red&gt;" shows as "loud, red"), for the
+    /// grid's Style column in WebVTT. WebVTT keeps them inside the cue text rather than in a
+    /// field of its own, so unlike the ASSA style this is derived from <see cref="Text"/>.
+    /// </summary>
+    public string WebVttStyle
+    {
+        get
+        {
+            if (!ReferenceEquals(_webVttStyleCacheText, Text) || _webVttStyleCacheValue == null)
+            {
+                var styles = WebVttHelper.GetParagraphStyles(Text);
+                _webVttStyleCacheValue = string.Join(", ", styles.Select(p => p.TrimStart('.')));
+                _webVttStyleCacheText = Text;
+            }
+
+            return _webVttStyleCacheValue;
+        }
+    }
+
+    /// <summary>
+    /// The WebVTT voice of this line (the "&lt;v Name&gt;" tag), for the grid's Voice column -
+    /// WebVTT's counterpart of the ASSA actor. Derived from <see cref="Text"/>, see
+    /// <see cref="WebVttStyle"/>.
+    /// </summary>
+    public string WebVttVoice
+    {
+        get
+        {
+            if (!ReferenceEquals(_webVttVoiceCacheText, Text) || _webVttVoiceCacheValue == null)
+            {
+                _webVttVoiceCacheValue = WebVTT.GetVoice(Text);
+                _webVttVoiceCacheText = Text;
+            }
+
+            return _webVttVoiceCacheValue;
+        }
     }
 
     // Read-time memo, see CharactersPerSecond below: the pixel-width column binding re-reads this
@@ -271,8 +379,7 @@ public partial class SubtitleLineViewModel : ObservableObject
                 return _pixelWidthCacheValue;
             }
 
-            var text = HtmlUtil.RemoveHtmlTags(Text, true);
-            var lines = text.SplitToLines();
+            var lines = GetStrippedLines();
             var maxWidth = 0;
             foreach (var line in lines)
             {
@@ -402,32 +509,45 @@ public partial class SubtitleLineViewModel : ObservableObject
     {
         get
         {
-            if (string.IsNullOrEmpty(Text))
-            {
-                return _transparentBrush;
-            }
-
-            var settings = TextErrorSettings.Current();
-            if (!ReferenceEquals(_textErrorCacheText, Text) || !_textErrorCacheSettings.Equals(settings))
-            {
-                _textErrorCacheText = Text;
-                _textErrorCacheSettings = settings;
-                _textErrorCacheValue = HasTextError(Text, settings);
-                _dialogueDashErrorCacheValue = settings.ColorTextDialogueDashError && HasDialogueDashError(Text);
-            }
-
-            if (_textErrorCacheValue)
+            if (HasTextRuleError())
             {
                 return _errorBrush;
             }
 
-            if (_dialogueDashErrorCacheValue)
-            {
-                return _dialogueDashErrorBrush;
-            }
-
-            return _transparentBrush;
+            return HasDialogueDashRuleError() ? _dialogueDashErrorBrush : _transparentBrush;
         }
+    }
+
+    /// <summary>
+    /// The memoized "text too long / too wide / too many lines" verdict behind
+    /// <see cref="TextBackgroundBrush"/>. Also read by <see cref="AccessibleErrorText"/> and
+    /// <see cref="HasErrors"/>, so scanning the file for errors twice (list errors, go to
+    /// next error) never re-strips or re-shapes a line whose text is unchanged.
+    /// </summary>
+    private bool HasTextRuleError()
+    {
+        if (string.IsNullOrEmpty(Text))
+        {
+            _dialogueDashErrorCacheValue = false;
+            return false;
+        }
+
+        var settings = TextErrorSettings.Current();
+        if (!ReferenceEquals(_textErrorCacheText, Text) || !_textErrorCacheSettings.Equals(settings))
+        {
+            _textErrorCacheText = Text;
+            _textErrorCacheSettings = settings;
+            _textErrorCacheValue = HasTextError(settings);
+            _dialogueDashErrorCacheValue = settings.ColorTextDialogueDashError && HasDialogueDashError(Text);
+        }
+
+        return _textErrorCacheValue;
+    }
+
+    private bool HasDialogueDashRuleError()
+    {
+        _ = HasTextRuleError();
+        return _dialogueDashErrorCacheValue;
     }
 
     private static bool HasDialogueDashError(string text)
@@ -435,18 +555,12 @@ public partial class SubtitleLineViewModel : ObservableObject
         return DialogueDashFixer.Analyze(text).Changed;
     }
 
-    private static bool HasTextError(string text, TextErrorSettings settings)
+    private bool HasTextError(TextErrorSettings settings)
     {
-        // Strip HTML and split into lines once and reuse across all settings-enabled branches.
-        string? stripped = null;
-        List<string>? strippedLines = null;
-
+        // The stripped lines are memoized (GetStrippedLines), so the enabled branches share them.
         if (settings.ColorTextTooLong)
         {
-            stripped = SubtitleTextInfoHelper.StripHtml(text);
-            strippedLines = stripped.SplitToLines();
-
-            foreach (var line in strippedLines)
+            foreach (var line in GetStrippedLines())
             {
                 if (SubtitleTextInfoHelper.GetLineLength(line) > settings.MaxLineLength)
                 {
@@ -457,9 +571,7 @@ public partial class SubtitleLineViewModel : ObservableObject
 
         if (settings.ColorTextTooWide)
         {
-            stripped ??= SubtitleTextInfoHelper.StripHtml(text);
-            strippedLines ??= stripped.SplitToLines();
-            foreach (var line in strippedLines)
+            foreach (var line in GetStrippedLines())
             {
                 if (CalculatePixelWidth(line) > settings.MaxPixelWidth)
                 {
@@ -470,9 +582,7 @@ public partial class SubtitleLineViewModel : ObservableObject
 
         if (settings.ColorTextTooManyLines)
         {
-            stripped ??= SubtitleTextInfoHelper.StripHtml(text);
-            strippedLines ??= stripped.SplitToLines();
-            if (strippedLines.Count > settings.MaxNumberOfLines)
+            if (GetStrippedLines().Count > settings.MaxNumberOfLines)
             {
                 return true;
             }
@@ -579,11 +689,13 @@ public partial class SubtitleLineViewModel : ObservableObject
 
         OnPropertyChanged(nameof(GapBackgroundBrush));
         OnPropertyChanged(nameof(EndTimeBackgroundBrush));
+        OnPropertyChanged(nameof(AccessibleErrorText));
     }
 
     partial void OnPreviousGapChanged(double value)
     {
         OnPropertyChanged(nameof(StartTimeBackgroundBrush));
+        OnPropertyChanged(nameof(AccessibleErrorText));
     }
 
     public IBrush GapBackgroundBrush
@@ -597,6 +709,79 @@ public partial class SubtitleLineViewModel : ObservableObject
             }
 
             return _transparentBrush;
+        }
+    }
+
+    /// <summary>
+    /// Screen-reader text for the rule violations the grid shows as cell tints.
+    /// The tints are color-only, so this mirrors the *BackgroundBrush conditions
+    /// and is appended to the row's AutomationProperties.Name binding (empty when
+    /// the line is clean). English on purpose, same as GetErrors/the error list.
+    /// </summary>
+    public string AccessibleErrorText
+    {
+        get
+        {
+            var general = Se.Settings.General;
+            StringBuilder? errors = null;
+
+            void Add(string error)
+            {
+                errors ??= new StringBuilder(" - ");
+                if (errors.Length > 3)
+                {
+                    errors.Append(", ");
+                }
+
+                errors.Append(error);
+            }
+
+            if (general.ColorTimeCodeOverlap && PreviousGap < 0)
+            {
+                Add("overlap with previous");
+            }
+
+            if (general.ColorTimeCodeOverlap && Gap < 0)
+            {
+                Add("overlap with next");
+            }
+            else if (general.ColorGapTooShort && Gap < general.MinimumBetweenLines.GetMilliseconds())
+            {
+                Add("gap too short");
+            }
+
+            if (general.ColorDurationTooShort && Duration.TotalMilliseconds < general.SubtitleMinimumDisplayMilliseconds)
+            {
+                Add("duration too short");
+            }
+
+            if (general.ColorDurationTooLong && Duration.TotalMilliseconds > general.SubtitleMaximumDisplayMilliseconds)
+            {
+                Add("duration too long");
+            }
+
+            if (general.ColorCharactersPerSecond && CharactersPerSecond > general.SubtitleMaximumCharactersPerSeconds)
+            {
+                Add("CPS " + Math.Round(CharactersPerSecond, 1));
+            }
+
+            if (general.ColorWordsPerMinute && WordsPerMinute > general.SubtitleMaximumWordsPerMinute)
+            {
+                Add("WPM " + Math.Round(WordsPerMinute));
+            }
+
+            // Memoized by (Text, settings) - the same verdict the Text cell tint uses.
+            if (HasTextRuleError())
+            {
+                Add("text too long or wide");
+            }
+
+            if (HasDialogueDashRuleError())
+            {
+                Add("dialogue dash mismatch");
+            }
+
+            return errors?.ToString() ?? string.Empty;
         }
     }
 
@@ -704,6 +889,7 @@ public partial class SubtitleLineViewModel : ObservableObject
             OnPropertyChanged(nameof(CpsBackgroundBrush));
             OnPropertyChanged(nameof(WordsPerMinute));
             OnPropertyChanged(nameof(WpmBackgroundBrush));
+            OnPropertyChanged(nameof(AccessibleErrorText));
         }
     }
 
@@ -724,6 +910,7 @@ public partial class SubtitleLineViewModel : ObservableObject
             OnPropertyChanged(nameof(DurationBackgroundBrush));
             OnPropertyChanged(nameof(CpsBackgroundBrush));
             OnPropertyChanged(nameof(WpmBackgroundBrush));
+            OnPropertyChanged(nameof(AccessibleErrorText));
         }
     }
 
@@ -738,11 +925,39 @@ public partial class SubtitleLineViewModel : ObservableObject
         OnPropertyChanged(nameof(WordsPerMinute));
         OnPropertyChanged(nameof(WpmBackgroundBrush));
         OnPropertyChanged(nameof(PixelWidth));
+        OnPropertyChanged(nameof(AccessibleErrorText));
+        // WebVTT keeps the cue classes and the voice inside the text, so those two columns
+        // change with it.
+        OnPropertyChanged(nameof(WebVttStyle));
+        OnPropertyChanged(nameof(WebVttVoice));
     }
 
     public void RefreshText()
     {
         OnPropertyChanged(nameof(Text));
+    }
+
+    /// <summary>
+    /// Removes trailing whitespace - typically an empty line left by pressing Enter at the
+    /// end of the text - from <see cref="Text"/> and <see cref="OriginalText"/>. Called when
+    /// the row loses selection, so the line count/CPS shown in the grid match what
+    /// <see cref="ToParagraph"/> commits (#13389). Not safe to run while the row is still
+    /// bound to the edit text box: the TwoWay binding would push the trimmed value back and
+    /// delete a newline the user just typed.
+    /// </summary>
+    public void TrimTrailingTextWhitespace()
+    {
+        var trimmed = Text.TrimEnd();
+        if (trimmed.Length != Text.Length)
+        {
+            Text = trimmed;
+        }
+
+        var trimmedOriginal = OriginalText.TrimEnd();
+        if (trimmedOriginal.Length != OriginalText.Length)
+        {
+            OriginalText = trimmedOriginal;
+        }
     }
 
     /// <summary>
@@ -764,6 +979,7 @@ public partial class SubtitleLineViewModel : ObservableObject
         OnPropertyChanged(nameof(WpmBackgroundBrush));
         OnPropertyChanged(nameof(GapBackgroundBrush));
         OnPropertyChanged(nameof(PixelWidth));
+        OnPropertyChanged(nameof(AccessibleErrorText));
 
         // The grid Text/OriginalText columns render through a converter that honors the
         // "single line" + separator appearance settings, so re-notify them too; otherwise
@@ -883,18 +1099,66 @@ public partial class SubtitleLineViewModel : ObservableObject
         return SubtitleTextInfoHelper.GetCharactersPerSecond(Text, StartTime, EndTime);
     }
 
+    /// <summary>
+    /// Whether <see cref="GetErrors"/> would report anything, without building the message.
+    /// Same rules, but allocation-free and short-circuiting, and the text rules go through the
+    /// memoized verdict - the error scans (list errors, go to next/previous error) only need
+    /// the yes/no answer, and they ask it for every line of the file.
+    /// </summary>
+    public bool HasErrors(SubtitleLineViewModel? prev, SubtitleLineViewModel? next)
+    {
+        var general = Se.Settings.General;
+
+        if (general.ColorCharactersPerSecond &&
+            Math.Round(CharactersPerSecond, 2, MidpointRounding.AwayFromZero) > general.SubtitleMaximumCharactersPerSeconds)
+        {
+            return true;
+        }
+
+        var durMsRounded = Math.Round(Duration.TotalMilliseconds, 3, MidpointRounding.AwayFromZero);
+        if (general.ColorDurationTooShort && durMsRounded < general.SubtitleMinimumDisplayMilliseconds)
+        {
+            return true;
+        }
+
+        if (general.ColorDurationTooLong && durMsRounded > general.SubtitleMaximumDisplayMilliseconds)
+        {
+            return true;
+        }
+
+        if (prev != null && HasGapError(general, (StartTime - prev.EndTime).TotalMilliseconds))
+        {
+            return true;
+        }
+
+        if (next != null && HasGapError(general, (next.StartTime - EndTime).TotalMilliseconds))
+        {
+            return true;
+        }
+
+        // Last, because these are the only rules that touch the text (and, with
+        // "text too wide" on, shape every line with HarfBuzz).
+        return HasTextRuleError() || HasDialogueDashRuleError();
+    }
+
+    private static bool HasGapError(SeGeneral general, double gapMs)
+        => gapMs < 0
+            ? general.ColorTimeCodeOverlap
+            : general.ColorGapTooShort && gapMs < general.MinimumBetweenLines.GetMilliseconds();
+
     public string GetErrors(SubtitleLineViewModel? prev, SubtitleLineViewModel? next)
     {
         var errors = new StringBuilder();
 
         var general = Se.Settings.General;
-        var strippedText = SubtitleTextInfoHelper.StripHtml(Text);
-        var lines = strippedText.SplitToLines();
-        var lineCount = lines.Count;
 
-        if (lineCount > general.MaxNumberOfLines && Se.Settings.General.ColorTextTooManyLines)
+        if (Se.Settings.General.ColorTextTooManyLines)
         {
-            errors.AppendLine("Max #lines: " + lineCount + " >" + general.MaxNumberOfLines);
+            var lineCount = GetStrippedLines().Count;
+            if (lineCount > general.MaxNumberOfLines)
+            {
+                errors.AppendLine("Max #lines: " + lineCount + " >" + general.MaxNumberOfLines);
+            }
         }
 
         if (Se.Settings.General.ColorTextDialogueDashError && DialogueDashFixer.Analyze(Text).Changed)
@@ -926,7 +1190,7 @@ public partial class SubtitleLineViewModel : ObservableObject
 
         if (Se.Settings.General.ColorTextTooLong)
         {
-            foreach (var line in lines)
+            foreach (var line in GetStrippedLines())
             {
                 var lineLength = SubtitleTextInfoHelper.GetLineLength(line);
                 if (lineLength > general.SubtitleLineMaximumLength)
@@ -938,7 +1202,7 @@ public partial class SubtitleLineViewModel : ObservableObject
 
         if (Se.Settings.General.ColorTextTooWide)
         {
-            foreach (var line in lines)
+            foreach (var line in GetStrippedLines())
             {
                 var pixelWidth = CalculatePixelWidth(line);
                 if (pixelWidth > general.ColorTextTooWidePixels)

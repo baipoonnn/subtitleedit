@@ -38,6 +38,12 @@ public static class InitMenu
         menu.Items.Clear();
         menu.Opened += (s, e) => DisplayShortcuts(menu, vm);
 
+        // In undocked mode the tool windows are topmost while SE is active (#11971), which
+        // covers the menu popups - drop their topmost while a menu is open (#13187/#12899).
+        // Ref-counted so a dialog opened from a menu item keeps the suppression alive after
+        // the menu itself closes (#13325).
+        WindowService.SuspendUndockedTopmostWhileOpen(menu);
+
         // Drop the menu's font one notch below the theme default and tighten
         // each item's vertical padding — a denser menu reads better when there
         // are this many entries. The style targets nested MenuItems so submenu
@@ -102,7 +108,9 @@ public static class InitMenu
                 {
                     Header = l.CloseTranslation,
                     Command = vm.FileCloseTranslationCommand,
-                    [!MenuItem.IsVisibleProperty] = new Binding(nameof(vm.ShowColumnOriginalText))
+                    // Hidden for a read-only original: promoting a reference file to the working
+                    // subtitle would save a truncated copy over it (issue #13449).
+                    [!MenuItem.IsVisibleProperty] = new Binding(nameof(vm.CanEditOriginal))
                 },
                 vm.MenuReopen,
                 new MenuItem
@@ -211,7 +219,12 @@ public static class InitMenu
                         },
                         new MenuItem
                         {
-                            Header = "IMSC 1.1 image profile",
+                            Header = Se.Language.General.BdnXml8Bit,
+                            Command = vm.ExportBdnXml8BitCommand,
+                        },
+                        new MenuItem
+                        {
+                            Header = Se.Language.File.Export.TitleExportImscImage,
                             Command = vm.ExportImscImageCommand,
                         },
                         new MenuItem
@@ -251,7 +264,7 @@ public static class InitMenu
                         },
                         new MenuItem
                         {
-                            Header = "DOST/png",
+                            Header = Se.Language.File.Export.TitleExportDostPng,
                             Command = vm.ExportDostPngCommand,
                         },
                         new MenuItem
@@ -261,7 +274,7 @@ public static class InitMenu
                         },
                         new MenuItem
                         {
-                            Header = "Final Cut Pro + image",
+                            Header = Se.Language.File.Export.TitleExportFcpImage,
                             Command = vm.ExportFcpPngCommand,
                         },
                         new MenuItem
@@ -286,7 +299,7 @@ public static class InitMenu
                         },
                         new MenuItem
                         {
-                            Header = "WebVTT png",
+                            Header = Se.Language.File.Export.TitleExportWebVttThumbnails,
                             Command = vm.ExportWebVttThumbnailsCommand,
                         },
                         new Separator(),
@@ -535,6 +548,11 @@ public static class InitMenu
             {
                 Header = l.ConvertActors,
                 Command = vm.ShowToolsConvertActorsCommand,
+            },
+            new MenuItem
+            {
+                Header = l.RemoveUnicodeCharacters,
+                Command = vm.ShowToolsRemoveUnicodeCharactersCommand,
             },
         };
         foreach (var item in tools.OrderBy(p => p.Header?.ToString()?.Replace("_", string.Empty)))

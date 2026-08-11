@@ -21,9 +21,10 @@ public class LanguageNetflixCheckAndFix
     public string ShotChanges { get; set; }
     public string StartNumberSpellOut { get; set; }
     public string TextforHiUseBrackets { get; set; }
-    public string FrameRate { get; set; }
     public string TwoFrameGrap { get; set; }
     public string WhiteSpace { get; set; }
+    public string ChildrensProgram { get; set; }
+    public string Sdh { get; set; }
 
     // Checker comment strings
     public string GlyphCheckReport { get; set; }
@@ -59,7 +60,6 @@ public class LanguageNetflixCheckAndFix
     public string ItalicsFixed { get; set; }
     public string ItalicsNotAllowed { get; set; }
     public string BridgeGapsXToYFrames { get; set; }
-    public string StartNumberSpellOutComment { get; set; }
     public string MaximumXCharactersPerSecond { get; set; }
 
     public LanguageNetflixCheckAndFix()
@@ -83,9 +83,10 @@ public class LanguageNetflixCheckAndFix
         ShotChanges = "Shot changes";
         StartNumberSpellOut = "Start number spell out";
         TextforHiUseBrackets = "Text for HI, use brackets";
-        FrameRate = "Frame rate";
         TwoFrameGrap = "Two frame gap";
         WhiteSpace = "White space";
+        ChildrensProgram = "Children's program";
+        Sdh = "SDH (deaf/hard of hearing)";
 
         // Checker comment strings
         GlyphCheckReport = "Invalid character {0} found at column {1}";
@@ -121,7 +122,6 @@ public class LanguageNetflixCheckAndFix
         ItalicsFixed = "Fixed italics";
         ItalicsNotAllowed = "Italics not allowed";
         BridgeGapsXToYFrames = "3-{0} frames gap => 2 frames gap";
-        StartNumberSpellOutComment = "When a number begins a sentence, it should always be spelled out";
         MaximumXCharactersPerSecond = "Maximum {0} characters per second";
     }
 }

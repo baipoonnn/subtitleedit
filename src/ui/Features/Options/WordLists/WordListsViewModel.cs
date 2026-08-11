@@ -18,6 +18,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine;
+using Nikse.SubtitleEdit.UiLogic.Common;
 
 namespace Nikse.SubtitleEdit.Features.Options.WordLists;
 
@@ -452,7 +453,9 @@ public partial class WordListsViewModel : ObservableObject
         if (e.Key == Key.Enter)
         {
             e.Handled = true;
-            using var _ = AddName();
+            // Fire-and-forget discard: "using var" would call Task.Dispose when this handler
+            // returns, which throws while the task is still awaiting a message box.
+            _ = AddName();
         }
     }
 
@@ -461,8 +464,7 @@ public partial class WordListsViewModel : ObservableObject
         if (e.Key == Key.Enter)
         {
             e.Handled = true;
-            using var _ = AddWord();
-            using var _1 = AddName();
+            _ = AddWord();
         }
     }
 
@@ -471,7 +473,7 @@ public partial class WordListsViewModel : ObservableObject
         if (e.Key == Key.Enter)
         {
             e.Handled = true;
-            using var _ = AddOcrFix();
+            _ = AddOcrFix();
         }
     }
 }

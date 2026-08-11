@@ -29,6 +29,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Timers;
+using Nikse.SubtitleEdit.UiLogic.Media;
 
 namespace Nikse.SubtitleEdit.Features.Video.BurnIn;
 
@@ -105,13 +106,12 @@ public partial class BurnInViewModel : ObservableObject
 
     public Window? Window { get; set; }
     public bool OkPressed { get; private set; }
-    public DataGrid? BatchGrid { get; internal set; }
+    public TableView? BatchGrid { get; internal set; }
     public BurnInLogo BurnInLogo { get; set; }
 
     private Subtitle _subtitle = new();
     private bool _loading = true;
     private readonly StringBuilder _log;
-    private static readonly Regex FrameFinderRegex = new(@"[Ff]rame=\s*\d+", RegexOptions.Compiled);
     private long _startTicks;
     private long _processedFrames;
     private Process? _ffmpegProcess;
@@ -157,7 +157,7 @@ public partial class BurnInViewModel : ObservableObject
         {
             new(FontBoxType.None, Se.Language.General.None),
             new(FontBoxType.OneBox, Se.Language.Video.BurnIn.OneBox),
-            new(FontBoxType.BoxPerLine, Se.Language.Video.BurnIn.BoxPerLine),
+            new(FontBoxType.BoxPerLine, Se.Language.General.BoxPerLine),
         };
         SelectedFontBoxType = FontBoxTypes[0];
 
@@ -497,6 +497,10 @@ public partial class BurnInViewModel : ObservableObject
                 jobItem.TotalFrames = (long)Math.Round(jobItem.TotalSeconds * 25.0);
             }
         }
+        // Batch job items survive between Generate clicks, and SetTargetBitRate stores its
+        // computed rate here - stale, it would turn a later quality-based run into a silent
+        // "-b:v <old rate>" encode with the quality flag dropped.
+        jobItem.VideoBitRate = string.Empty;
         jobItem.UseTargetFileSize = UseTargetFileSize;
         // Resolve the per-file target (MB): "match source" derives it from each input file's own
         // size (so a batch of differently-sized videos keeps each output near its source), otherwise
@@ -519,11 +523,11 @@ public partial class BurnInViewModel : ObservableObject
             }
 
             BatchGrid.SelectedItem = jobItem;
-            BatchGrid.ScrollIntoView(jobItem, null);
+            BatchGrid.ScrollIntoView(jobItem);
         });
 
         bool result;
-        if (jobItem.UseTargetFileSize)
+        if (jobItem.UseTargetFileSize && !IsVideoToolboxEncoder(SelectedVideoEncoding?.Codec))
         {
             result = await RunTwoPassEncoding(jobItem);
             if (result)
@@ -533,15 +537,46 @@ public partial class BurnInViewModel : ObservableObject
         }
         else
         {
-            result = await RunOnePassEncoding(jobItem);
+            // VideoToolbox accepts -pass but writes an empty stats file, so pass 1 only
+            // doubles the encode time. Hit the target with single-pass average bit rate
+            // instead (#13401).
+            result = !jobItem.UseTargetFileSize || SetTargetBitRate(jobItem);
+
             if (result)
             {
-                _timerGenerate.Start();
+                result = await RunOnePassEncoding(jobItem);
+                if (result)
+                {
+                    _timerGenerate.Start();
+                }
             }
+        }
+
+        if (!result)
+        {
+            // No process and no timer running: nothing would ever consume _doAbort or reset the
+            // generating state, leaving the dialog stuck with a dead Cancel button.
+            jobItem.Status = Se.Language.General.Error;
+            IsGenerating = false;
+            ProgressValue = 0;
         }
     }
 
-    private async Task<bool> RunTwoPassEncoding(BurnInJobItem jobItem)
+    /// <summary>
+    /// VideoToolbox has no working two-pass mode: ffmpeg accepts -pass but the encoder writes
+    /// no statistics, so the analyze pass is pure wasted time. These encodes target a file size
+    /// with a single-pass average bit rate instead (#13401).
+    /// </summary>
+    internal static bool IsVideoToolboxEncoder(string? codec)
+    {
+        return !string.IsNullOrEmpty(codec) && codec.EndsWith("_videotoolbox", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Computes the bit rate needed to hit the requested file size and stores it on the job.
+    /// Returns false (and tells the user) when the target is too small to encode.
+    /// </summary>
+    private bool SetTargetBitRate(BurnInJobItem jobItem)
     {
         var bitRate = GetVideoBitRate(jobItem);
         jobItem.VideoBitRate = bitRate.ToString(CultureInfo.InvariantCulture) + "k";
@@ -555,6 +590,16 @@ public partial class BurnInViewModel : ObservableObject
                     $"Bit rate too low: {bitRate}k",
                     MessageBoxButtons.OK);
             });
+            return false;
+        }
+
+        return true;
+    }
+
+    private async Task<bool> RunTwoPassEncoding(BurnInJobItem jobItem)
+    {
+        if (!SetTargetBitRate(jobItem))
+        {
             return false;
         }
 
@@ -740,6 +785,10 @@ public partial class BurnInViewModel : ObservableObject
         }
 
         var workingDirectory = Path.GetDirectoryName(jobItem.AssaSubtitleFileName) ?? string.Empty;
+        // Machine-readable progress on stdout ("frame=N" etc.) instead of scraping the
+        // human-readable stderr stats, which drift between ffmpeg versions.
+        ffmpegParameters = FfmpegProgressTracker.ProgressArguments + " " + ffmpegParameters;
+
         return FfmpegGenerator.GetProcess(ffmpegParameters, OutputHandler, workingDirectory);
     }
 
@@ -765,25 +814,20 @@ public partial class BurnInViewModel : ObservableObject
             return;
         }
 
-        _log?.AppendLine(outLine.Data);
-
-        var match = FrameFinderRegex.Match(outLine.Data);
-        if (!match.Success)
+        if (FfmpegProgressTracker.TryGetFrame(outLine.Data, out var frame))
         {
-            return;
-        }
-
-        var arr = match.Value.Split('=');
-        if (arr.Length != 2)
-        {
-            return;
-        }
-
-        if (long.TryParse(arr[1].Trim(), out var f))
-        {
-            _processedFrames = f;
+            _processedFrames = frame;
             ProgressValue = _processedFrames * 100.0 / JobItems[_jobItemIndex].TotalFrames;
+            return;
         }
+
+        // Keep the twice-a-second "-progress" key/value spam out of the user-facing log.
+        if (FfmpegProgressTracker.IsProgressLine(outLine.Data))
+        {
+            return;
+        }
+
+        _log?.AppendLine(outLine.Data);
     }
 
     private ObservableCollection<BurnInJobItem> GetCurrentVideoAsJobItems(string outputVideoFileName)
@@ -1355,7 +1399,9 @@ public partial class BurnInViewModel : ObservableObject
         FontMarginVertical = (int)settings.NonAssaMarginVertical;
         SelectedFontBoxType = FontBoxTypes.FirstOrDefault(p => (int)p.BoxType == settings.NonAssaBoxType) ?? FontBoxTypes[0];
 
-        SelectedVideoEncoding = VideoEncodings.FirstOrDefault(p => p.Codec == settings.Encoding) ?? VideoEncodings[0];
+        SelectedVideoEncoding = VideoEncodings.FirstOrDefault(p => p.Codec == settings.Encoding)
+                                ?? VideoEncodings.FirstOrDefault(p => p.Codec == SeVideoBurnIn.DefaultEncoding)
+                                ?? VideoEncodings[0];
         SelectedVideoPixelFormat = VideoPixelFormats.FirstOrDefault(p => p.Codec == settings.PixelFormat) ?? VideoPixelFormats[0];
         FillPreset(SelectedVideoEncoding.Codec);
         FillCrf(SelectedVideoEncoding.Codec);
@@ -1702,7 +1748,12 @@ public partial class BurnInViewModel : ObservableObject
         {
             items = new List<string> { string.Empty };
         }
-        else if (videoCodec == "prores_ks")
+        else if (videoCodec is "h264_videotoolbox" or "hevc_videotoolbox")
+        {
+            // VideoToolbox has no "preset" option at all - passing one only makes ffmpeg warn.
+            items = new List<string> { string.Empty };
+        }
+        else if (videoCodec is "prores_ks" or "prores_videotoolbox")
         {
             items = new List<string>
             {
@@ -1814,6 +1865,23 @@ public partial class BurnInViewModel : ObservableObject
             VideoCrf.AddRange(items);
             SelectedVideoCrf = null;
         }
+        else if (videoCodec is "h264_videotoolbox" or "hevc_videotoolbox")
+        {
+            // VideoToolbox knows no CRF; quality is "-q:v 1-100" and runs the other way round
+            // (higher is better). It also requires Apple silicon - on Intel Macs ffmpeg errors
+            // out with "qscale not available for encoder", so leave it unset by default and let
+            // ffmpeg pick a bitrate.
+            for (var i = 1; i <= 100; i++)
+            {
+                items.Add(i.ToString(CultureInfo.InvariantCulture));
+            }
+
+            VideoCrfText = "Quality";
+            VideoCrfHint = "1=lowest quality, 100=best quality (Apple silicon only)";
+            VideoCrf.Clear();
+            VideoCrf.AddRange(items);
+            SelectedVideoCrf = null;
+        }
         else if (videoCodec.Contains("av1"))
         {
             for (var i = 0; i <= 63; i++)
@@ -1824,7 +1892,7 @@ public partial class BurnInViewModel : ObservableObject
             VideoCrf.AddRange(items);
             SelectedVideoCrf = "30";
         }
-        else if (videoCodec == "prores_ks")
+        else if (videoCodec is "prores_ks" or "prores_videotoolbox")
         {
             items = new List<string>();
             VideoCrf.Clear();

@@ -103,7 +103,14 @@ public class FullScreenVideoWindow : Window
                         Math.Abs(cursorPos.Value.Y - _lastCursorPosition.Y) > mouseMovementMinPixels)
                     {
                         _lastCursorPosition = cursorPos.Value;
-                        videoPlayer.NotifyUserActivity();
+
+                        // Only movement over this window counts - the poll is desktop-wide,
+                        // so mouse movement in another app or on another monitor must not
+                        // bring the controls back up (issue #13207).
+                        if (CursorPositionHelper.IsCursorOverWindow(this, cursorPos.Value))
+                        {
+                            videoPlayer.NotifyUserActivity();
+                        }
                     }
                 }
             }
@@ -195,6 +202,14 @@ public class FullScreenVideoWindow : Window
             videoPlayer.VideoPlayer.CloseFile();
         };
 
+        // A fresh player is built for every fullscreen session and this one is never used again,
+        // so destroy it instead of only unloading the file - otherwise each enter/leave fullscreen
+        // leaked a live player core plus its 50 ms position timer (same root cause as issue #13048).
+        // Done from Closed, not Closing: it drops the embedded render host, which is better left
+        // until the window is actually gone. onClose above has already copied position and volume
+        // back to the docked player.
+        Closed += (_, _) => videoPlayer.CloseAndDisposePlayer();
+
         Activated += delegate { Focus(); }; // hack to make OnKeyDown work
         Loaded += async(_, _) =>
         {
@@ -204,7 +219,9 @@ public class FullScreenVideoWindow : Window
             // Start polling for cursor movement
             _mouseMoveDetectionTimer?.Start();
 
-            await videoPlayer.Open(videoFileName);
+            // Open where the user was rather than at 0:00 - going fullscreen otherwise shows the
+            // start of the video for a moment and then jumps back (issue #13329).
+            await videoPlayer.Open(videoFileName, position);
             await videoPlayer.WaitForPlayersReadyAsync();
 
             // The freshly opened player starts at 0:00; seek back to where the user was. The seek
@@ -213,6 +230,14 @@ public class FullScreenVideoWindow : Window
             // where nothing else re-seeks afterwards. Settle briefly and re-apply, the same pattern
             // used by the startup file-restore and Reopen paths.
             await Task.Delay(200);
+
+            // Closing the window while the open sequence above was still awaiting has already
+            // run the Closed handler and disposed the player - don't keep driving it (#13083).
+            if (videoPlayer.IsDisposed)
+            {
+                return;
+            }
+
             videoPlayer.VideoPlayer.Pause();
             videoPlayer.VideoPlayer.Position = position;
             videoPlayer.Position = position;
@@ -224,6 +249,11 @@ public class FullScreenVideoWindow : Window
 
             Dispatcher.UIThread.Post(() =>
             {
+                if (videoPlayer.IsDisposed)
+                {
+                    return;
+                }
+
                 videoPlayer.VideoPlayer.Position = position;
                 videoPlayer.Position = position;
             });

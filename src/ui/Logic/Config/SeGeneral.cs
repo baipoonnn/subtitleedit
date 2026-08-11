@@ -65,6 +65,20 @@ public class SeGeneral
     public int TimeCodeUpDownStepMs { get; set; }
     public bool PromptBeforeDelete { get; set; }
     public bool LockTimeCodes { get; set; }
+
+    /// <summary>
+    /// SE4 parity: whether an original subtitle that does not line up 1:1 may be edited (and
+    /// therefore saved back over its file). Off means it is shown read-only, which is what protects
+    /// the lines with no counterpart here (#13449). Remembered from the import prompt.
+    /// </summary>
+    public bool AllowEditOfOriginalSubtitle { get; set; }
+
+    /// <summary>
+    /// Whether that same prompt defaults to showing the original's non-matching lines as extra rows.
+    /// Off by default - the plain side-by-side view is the familiar one, and showing the extra rows
+    /// locks time codes. Remembered from the prompt (#13449).
+    /// </summary>
+    public bool ShowOriginalNonMatchingLines { get; set; }
     public bool RememberPositionAndSize { get; set; }
     public bool UndockVideoControls { get; set; }
     public List<SeWindowPosition> WindowPositions { get; set; } = new List<SeWindowPosition>();
@@ -100,6 +114,11 @@ public class SeGeneral
     public string ProxyDomain { get; set; }
     public bool ProxyUseDefaultCredentials { get; set; }
     public string ProxyBypassList { get; set; }
+
+    public bool CheckForUpdatesOnStartup { get; set; } = true;
+
+    // "Stable", "Beta" or empty = auto (users on a beta build get beta updates, stable users stable only)
+    public string CheckForUpdatesChannel { get; set; } = string.Empty;
 
     public bool ShowColumnStartTime { get; set; }
     public bool ShowColumnEndTime { get; set; }

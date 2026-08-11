@@ -59,7 +59,6 @@ public class LanguageMain
     public string RemovedUnicodeControlCharactersX { get; set; }
     public string RemovedXBlankLines { get; set; }
     public string ReplacedXWithYCountZ { get; set; }
-    public string ReplacedXWithYInLineZ { get; set; }
     public string ReversedStartAndEndingsForRightToLeftX { get; set; }
     public string RuleProfileIsX { get; set; }
     public string SaveLanguageFile { get; set; }
@@ -67,7 +66,6 @@ public class LanguageMain
     public string ShiftTextCellsDown { get; set; }
     public string SingleLineLength { get; set; }
     public string SpeedIsNowX { get; set; }
-    public string SpellCheckResult { get; set; }
     public string SubtitleGridFormattingX { get; set; }
     public string SubtitleImportedFromMatroskaFile { get; set; }
     public string TextDown { get; set; }
@@ -91,7 +89,19 @@ public class LanguageMain
     public string InsertUnicodeSymbol { get; set; }
     public string TrimmedXLines { get; set; }
     public string OpenOriginalDifferentNumberOfSubtitlesXY { get; set; }
-    public string ImportXMatchingOriginalLines { get; set; }
+    public string OriginalTextReadOnly { get; set; }
+    public string OriginalIsReadOnlyNotSaved { get; set; }
+    public string OriginalIsReadOnlyReference { get; set; }
+    public string AllowEditOfOriginalSubtitle { get; set; }
+    public string ShowAllOriginalLinesX { get; set; }
+    public string ShowAllOriginalLinesHint { get; set; }
+    public string ShowAllOriginalLinesNote { get; set; }
+    public string ShowMatchingOriginalLinesX { get; set; }
+    public string ShowMatchingOriginalLinesHint { get; set; }
+    public string ShowMatchingOriginalLinesNote { get; set; }
+    public string AllowEditHintReadOnly { get; set; }
+    public string AllowEditHintAllLines { get; set; }
+    public string AllowEditHintMatchingOnlyX { get; set; }
     public string VideoOpenedChangeLayoutQuestion { get; set; }
     public string SortedByStartTime { get; set; }
     public string SortedByEndTime { get; set; }
@@ -189,7 +199,6 @@ public class LanguageMain
         RemovedUnicodeControlCharactersX = "Removed Unicode control characters from {0} lines";
         RemovedXBlankLines = "Removed {0} blank lines";
         ReplacedXWithYCountZ = "Replaced \"{0}\" with \"{1}\" ({2} occurrences)";
-        ReplacedXWithYInLineZ = "Replaced \"{0}\" with \"{1}\" in line {2}";
         ReversedStartAndEndingsForRightToLeftX = "Reversed start and endings for right-to-left in {0} lines";
         RuleProfileIsX = "Rule profile is now \"{0}\"";
         SaveLanguageFile = "Save language file";
@@ -197,7 +206,6 @@ public class LanguageMain
         ShiftTextCellsDown = "Shift text cells down";
         SingleLineLength = "Line length: ";
         SpeedIsNowX = "Speed is now \"{0}\"";
-        SpellCheckResult = "Spell check completed. \n\n• Changed words: {0}\n• Skipped words: {1}";
         SubtitleGridFormattingX = "Grid formatting: {0}";
         SubtitleImportedFromMatroskaFile = "Subtitle imported from Matroska file";
         TextDown = "Text down";
@@ -210,7 +218,7 @@ public class LanguageMain
         UndoPerformed = "Undo performed";
         UndoPerformedXActionLeft = "Undo performed (actions left: {0})";
         XLinesCopiedFromOriginal = "{0} lines copied from original subtitle";
-        XLinesMerged = "X lines merged";
+        XLinesMerged = "{0} lines merged";
         XLinesSelectedOfY = "{0} lines selected of {1}";
         XLinesSwitched = "{0} lines switched";
         XShotChangedLoaded = "{0} shot changes loaded";
@@ -221,7 +229,19 @@ public class LanguageMain
         InsertUnicodeSymbol = "Insert Unicode symbol";
         TrimmedXLines = "Trimmed {0} subtitle lines";
         OpenOriginalDifferentNumberOfSubtitlesXY = "The original subtitle file does not have the same number of subtitles as the current subtitle file.\n\n• Original subtitles: {0}\n• Current subtitles: {1}";
-        ImportXMatchingOriginalLines = "Import {0} matching original subtitles?";
+        OriginalTextReadOnly = "Original text (read-only)";
+        OriginalIsReadOnlyNotSaved = "The original subtitle is a read-only reference and was not saved";
+        OriginalIsReadOnlyReference = "The original subtitle is open as a read-only reference";
+        AllowEditOfOriginalSubtitle = "Allow edit of original subtitle";
+        ShowAllOriginalLinesX = "Show all original lines ({0} have no match here)";
+        ShowAllOriginalLinesHint = "The lines with no match are shown as extra rows, so you can see what the translation is missing.";
+        ShowAllOriginalLinesNote = "Time codes cannot be changed while these rows are shown";
+        ShowMatchingOriginalLinesX = "Show only the {0} matching original lines";
+        ShowMatchingOriginalLinesHint = "The other {0} original lines are not shown anywhere.";
+        ShowMatchingOriginalLinesNote = "They stay in the file unless you save the original";
+        AllowEditHintReadOnly = "The original is shown read-only and is never saved, so its file cannot change.";
+        AllowEditHintAllLines = "The whole original is on screen, so saving it keeps every line.";
+        AllowEditHintMatchingOnlyX = "Saving the original would write only the lines shown - the other {0} would be lost.";
         VideoOpenedChangeLayoutQuestion = "A video file has been opened.\n\nDo you want to change the layout to show the video panel?";
         SortedByStartTime = "Sorted by \"Show\" time";
         SortedByEndTime = "Sorted by \"Hide\" time";

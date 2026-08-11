@@ -39,17 +39,8 @@ public class GoogleLensOcrSharp
                 continue;
             }
 
-            var lines = await ScanWithRetry(bmpInput.Bitmap, language);
-
-            //join "-" with next line
-            for (int i = 0; i < lines.Count; i++)
-            {
-                if (lines[i] == "-" && i + 1 < lines.Count)
-                {
-                    lines[i] = $"- {lines[i + 1]}";
-                    lines.RemoveAt(i + 1);
-                }
-            }
+            var lines = await ScanWithRetry(bmpInput.Bitmap, language, cancellationToken);
+            lines = OcrLoneDashFixer.FixLoneDashes(lines);
 
             //join "..." with line
             for (int i = 0; i < lines.Count; i++)
@@ -87,21 +78,26 @@ public class GoogleLensOcrSharp
     /// rest of the batch keeps running (previously, any exception here escaped the
     /// foreach in OcrBatch and silently killed the whole remaining batch).
     /// </summary>
-    private async Task<List<string>> ScanWithRetry(SKBitmap bitmap, string language)
+    private async Task<List<string>> ScanWithRetry(SKBitmap bitmap, string language, CancellationToken cancellationToken)
     {
         for (var attempt = 0; attempt <= RetryDelaysMs.Length; attempt++)
         {
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var result = await _lens.ScanByBitmap(bitmap, language);
                 return result.Segments.Select(x => x.Text).ToList();
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
                 SeLogger.Error(ex, $"GoogleLensOcrSharp: OCR attempt {attempt + 1}/{RetryDelaysMs.Length + 1} failed");
                 if (attempt < RetryDelaysMs.Length)
                 {
-                    await Task.Delay(RetryDelaysMs[attempt]);
+                    await Task.Delay(RetryDelaysMs[attempt], cancellationToken);
                 }
             }
         }

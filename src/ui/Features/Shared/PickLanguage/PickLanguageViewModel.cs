@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using Nikse.SubtitleEdit.UiLogic.Common;
 
 namespace Nikse.SubtitleEdit.Features.Shared.PickLanguage;
 
@@ -19,6 +20,12 @@ public partial class PickLanguageViewModel : ObservableObject
 
     public Window? Window { get; set; }
     public bool OkPressed { get; private set; }
+
+    /// <summary>
+    /// Optional window title; the window falls back to the favorite-languages title when unset.
+    /// Set it in the ShowDialogAsync configure action - that runs before the window constructor.
+    /// </summary>
+    public string? Title { get; set; }
 
     private readonly List<PickLanguageDisplay> _all;
 

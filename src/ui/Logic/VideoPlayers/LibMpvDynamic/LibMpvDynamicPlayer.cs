@@ -1,11 +1,13 @@
 using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Logic.Config;
+using Nikse.SubtitleEdit.Logic.Download;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Nikse.SubtitleEdit.Logic.VideoPlayers.LibMpvDynamic;
@@ -23,6 +25,11 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
     private IntPtr _library = IntPtr.Zero;
     private IntPtr _mpv = IntPtr.Zero;
     private IntPtr _renderContext = IntPtr.Zero;
+
+    // True once the render context was created against a graphics API whose context is
+    // thread-affine (OpenGL, Metal), which decides who is allowed to free it - see Dispose.
+    private volatile bool _renderContextNeedsGraphicsContext;
+    private volatile bool _disposePendingRenderContextFree;
     private volatile bool _disposed;
     private volatile bool _coreInitialized;
     private string _fileName = string.Empty;
@@ -107,6 +114,16 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
     private delegate int MpvGetPropertyDouble(IntPtr mpvHandle, byte[] name, int format, ref double data);
 
     private MpvGetPropertyDouble? _mpvGetPropertyDouble;
+
+    /// <summary>
+    /// MPV_FORMAT_FLAG makes mpv write a 4-byte int, so it must not be read through the
+    /// "ref double" overload: the value would land in the low half of the 8-byte double and a
+    /// flag of 1 would read back as the subnormal 5E-324 rather than 1.0.
+    /// </summary>
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int MpvGetPropertyFlag(IntPtr mpvHandle, byte[] name, int format, ref int data);
+
+    private MpvGetPropertyFlag? _mpvGetPropertyFlag;
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int MpvSetProperty(IntPtr mpvHandle, byte[] name, int format, ref byte[] data);
@@ -284,6 +301,7 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
         _mpvSetOptionString = (MpvSetOptionString)GetDllType(typeof(MpvSetOptionString), "mpv_set_option_string");
         _mpvGetPropertyString = (MpvGetPropertyString)GetDllType(typeof(MpvGetPropertyString), "mpv_get_property");
         _mpvGetPropertyDouble = (MpvGetPropertyDouble)GetDllType(typeof(MpvGetPropertyDouble), "mpv_get_property");
+        _mpvGetPropertyFlag = (MpvGetPropertyFlag)GetDllType(typeof(MpvGetPropertyFlag), "mpv_get_property");
         _mpvSetProperty = (MpvSetProperty)GetDllType(typeof(MpvSetProperty), "mpv_set_property");
         _mpvFree = (MpvFree)GetDllType(typeof(MpvFree), "mpv_free");
         _mpvClientApiVersion = (MpvClientApiVersion)GetDllType(typeof(MpvClientApiVersion), "mpv_client_api_version");
@@ -353,6 +371,8 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
             return -1;
         }
 
+        SetYtDlpPathOption();
+
         var err = _mpvInitialize(_mpv);
         if (err >= 0)
         {
@@ -398,6 +418,123 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
         var nameBytes = GetUtf8Bytes(name);
         var valueBytes = GetUtf8Bytes(value);
         return _mpvSetOptionString(_mpv, nameBytes, valueBytes);
+    }
+
+    /// <summary>
+    /// Tells mpv where to find yt-dlp, which it needs for streaming URLs (YouTube and friends).
+    /// <para>
+    /// mpv's ytdl_hook searches only mpv's own config directory and PATH; the copy Subtitle Edit
+    /// downloads lives in the data folder - <c>%AppData%\Subtitle Edit</c> in an installed Windows
+    /// build - which is on neither, so "open video from URL / open online" failed there. The
+    /// portable build worked only by accident: its data folder IS the folder holding the
+    /// executable, which Windows searches when starting a process (issue #13067). Adding the
+    /// folder to PATH is not an option off Windows either - .NET keeps its own copy of the
+    /// environment on Unix, so a managed PATH change is invisible to libmpv's getenv.
+    /// </para>
+    /// <para>
+    /// Must be called before mpv_initialize: the scripts read their options when they load.
+    /// </para>
+    /// </summary>
+    private void SetYtDlpPathOption()
+    {
+        // Subtitle Edit sets no other script options, so assigning the whole list is safe.
+        // ("script-opts-append", which would append a single entry verbatim, is not accepted by
+        // mpv_set_option_string - it answers MPV_ERROR_OPTION_NOT_FOUND.)
+        var value = "ytdl_hook-ytdl_path=" + GetYtDlpPathList();
+        var err = SetOptionString("script-opts", value);
+        if (err < 0)
+        {
+            Se.LogError(new InvalidOperationException(GetErrorString(err)), "LibMpvDynamicPlayer could not set " + value);
+        }
+    }
+
+    /// <summary>
+    /// The path list handed to ytdl_hook, most specific first. ytdl_hook tries each entry in turn
+    /// and moves on when one cannot be started, so the downloaded copy is listed whether or not it
+    /// exists yet - it may well be downloaded later in the same session, after mpv came up. The
+    /// well-known system locations and mpv's own "yt-dlp" default come last so a user's own
+    /// install keeps working.
+    /// </summary>
+    internal static string GetYtDlpPathList()
+    {
+        // The copy Subtitle Edit downloads into the data folder and version-checks itself.
+        var paths = new List<string> { YtDlpDownloadService.GetFullFileName() };
+
+        if (OperatingSystem.IsWindows())
+        {
+            // Where a portable install keeps it - and where anyone who worked around this bug by
+            // hand put it.
+            paths.Add(Path.Combine(Se.ExePath, "yt-dlp.exe"));
+        }
+        else if (OperatingSystem.IsMacOS())
+        {
+            paths.Add("/opt/homebrew/bin/yt-dlp"); // Homebrew (Apple Silicon)
+            paths.Add("/usr/local/bin/yt-dlp");    // Homebrew (Intel)
+            paths.Add("/opt/local/bin/yt-dlp");    // MacPorts
+            paths.Add("/usr/bin/yt-dlp");
+        }
+        else if (OperatingSystem.IsLinux())
+        {
+            paths.Add("/usr/local/bin/yt-dlp");
+            paths.Add("/usr/bin/yt-dlp");
+            paths.Add("/opt/yt-dlp/yt-dlp");
+            paths.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin", "yt-dlp"));
+        }
+
+        paths.Add("yt-dlp"); // mpv's own default: whatever is in PATH
+
+        return JoinYtDlpPaths(paths);
+    }
+
+    /// <summary>
+    /// Joins the candidates the way ytdl_hook wants them: separated by <c>;</c> on Windows and
+    /// <c>:</c> elsewhere, in order, without repeats (in a portable install the data folder IS the
+    /// executable folder). Candidates that cannot survive the trip are dropped - script-opts is a
+    /// comma-separated key=value list with no escaping, so one path holding a comma, or the list
+    /// separator itself, makes mpv reject the entire option (MPV_ERROR_OPTION_ERROR) and no path at
+    /// all reaches the hook.
+    /// </summary>
+    internal static string JoinYtDlpPaths(IEnumerable<string> paths)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var usable = new List<string>();
+        foreach (var path in paths)
+        {
+            if (path.Contains(',') || path.Contains(Path.PathSeparator))
+            {
+                continue;
+            }
+
+            if (seen.Add(path))
+            {
+                usable.Add(path);
+            }
+        }
+
+        return string.Join(Path.PathSeparator, usable);
+    }
+
+    /// <summary>
+    /// Brings the core up paused.
+    /// <para>
+    /// mpv's own default is <c>pause=no</c>, so a file starts playing the moment the demuxer has
+    /// something - Subtitle Edit never wants that: opening a video is an editing action, not a
+    /// "watch it" one, and every caller that does want playback (visual sync, the ASSA previews,
+    /// cut video) asks for it explicitly. Pausing from managed code once the load has been issued
+    /// is too late: that call sits behind an await continuation on the UI thread, which at
+    /// start-up - restoring the last session, building the grid, laying out the waveform - can
+    /// take a few hundred milliseconds, and the user gets a burst of the video at mpv's default
+    /// volume before it lands (issue #13329).
+    /// </para>
+    /// <para>Must be called before mpv_initialize.</para>
+    /// </summary>
+    private void SetStartPausedOption()
+    {
+        var err = SetOptionString("pause", "yes");
+        if (err < 0)
+        {
+            Se.LogError(new InvalidOperationException(GetErrorString(err)), "LibMpvDynamicPlayer could not set pause=yes");
+        }
     }
 
     private int _brightness;
@@ -471,10 +608,13 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
         // Set mpv to use OpenGL render API for all platforms
         SetOptionString("vo", "libmpv");
         SetOptionString("gpu-api", "opengl");
+        SetStartPausedOption();
 
         // On Linux, do NOT force gpu-context.  Avalonia (11.x) has no native
         // Wayland backend — it always provides an X11/XWayland OpenGL context,
         // so let mpv auto-detect from the context it receives.
+
+        SetYtDlpPathOption();
 
         // Initialize mpv first
         var err = _mpvInitialize(_mpv);
@@ -529,6 +669,9 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
                 Se.LogError(new InvalidOperationException(GetErrorString(err)), "LibMpvDynamicPlayer InitializeWithOpenGL mpv_render_context_create");
             }
 
+            // Only the GL thread may free this again - see Dispose / FreeRenderContext.
+            _renderContextNeedsGraphicsContext = true;
+
             // Set update callback
             _renderUpdateCallback = OnRenderUpdate;
             var callbackPtr = Marshal.GetFunctionPointerForDelegate(_renderUpdateCallback);
@@ -569,6 +712,9 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
         // Tell mpv to use the external (libmpv) renderer.
         SetOptionString("vo", "libmpv");
         SetOptionString("gpu-api", "metal");
+        SetStartPausedOption();
+
+        SetYtDlpPathOption();
 
         var err = _mpvInitialize(_mpv);
         if (err < 0)
@@ -618,6 +764,9 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
             {
                 Se.LogError(new InvalidOperationException(GetErrorString(err)), "LibMpvDynamicPlayer InitializeWithMetal mpv_render_context_create");
             }
+
+            // Only the render thread may free this again - see Dispose / FreeRenderContext.
+            _renderContextNeedsGraphicsContext = true;
 
             // Register the render-update callback so mpv can trigger redraws.
             _renderUpdateCallback = OnRenderUpdate;
@@ -741,25 +890,96 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
         }
     }
 
-    public void Dispose()
+    /// <summary>
+    /// Records that this player is being thrown away. Call it before detaching the render host:
+    /// dropping the host fires the graphics deinit callback, and that callback only completes a
+    /// teardown it can already see (see <see cref="FreeRenderContextIfDisposePending"/>). Marking
+    /// afterwards would race the callback and leave the core alive - the leak from issue #13048.
+    /// Cheap and non-blocking, unlike <see cref="Dispose"/>.
+    /// </summary>
+    public void MarkForDispose()
     {
-        if (_disposed)
+        if (_renderContextNeedsGraphicsContext)
+        {
+            _disposePendingRenderContextFree = true;
+        }
+    }
+
+    /// <summary>
+    /// Completes a <see cref="Dispose"/> that had to wait for the graphics thread, and does
+    /// nothing at all if no dispose is pending.
+    /// <para>
+    /// Call this from the render control's deinit callback, where the graphics context is
+    /// current: <c>mpv_render_context_free</c> deletes the GPU objects mpv allocated in that
+    /// context, so for OpenGL and Metal no other thread may free it. Deinit alone is not a
+    /// reason to tear anything down - Avalonia deinits on a plain reparent too - which is why
+    /// this is a no-op unless the owner already asked for the player to go away.
+    /// </para>
+    /// </summary>
+    public void FreeRenderContextIfDisposePending()
+    {
+        if (!_disposePendingRenderContextFree)
         {
             return;
         }
 
+        FreeRenderContext();
+
+        // Only the render-context free needs the graphics context - the core does not, and
+        // mpv_terminate_destroy blocks until every mpv worker has exited. The deinit callback
+        // runs on the UI thread, so terminating here would freeze the UI for as long as a
+        // stuck load takes to unwind (the "Not Responding" kill in issue #13083) - the very
+        // thing the worker-thread dispose in VideoPlayerControl.CloseAndDisposePlayer was
+        // meant to prevent (issue #11176) but couldn't, because on this path the Dispose it
+        // runs is reduced to setting a flag. TerminateCore is idempotent (interlocked handle
+        // claim), so racing the owner's background Dispose is safe.
+        Task.Run(TerminateCore);
+    }
+
+    private void FreeRenderContext()
+    {
+        var renderContext = Interlocked.Exchange(ref _renderContext, IntPtr.Zero);
+        if (renderContext != IntPtr.Zero && _mpvRenderContextFree != null)
+        {
+            _mpvRenderContextFree(renderContext);
+        }
+    }
+
+    /// <summary>
+    /// Destroys the mpv core. Safe to call more than once and from more than one thread at
+    /// a time: a control can dispose its player when it is detached from the visual tree
+    /// while the owner disposes the same instance on a worker thread, and handing the same
+    /// handle to <c>mpv_terminate_destroy</c> twice is a double free. Each handle is claimed
+    /// with an interlocked exchange so exactly one caller ever gets a non-zero pointer.
+    /// <para>
+    /// When rendering goes through a graphics API the render context belongs to a thread this
+    /// one is not - freeing an OpenGL render context without that context current is undefined -
+    /// so there this only records the intent and returns. The render control's deinit callback
+    /// then calls <see cref="FreeRenderContextIfDisposePending"/>, which frees the context and
+    /// destroys the core. If that callback never arrives the core outlives us, which is exactly
+    /// what happened before this handshake existed - so asking is never worse than not asking.
+    /// </para>
+    /// </summary>
+    public void Dispose()
+    {
         _disposed = true;
 
-        if (_renderContext != IntPtr.Zero && _mpvRenderContextFree != null)
+        if (_renderContextNeedsGraphicsContext && _renderContext != IntPtr.Zero)
         {
-            _mpvRenderContextFree(_renderContext);
-            _renderContext = IntPtr.Zero;
+            _disposePendingRenderContextFree = true;
+            return;
         }
 
-        if (_mpv != IntPtr.Zero && _mpvTerminateDestroy != null)
+        FreeRenderContext();
+        TerminateCore();
+    }
+
+    private void TerminateCore()
+    {
+        var mpv = Interlocked.Exchange(ref _mpv, IntPtr.Zero);
+        if (mpv != IntPtr.Zero && _mpvTerminateDestroy != null)
         {
-            _mpvTerminateDestroy.Invoke(_mpv);
-            _mpv = IntPtr.Zero;
+            _mpvTerminateDestroy.Invoke(mpv);
         }
     }
 
@@ -795,7 +1015,7 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
         }
     }
 
-    public async Task LoadFile(string path)
+    public async Task LoadFile(string path, double startPositionSeconds = 0)
     {
         EnsureNotDisposed();
 
@@ -812,7 +1032,34 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
         _audioEndBound = null;
         _lastRawTimePos = -1;
 
+        // Open at the wanted position instead of at 0:00 - a seek issued once the file is up
+        // shows the start of the video for a moment and then jumps (issue #13329). "start" is
+        // sticky, so it has to be cleared ("none", its own default) for opens that want the
+        // beginning - a silent failure here would strand every later open at a stale position.
+        var startErr = SetOptionString("start", startPositionSeconds > 0
+            ? startPositionSeconds.ToString(CultureInfo.InvariantCulture)
+            : "none");
+        if (startErr < 0)
+        {
+            Se.LogError(new InvalidOperationException(GetErrorString(startErr)), "LibMpvDynamicPlayer LoadFile start");
+        }
+
         await WaitForCoreInitializedAsync();
+
+        // mpv's own default is pause=no, so it starts playing the instant it has decoded
+        // something. The core is created paused (see the Initialize* methods) and every caller
+        // that wants playback asks for it explicitly, but pause it here too: it is a user
+        // property, so anything the user did to the previous file - or a play that ran while
+        // this one was being picked - would otherwise carry over into this load.
+        DoMpvCommand("set", "pause", "yes");
+        _pausedValue = null;
+
+        // Before loadfile, not after: mpv applies "sid" when the file loads, and setting it
+        // afterwards left a window in which an external subtitle pushed by MpvReloader was added
+        // and selected, only to be deselected again a moment later - added but never drawn
+        // (issue #13407). Set here it does the same job (no embedded subtitle track is picked)
+        // without ever undoing a sub-add that got in first.
+        SetOptionString("sid", "no");
 
         var err = await Task.Run(() => DoMpvCommand("loadfile", path));
         if (_disposed)
@@ -825,59 +1072,11 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
             Se.LogError(new InvalidOperationException(GetErrorString(err)), "LibMpvDynamicPlayer LoadFile");
         }
 
-        if (OperatingSystem.IsMacOS())
-        {
-            // add yt-dlp to the process PATH on macOS so mpv can find it for youtube URLs
-            var macYtDlpPaths = new[]
-            {
-                "/opt/local/bin/yt-dlp",       // MacPorts
-                "/usr/local/bin/yt-dlp",        // Homebrew (Intel)
-                "/opt/homebrew/bin/yt-dlp",     // Homebrew (Apple Silicon)
-                "/usr/bin/yt-dlp",
-                Path.Combine(Se.DataFolder, "yt-dlp_macos"),
-            };
-            foreach (var ytDlpPath in macYtDlpPaths)
-            {
-                if (File.Exists(ytDlpPath))
-                {
-                    var dir = Path.GetDirectoryName(ytDlpPath)!;
-                    var currentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-                    if (!currentPath.Split(Path.PathSeparator).Contains(dir))
-                    {
-                        Environment.SetEnvironmentVariable("PATH", currentPath + Path.PathSeparator + dir);
-                    }
-                    break;
-                }
-            }
-        }
-        else if (OperatingSystem.IsLinux())
-        {
-            // add yt-dlp to the process PATH on Linux so mpv can find it for youtube URLs
-            var linuxYtDlpPaths = new[]
-            {
-                "/usr/local/bin/yt-dlp",
-                "/usr/bin/yt-dlp",
-                "/opt/yt-dlp/yt-dlp",
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local/bin/yt-dlp"),
-                Path.Combine(Se.DataFolder, "yt-dlp_linux"),
-            };
-            foreach (var ytDlpPath in linuxYtDlpPaths)
-            {
-                if (File.Exists(ytDlpPath))
-                {
-                    var dir = Path.GetDirectoryName(ytDlpPath)!;
-                    var currentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-                    if (!currentPath.Split(Path.PathSeparator).Contains(dir))
-                    {
-                        Environment.SetEnvironmentVariable("PATH", currentPath + Path.PathSeparator + dir);
-                    }
-                    break;
-                }
-            }
-        }
+        // yt-dlp used to be pointed at from here by appending its folder to PATH - it never
+        // reached libmpv (see SetYtDlpPathOption) and it ran after loadfile, too late for the
+        // hook it was meant to help. The path is handed to ytdl_hook before mpv_initialize now.
 
         SetOptionString("keep-open", "always");
-        SetOptionString("sid", "no");
 
         SetOptionString("hr-seek", "yes");
         SetOptionString("rebase-start-time", "no");
@@ -928,6 +1127,10 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
 
         await WaitForCoreInitializedAsync();
 
+        // Unlike LoadFile this one is meant to start playing: it backs the "play this clip"
+        // buttons in the text-to-speech windows, which load a file and expect to hear it.
+        // Those windows build their own core via Initialize(), which - unlike the three
+        // rendering Initialize* methods - deliberately leaves mpv's pause default alone.
         var err = await Task.Run(() => DoMpvCommand("loadfile", path));
         if (_disposed)
         {
@@ -993,16 +1196,16 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
         get
         {
             EnsureNotDisposed();
-            if (_mpv == IntPtr.Zero || _mpvGetPropertyDouble == null)
+            if (_mpv == IntPtr.Zero || _mpvGetPropertyFlag == null)
             {
                 return false;
             }
 
             try
             {
-                double pauseValue = 0;
+                var pauseValue = 0;
                 var nameBytes = PropertyNamePause;
-                var err = _mpvGetPropertyDouble(_mpv, nameBytes, MPV_FORMAT_FLAG, ref pauseValue);
+                var err = _mpvGetPropertyFlag(_mpv, nameBytes, MPV_FORMAT_FLAG, ref pauseValue);
 
                 if (err < 0)
                 {
@@ -1023,16 +1226,16 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
         get
         {
             EnsureNotDisposed();
-            if (_mpv == IntPtr.Zero || _mpvGetPropertyDouble == null)
+            if (_mpv == IntPtr.Zero || _mpvGetPropertyFlag == null)
             {
                 return false;
             }
 
             try
             {
-                double pauseValue = 0;
+                var pauseValue = 0;
                 var nameBytes = PropertyNamePause;
-                var err = _mpvGetPropertyDouble(_mpv, nameBytes, MPV_FORMAT_FLAG, ref pauseValue);
+                var err = _mpvGetPropertyFlag(_mpv, nameBytes, MPV_FORMAT_FLAG, ref pauseValue);
 
                 if (err < 0)
                 {
@@ -1070,16 +1273,16 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
 
     private bool IsEofReached()
     {
-        if (_mpv == IntPtr.Zero || _mpvGetPropertyDouble == null)
+        if (_mpv == IntPtr.Zero || _mpvGetPropertyFlag == null)
         {
             return false;
         }
 
         try
         {
-            double eofValue = 0;
+            var eofValue = 0;
             var nameBytes = PropertyNameEofReached;
-            var err = _mpvGetPropertyDouble(_mpv, nameBytes, MPV_FORMAT_FLAG, ref eofValue);
+            var err = _mpvGetPropertyFlag(_mpv, nameBytes, MPV_FORMAT_FLAG, ref eofValue);
             if (err < 0)
             {
                 return false;
@@ -1415,7 +1618,8 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
         var audioTracks = new List<AudioTrackInfo>();
 
         EnsureNotDisposed();
-        if (_mpv == IntPtr.Zero || _mpvGetPropertyDouble == null || _mpvGetPropertyString == null || _mpvFree == null)
+        if (_mpv == IntPtr.Zero || _mpvGetPropertyDouble == null || _mpvGetPropertyFlag == null ||
+            _mpvGetPropertyString == null || _mpvFree == null)
         {
             return audioTracks;
         }
@@ -1500,12 +1704,40 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
                     trackInfo.FfIndex = (int)ffIndex;
                 }
 
-                // Get track selected status
-                double selectedValue = 0;
-                var selectedBytes = GetUtf8Bytes($"track-list/{i}/selected");
-                err = _mpvGetPropertyDouble(_mpv, selectedBytes, MPV_FORMAT_FLAG, ref selectedValue);
+                // Get track codec (optional) - used to estimate waveform-extraction time.
+                var codecPtr = IntPtr.Zero;
+                var codecBytes = GetUtf8Bytes($"track-list/{i}/codec");
+                err = _mpvGetPropertyString(_mpv, codecBytes, MPV_FORMAT_STRING, ref codecPtr);
 
-                trackInfo.IsSelected = err >= 0 && selectedValue == 1;
+                if (err >= 0 && codecPtr != IntPtr.Zero)
+                {
+                    trackInfo.Codec = Marshal.PtrToStringUTF8(codecPtr);
+                    _mpvFree(codecPtr);
+                }
+
+                // Get track channel count (optional) - used for a friendly "7.1"/"5.1" label.
+                double channelCount = 0;
+                var channelBytes = GetUtf8Bytes($"track-list/{i}/demux-channel-count");
+                err = _mpvGetPropertyDouble(_mpv, channelBytes, MPV_FORMAT_DOUBLE, ref channelCount);
+
+                if (err >= 0 && channelCount > 0)
+                {
+                    trackInfo.Channels = (int)channelCount;
+                }
+
+                // Get track selected status
+                var selectedValue = 0;
+                var selectedBytes = GetUtf8Bytes($"track-list/{i}/selected");
+                err = _mpvGetPropertyFlag(_mpv, selectedBytes, MPV_FORMAT_FLAG, ref selectedValue);
+
+                trackInfo.IsSelected = err >= 0 && selectedValue != 0;
+
+                // Get track default flag
+                var defaultValue = 0;
+                var defaultBytes = GetUtf8Bytes($"track-list/{i}/default");
+                err = _mpvGetPropertyFlag(_mpv, defaultBytes, MPV_FORMAT_FLAG, ref defaultValue);
+
+                trackInfo.IsDefault = err >= 0 && defaultValue != 0;
 
                 audioTracks.Add(trackInfo);
             }
@@ -1540,11 +1772,14 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
 
         // Set mpv to use software rendering
         SetOptionString("vo", "libmpv");
+        SetStartPausedOption();
 
         if (_mpvInitialize == null || _mpvRenderContextCreate == null || _mpvRenderContextSetUpdateCallback == null)
         {
             throw new InvalidOperationException("MPV delegates not loaded for software rendering.");
         }
+
+        SetYtDlpPathOption();
 
         // Initialize mpv
         var err = _mpvInitialize(_mpv);
@@ -1687,9 +1922,18 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
         }
     }
 
-    public void SubRemove()
+    /// <summary>
+    /// mpv's result for the sub-* commands: 0 or higher when the command was applied, negative
+    /// when it was not. Callers that push a subtitle into a player they just created (fullscreen,
+    /// undock, layout rebuild) must check this and retry: the core is initialized lazily by the
+    /// rendering surface, and "sub-add" is one of mpv's playback-only commands, so a push that
+    /// arrives before the core is up - or before "loadfile" has actually started playback - is
+    /// rejected. Ignoring that left the video with no subtitles for the rest of the session,
+    /// because nothing pushes again until an edit dirties the preview (issue #13407).
+    /// </summary>
+    public int SubRemove()
     {
-        DoMpvCommand("sub-remove");
+        return DoSubtitleCommand("sub-remove");
     }
 
     public void SetSubtitleVisibility(bool visible)
@@ -1697,15 +1941,32 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
         DoMpvCommand("set", "sub-visibility", visible ? "yes" : "no");
     }
 
-    public void SubReload()
+    /// <inheritdoc cref="SubRemove"/>
+    public int SubReload()
     {
-        DoMpvCommand("sub-reload");
+        return DoSubtitleCommand("sub-reload");
     }
 
-    public void SubAdd(string fileName)
+    /// <inheritdoc cref="SubRemove"/>
+    public int SubAdd(string fileName)
     {
-        DoMpvCommand("sub-add", fileName, "select");
+        return DoSubtitleCommand("sub-add", fileName, "select");
     }
+
+    private int DoSubtitleCommand(params string[] args)
+    {
+        // DoMpvCommand answers 0 - mpv's "success" - when there is no core to talk to at all,
+        // which would read as an applied subtitle. Report the same "not initialized" mpv itself
+        // uses so the caller retries instead.
+        if (_mpv == IntPtr.Zero || !_coreInitialized)
+        {
+            return MpvErrorUninitialized;
+        }
+
+        return DoMpvCommand(args);
+    }
+
+    private const int MpvErrorUninitialized = -3; // MPV_ERROR_UNINITIALIZED in mpv's client.h
 
     public string VersionNumber
     {

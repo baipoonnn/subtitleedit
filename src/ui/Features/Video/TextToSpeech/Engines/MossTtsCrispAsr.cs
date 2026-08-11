@@ -297,31 +297,9 @@ public class MossTtsCrispAsr : ITtsEngine
             {
                 var dest = Path.Combine(voicesFolder, Path.GetFileName(src));
 
-                if (!File.Exists(dest))
-                {
-                    try
-                    {
-                        // qwen3-tts.cpp voice pack ships at 16 kHz; resample to MOSS-TTS's
-                        // native 24 kHz mono on seed.
-                        var ffmpeg = FfmpegGenerator.ConvertToMono24kHzWav(src, dest);
-                        if (!ffmpeg.Start())
-                        {
-                            File.Copy(src, dest);
-                        }
-                        else
-                        {
-                            ffmpeg.WaitForExit();
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Se.LogError(ex, $"MOSS-TTS (CrispASR): resample seed '{src}' failed; falling back to plain copy");
-                        try { if (!File.Exists(dest))
-                        {
-                            File.Copy(src, dest);
-                        } } catch { }
-                    }
-                }
+                // qwen3-tts.cpp voice pack ships at 16 kHz; resample to MOSS-TTS's
+                // native 24 kHz mono on seed.
+                VoiceSeedHelper.CopyOrResample(src, dest, 24000, "MOSS-TTS (CrispASR)");
 
                 var sidecar = Path.ChangeExtension(src, ".txt");
                 if (File.Exists(sidecar))
@@ -405,13 +383,15 @@ public class MossTtsCrispAsr : ITtsEngine
         return true;
     }
 
-    public Task<Voice[]> GetVoices(string language)
+    public async Task<Voice[]> GetVoices(string language)
     {
         var result = new List<Voice>();
 
         // Voice cloning only — no built-in default voice. The combo is empty until the user
         // imports a reference WAV (or the qwen3-tts.cpp voice seed runs above).
-        var voicesFolder = GetSetVoicesFolder();
+        // Off the UI thread: GetSetVoicesFolder does one-time reference-WAV seeding through
+        // ffmpeg, and this is awaited from SelectedEngineChanged on the dispatcher.
+        var voicesFolder = await Task.Run(GetSetVoicesFolder);
         if (Directory.Exists(voicesFolder))
         {
             foreach (var file in Directory.GetFiles(voicesFolder, "*.wav"))
@@ -421,7 +401,7 @@ public class MossTtsCrispAsr : ITtsEngine
             }
         }
 
-        return Task.FromResult(result.ToArray());
+        return result.ToArray();
     }
 
     public bool IsVoiceInstalled(Voice voice) => true;
@@ -463,7 +443,7 @@ public class MossTtsCrispAsr : ITtsEngine
         var languageArg = MossTtsLanguages.ResolveLanguageArg(language);
         await EnsureServerRunningAsync(modelKey, mossVoice.FilePath, refText, languageArg, cancellationToken);
 
-        var outputFileName = Path.Combine(GetSetFolder(), Guid.NewGuid() + ".wav");
+        var outputFileName = Path.Combine(TtsOutputFolder.Resolve(outputFolder, GetSetFolder), Guid.NewGuid() + ".wav");
 
         var speed = Math.Clamp(Se.Settings.Video.TextToSpeech.MossTtsCrispAsrSpeed, 0.25, 4.0);
         var payload = BuildSpeakPayload(text, speed);

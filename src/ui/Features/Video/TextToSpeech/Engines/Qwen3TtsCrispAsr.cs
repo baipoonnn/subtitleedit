@@ -42,7 +42,7 @@ public class Qwen3TtsCrispAsr : ITtsEngine
 {
     public string Name => "Qwen3 TTS (CrispASR)";
     public string Description => "via CrispASR (VoiceDesign or CustomVoice 1.7B)";
-    public bool HasLanguageParameter => false;
+    public bool HasLanguageParameter => true;
     public bool HasApiKey => false;
     public bool HasRegion => false;
     public bool HasModel => true;
@@ -304,24 +304,11 @@ public class Qwen3TtsCrispAsr : ITtsEngine
             foreach (var src in Directory.GetFiles(sourceFolder, "*.wav"))
             {
                 var dest = Path.Combine(voicesFolder, Path.GetFileName(src));
-                if (File.Exists(dest))
-                {
-                    continue;
-                }
 
-                try
-                {
-                    // Resample to 24 kHz mono — the Base backend rejects any other rate.
-                    var process = FfmpegGenerator.ConvertToMono24kHzWav(src, dest);
-                    if (process.Start())
-                    {
-                        process.WaitForExit();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Se.LogError(ex, $"Qwen3 TTS (CrispASR): failed to resample seeded voice {Path.GetFileName(src)}");
-                }
+                // Resample to 24 kHz mono — the Base backend rejects any other rate, so a voice
+                // that cannot be resampled is skipped rather than copied at its original rate.
+                VoiceSeedHelper.CopyOrResample(
+                    src, dest, 24000, "Qwen3 TTS (CrispASR)", copyOnFailure: false);
             }
         }
         catch (Exception ex)
@@ -681,7 +668,7 @@ public class Qwen3TtsCrispAsr : ITtsEngine
         }
     }
 
-    public Task<Voice[]> GetVoices(string language)
+    public async Task<Voice[]> GetVoices(string language)
     {
         var result = new List<Voice>();
         var modelKey = ResolveModelKey(Se.Settings.Video.TextToSpeech.Qwen3TtsCrispAsrModel);
@@ -691,7 +678,7 @@ public class Qwen3TtsCrispAsr : ITtsEngine
             // VoiceDesign has no speaker encoder — the instruction string drives the voice, so
             // a single "Default" entry is all the combo needs.
             result.Add(new Voice(new Qwen3TtsVoice("Default", string.Empty)));
-            return Task.FromResult(result.ToArray());
+            return result.ToArray();
         }
 
         if (modelKey == ModelKeyCustomVoice)
@@ -704,13 +691,15 @@ public class Qwen3TtsCrispAsr : ITtsEngine
             {
                 result.Add(new Voice(new Qwen3TtsVoice(speaker, string.Empty)));
             }
-            return Task.FromResult(result.ToArray());
+            return result.ToArray();
         }
 
         // Voice clone (Base): list the imported reference WAVs. Voice cloning refuses requests
         // without a reference, so there is no "Default" entry — the user must import a voice
         // (with its transcript) first.
-        var voicesFolder = GetSetVoicesFolder();
+        // Off the UI thread: GetSetVoicesFolder does one-time reference-WAV seeding through
+        // ffmpeg, and this is awaited from SelectedEngineChanged on the dispatcher.
+        var voicesFolder = await Task.Run(GetSetVoicesFolder);
         if (Directory.Exists(voicesFolder))
         {
             foreach (var file in Directory.GetFiles(voicesFolder, "*.wav"))
@@ -720,7 +709,7 @@ public class Qwen3TtsCrispAsr : ITtsEngine
             }
         }
 
-        return Task.FromResult(result.ToArray());
+        return result.ToArray();
     }
 
     public bool IsVoiceInstalled(Voice voice) => true;
@@ -729,7 +718,7 @@ public class Qwen3TtsCrispAsr : ITtsEngine
 
     public Task<string[]> GetModels() => Task.FromResult(new[] { ModelKeyVoiceDesign, ModelKeyCustomVoice, ModelKeyClone });
 
-    public Task<TtsLanguage[]> GetLanguages(Voice voice, string? model) => Task.FromResult(Array.Empty<TtsLanguage>());
+    public Task<TtsLanguage[]> GetLanguages(Voice voice, string? model) => Task.FromResult(Qwen3TtsCrispAsrLanguages.All);
 
     public Task<Voice[]> RefreshVoices(string language, CancellationToken cancellationToken) =>
         GetVoices(language);
@@ -774,7 +763,7 @@ public class Qwen3TtsCrispAsr : ITtsEngine
 
         await EnsureServerRunningAsync(modelKey, cancellationToken);
 
-        var outputFileName = Path.Combine(GetSetFolder(), Guid.NewGuid() + ".wav");
+        var outputFileName = Path.Combine(TtsOutputFolder.Resolve(outputFolder, GetSetFolder), Guid.NewGuid() + ".wav");
         var inputText = text;
         // Share the qwen3-tts.cpp instruction setting so users get the same voice description
         // regardless of which Qwen3 engine they're testing with.
@@ -819,9 +808,19 @@ public class Qwen3TtsCrispAsr : ITtsEngine
             payload["instructions"] = "a calm female voice";
         }
 
+        // Output language (#13110): the backend maps the ISO code to the talker's explicit
+        // codec_language_id — applies to VoiceDesign, CustomVoice and cloned voices alike.
+        // Auto (empty) sends no field and lets the model infer the language from the text,
+        // which for a cloned reference in another language surfaces as a strong accent.
+        var languageArg = Qwen3TtsCrispAsrLanguages.ResolveLanguageArg(language);
+        if (!string.IsNullOrEmpty(languageArg))
+        {
+            payload["language"] = languageArg;
+        }
+
         var body = JsonSerializer.Serialize(payload);
         using var content = new StringContent(body, Encoding.UTF8, "application/json");
-        Se.WriteToolsLog($"Qwen3 TTS (CrispASR): POST {ServerBaseUrl}/v1/audio/speech (voice={qwen3Voice}, model={modelKey}, textLen={text.Length}, instructionLen={instruction.Length})");
+        Se.WriteToolsLog($"Qwen3 TTS (CrispASR): POST {ServerBaseUrl}/v1/audio/speech (voice={qwen3Voice}, model={modelKey}, textLen={text.Length}, instructionLen={instruction.Length}, language={(string.IsNullOrEmpty(languageArg) ? "(auto)" : languageArg)})");
 
         HttpResponseMessage response;
         try

@@ -34,6 +34,14 @@ public class ImageParameter
     public string Error { get; set; }
     public bool IsForced { get; set; }
     public bool IsFullFrame { get; set; }
+
+    /// <summary>
+    /// Background of the frame-sized image made when <see cref="IsFullFrame"/> is set. Separate
+    /// from <see cref="BackgroundColor"/>, which is the colour of the box behind the text.
+    /// Transparent by default, so a full frame image only pads the subtitle out to the frame.
+    /// </summary>
+    public SKColor FullFrameBackgroundColor { get; set; } = SKColors.Transparent;
+
     public double FramesPerSecond { get; set; }
     public bool IsRightToLeft { get; set; } = false;
     public ExportBoxType BoxType { get; set; } = ExportBoxType.None;
@@ -50,6 +58,14 @@ public class ImageParameter
         Buffer = [];
         Error = string.Empty;
     }
+
+    /// <summary>
+    /// <see cref="OverridePosition"/> - the bitmap's top left corner - in the shape the VobSub
+    /// and DVD sup writers take it. They range check it themselves and fall back to
+    /// <see cref="Alignment"/> when it falls outside the frame.
+    /// </summary>
+    public SKPoint? OverridePositionPoint =>
+        OverridePosition.HasValue ? new SKPoint(OverridePosition.Value.X, OverridePosition.Value.Y) : null;
 
     public BluRayContentAlignment BluRayContentAlignment => Alignment switch
     {

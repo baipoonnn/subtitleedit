@@ -83,70 +83,66 @@ public class FixDialogueDashesWindow : Window
             .WithMarginTop(10)
             .WithMarginLeft(10);
 
-        var dataGrid = new DataGrid
+        // Candidates stay in subtitle order. Extended selection is native to TableView;
+        // AddSpaceToggle preserves the checkbox helper's keyboard behavior.
+        var dataGrid = TableViewExtras.MakeTableView();
+        dataGrid.Width = double.NaN;
+        dataGrid.Height = double.NaN;
+        dataGrid.DataContext = vm;
+        dataGrid.ItemsSource = vm.Candidates;
+        dataGrid.Columns.AddRange(new TableViewColumn[]
         {
-            AutoGenerateColumns = false,
-            SelectionMode = DataGridSelectionMode.Single,
-            CanUserResizeColumns = true,
-            CanUserSortColumns = false,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            VerticalAlignment = VerticalAlignment.Stretch,
-            Width = double.NaN,
-            Height = double.NaN,
-            DataContext = vm,
-            ItemsSource = vm.Candidates,
-            Columns =
+            new SeTableViewColumn
             {
-                new DataGridTemplateColumn
+                Header = Se.Language.Tools.FixDialogueDashes.ColumnApply,
+                CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+                HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
+                CellTemplate = new FuncDataTemplate<FixDialogueDashesCandidate>((_, _) =>
                 {
-                    Header = Se.Language.Tools.FixDialogueDashes.ColumnApply,
-                    CellTheme = UiUtil.DataGridNoBorderNoPaddingCellTheme,
-                    CellTemplate = new FuncDataTemplate<FixDialogueDashesCandidate>((_, _) =>
+                    return new Border
                     {
-                        return new Border
+                        Background = Brushes.Transparent,
+                        Padding = new Thickness(4),
+                        Child = new CheckBox
                         {
-                            Background = Brushes.Transparent,
-                            Padding = new Thickness(4),
-                            Child = new CheckBox
+                            Focusable = false,
+                            [!ToggleButton.IsCheckedProperty] = new Binding(nameof(FixDialogueDashesCandidate.IsSelected))
                             {
-                                Focusable = false,
-                                [!ToggleButton.IsCheckedProperty] = new Binding(nameof(FixDialogueDashesCandidate.IsSelected))
-                                {
-                                    Mode = BindingMode.TwoWay,
-                                },
-                                HorizontalAlignment = HorizontalAlignment.Center,
+                                Mode = BindingMode.TwoWay,
                             },
-                        };
-                    }),
-                    Width = new DataGridLength(1, DataGridLengthUnitType.Auto),
-                },
-                new DataGridTextColumn
-                {
-                    Header = Se.Language.General.NumberSymbol,
-                    Binding = new Binding(nameof(FixDialogueDashesCandidate.Number)),
-                    CellTheme = UiUtil.DataGridNoBorderNoPaddingCellTheme,
-                    IsReadOnly = true,
-                },
-                new DataGridTextColumn
-                {
-                    Header = Se.Language.Tools.FixDialogueDashes.ColumnOriginal,
-                    Binding = new Binding(nameof(FixDialogueDashesCandidate.OriginalTextDisplay)),
-                    CellTheme = UiUtil.DataGridNoBorderCellTheme,
-                    Width = new DataGridLength(1, DataGridLengthUnitType.Star),
-                    IsReadOnly = true,
-                },
-                new DataGridTextColumn
-                {
-                    Header = Se.Language.Tools.FixDialogueDashes.ColumnFixed,
-                    Binding = new Binding(nameof(FixDialogueDashesCandidate.FixedTextDisplay)),
-                    CellTheme = UiUtil.DataGridNoBorderCellTheme,
-                    Width = new DataGridLength(1, DataGridLengthUnitType.Star),
-                    IsReadOnly = true,
-                },
+                            HorizontalAlignment = HorizontalAlignment.Center,
+                        },
+                    };
+                }),
+                Width = new GridLength(80),
             },
-        };
-        _ = new DataGridCheckboxMultiSelect<FixDialogueDashesCandidate>(dataGrid,
-            item => item.IsSelected, (item, v) => item.IsSelected = v);
+            new SeTableViewColumn
+            {
+                Header = Se.Language.General.NumberSymbol,
+                Binding = new Binding(nameof(FixDialogueDashesCandidate.Number)),
+                CellTheme = UiUtil.TableViewCellTheme,
+                HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
+                Width = new GridLength(60),
+            },
+            new SeTableViewColumn
+            {
+                Header = Se.Language.Tools.FixDialogueDashes.ColumnOriginal,
+                CellTemplate = TableViewExtras.MakeTextCellTemplate(nameof(FixDialogueDashesCandidate.OriginalTextDisplay)),
+                CellTheme = UiUtil.TableViewCellTheme,
+                HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
+                Width = new GridLength(1, GridUnitType.Star),
+            },
+            new SeTableViewColumn
+            {
+                Header = Se.Language.Tools.FixDialogueDashes.ColumnFixed,
+                CellTemplate = TableViewExtras.MakeTextCellTemplate(nameof(FixDialogueDashesCandidate.FixedTextDisplay)),
+                CellTheme = UiUtil.TableViewCellTheme,
+                HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
+                Width = new GridLength(1, GridUnitType.Star),
+            },
+        });
+        TableViewExtras.AddSpaceToggle<FixDialogueDashesCandidate>(dataGrid,
+            item => item.IsSelected, (item, value) => item.IsSelected = value);
 
         grid.Add(labelInfo, 0);
         grid.Add(UiUtil.MakeBorderForControlNoPadding(dataGrid), 1);

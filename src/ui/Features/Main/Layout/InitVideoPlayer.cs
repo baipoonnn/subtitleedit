@@ -32,8 +32,13 @@ public static class InitVideoPlayer
         {
             mediaFile = vm.VideoPlayerControl.VideoPlayer.FileName;
             position = vm.VideoPlayerControl.VideoPlayer.Position;
-            vm.VideoPlayerControl.VideoPlayer.CloseFile();
-            vm.VideoPlayerControl.Content = null;
+
+            // The old control is replaced by the one built below and never used again, so tear
+            // it down completely. Closing the file alone left its 50 ms position timer running
+            // (which keeps the whole control alive in the dispatcher, polling a dead player from
+            // the UI thread) and left the native player core undestroyed - one leaked mpv per
+            // layout rebuild, and Options/OK rebuilds the layout on any setting change (#13048).
+            vm.VideoPlayerControl.CloseAndDisposePlayer();
             vm.VideoPlayerControl = null;
         }
 
@@ -60,9 +65,17 @@ public static class InitVideoPlayer
             {
                 await control.Open(mediaFile);
                 await control.WaitForPlayersReadyAsync();
+
+                // A second rebuild within the ready wait (Options/OK, dock/undock) disposes
+                // this control's player via the block above - stop restoring into it (#13083).
                 for (var i = 0; i < 10; i++)
                 {
                     await System.Threading.Tasks.Task.Delay(10);
+                    if (control.IsDisposed)
+                    {
+                        return;
+                    }
+
                     control.Position = position;
                 }
             });
@@ -84,6 +97,10 @@ public static class InitVideoPlayer
             if (willPause)
             {
                 vm.RequestPausePlayheadFreeze();
+            }
+            else
+            {
+                vm.CancelPausePlayheadFreeze();
             }
         };
         control.StopRequested += vm.OnVideoPlayerStopRequested;

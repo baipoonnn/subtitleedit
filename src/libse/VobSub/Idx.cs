@@ -13,6 +13,17 @@ namespace Nikse.SubtitleEdit.Core.VobSub
         public readonly List<SKColor> Palette = new List<SKColor>();
         public readonly List<string> Languages = new List<string>();
 
+        /// <summary>
+        /// Two-letter ISO 639-1 codes from the idx "id:" lines, parallel to <see cref="Languages"/>.
+        /// </summary>
+        public readonly List<string> LanguageCodes = new List<string>();
+
+        /// <summary>
+        /// Frame size from the idx "size:" line (e.g. 720x576 for PAL); 0 when absent.
+        /// </summary>
+        public int ScreenWidth { get; private set; }
+        public int ScreenHeight { get; private set; }
+
         private static readonly Regex TimeCodeLinePattern = new Regex(@"^timestamp: \d+:\d+:\d+:\d+, filepos: [\dabcdefABCDEF]+$", RegexOptions.Compiled);
 
         public Idx(string fileName)
@@ -42,6 +53,18 @@ namespace Nikse.SubtitleEdit.Core.VobSub
                         Palette.Add(HexToColor(hex));
                     }
                 }
+                else if (line.StartsWith("size:", StringComparison.OrdinalIgnoreCase) && line.Length > 6)
+                {
+                    // size: 720x576
+                    var parts = line.Substring("size:".Length).Split(new[] { 'x', 'X', ',', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 2 &&
+                        int.TryParse(parts[0], out var width) && width > 0 &&
+                        int.TryParse(parts[1], out var height) && height > 0)
+                    {
+                        ScreenWidth = width;
+                        ScreenHeight = height;
+                    }
+                }
                 else if (line.StartsWith("id:", StringComparison.OrdinalIgnoreCase) && line.Length > 4)
                 {
                     //id: en, index: 1
@@ -61,6 +84,7 @@ namespace Nikse.SubtitleEdit.Core.VobSub
                         }
                         // Use U+200E (LEFT-TO-RIGHT MARK) to support right-to-left scripts
                         Languages.Add(string.Format("{0} \x200E(0x{1:x})", languageName, languageIndex + 32));
+                        LanguageCodes.Add(twoLetterLanguageId);
                         languageIndex++;
                     }
                 }

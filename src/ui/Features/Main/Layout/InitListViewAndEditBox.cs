@@ -23,6 +23,18 @@ namespace Nikse.SubtitleEdit.Features.Main.Layout;
 
 public static partial class InitListViewAndEditBox
 {
+    // The text box's own floor - unchanged, so the default layout looks exactly as before.
+    private const double SubtitleTextBoxMinimumHeight = 92;
+    // Starting floor for the edit section, replaced by a measured value on first layout (see
+    // TrackEditSectionMinimumHeight). textEditGrid is "Auto,*,Auto": the "Text" header and the
+    // "Line length / Total chars" panel sit above and below the box, and the floor has to cover
+    // all three - sized to the box alone, the box (which cannot shrink past its own MinHeight)
+    // overflows its row and draws over the labels underneath (#10271).
+    private const double EditGridMinimumHeight = SubtitleTextBoxMinimumHeight;
+    private const double EditGridMargin = 10;
+    // The subtitle grid row is Star, so without a floor the splitter can drag it away to
+    // nothing and there is no handle left to drag back (#10271).
+    private const double SubtitleGridMinimumHeight = 45;
 
     public static Grid MakeLayoutListViewAndEditBox(MainView mainPage, MainViewModel vm)
     {
@@ -54,29 +66,49 @@ public static partial class InitListViewAndEditBox
 
         var mainGrid = new Grid
         {
-            RowDefinitions = new RowDefinitions("*,Auto"),
+            RowDefinitions =
+            {
+                new RowDefinition(GridLength.Star) { MinHeight = SubtitleGridMinimumHeight },
+                // GridSplitter constrains the row definition, so include editGrid's outer
+                // margin to preserve the text box's 92 px minimum at the drag limit.
+                new RowDefinition(GridLength.Auto) { MinHeight = EditGridMinimumHeight + EditGridMargin * 2 },
+            },
         };
 
-        vm.SubtitleGrid = new DataGrid
-        {
-            Height = double.NaN,
-            Margin = new Thickness(Se.Settings.Appearance.GridCompactMode ? 0 : 2),
-            ItemsSource = vm.Subtitles,
-            CanUserSortColumns = false,
-            IsReadOnly = true,
-            SelectionMode = DataGridSelectionMode.Extended,
-            DataContext = vm.Subtitles,
-            CanUserResizeColumns = true,
-            GridLinesVisibility = DataGridGridLinesVisibility.None, // Grid lines are rendered via cell themes
-            VerticalGridLinesBrush = UiUtil.GetBorderBrush(),
-            HorizontalGridLinesBrush = UiUtil.GetBorderBrush(),
-            FontSize = Se.Settings.Appearance.SubtitleGridFontSize,
-        };
+        // TableView (Avalonia 12.1) pilot #3, after Show history (#12704) and the OCR grid
+        // (#13001): the main subtitle grid. TableView rows are ListBoxItems, so keyboard
+        // focus moves to the current row and UI Automation exposes it to screen readers -
+        // the DataGrid kept focus on itself, which made the grid unusable with a screen
+        // reader (issue #13015). Grid lines come from the TableView cell themes; sorting
+        // was already disabled on the DataGrid and TableView has none.
+        var subtitleGrid = TableViewExtras.MakeTableView();
 
-        // Trough paging and shift+click jump now come from the app-wide DataGrid style
-        // (DataGridScrollBarBehavior.EnableTroughPaging in Styles.axaml), so no per-grid call here.
+        // TableView itself is not focusable by default, and with no rows there is no focusable
+        // row container either - so an empty grid left the window without any focusable content.
+        // Keyboard focus then either stayed on the window root (Avalonia's AccessKeyHandler
+        // ignores all keys in that state, so Alt appeared dead and no access keys were
+        // underlined) or, once it reached the menu bar, could never leave it again because the
+        // menu deactivation had no focus target to restore to (#13111). The grid is both the
+        // startup focus target and that deactivation fallback, so it must be able to hold focus
+        // even with no rows - like an empty list view on Windows.
+        subtitleGrid.Focusable = true;
 
-        // hack to make drag and drop work on the DataGrid - also on empty rows
+        subtitleGrid.Height = double.NaN;
+        subtitleGrid.Margin = new Thickness(Se.Settings.Appearance.GridCompactMode ? 0 : 2);
+        subtitleGrid.ItemsSource = vm.Subtitles;
+        subtitleGrid.DataContext = vm.Subtitles;
+        subtitleGrid.FontSize = Se.Settings.Appearance.SubtitleGridFontSize;
+
+        // Keep the vertical scrollbar at its full width instead of the thin
+        // expand-on-hover overlay: it then reserves its own layout space, so it never
+        // covers the outermost text column (the DataGrid needed an empty trailing
+        // gutter column for this, issue #12351) and it is an easier drag target.
+        ScrollViewer.SetAllowAutoHide(subtitleGrid, false);
+
+        vm.SubtitleGrid = subtitleGrid;
+        vm.SubtitleGridDragSelect = new TableViewDragSelect(subtitleGrid, vm.ApplyDragSelectRange);
+
+        // hack to make drag and drop work on the grid - also on empty rows
         var dropHost = new Border
         {
             Background = Brushes.Transparent,
@@ -130,38 +162,52 @@ public static partial class InitListViewAndEditBox
             }
         }
 
-        // Convert row indexes to alternating background brushes when the option is enabled.
-        var alternatingRowBrushConverter = alternatingRowBrush == null
-            ? null
-            : new FuncValueConverter<int, IBrush>(index => index % 2 == 1 ? alternatingRowBrush : Brushes.Transparent);
+        // Collapse hidden rows (style bindings evaluate against the row's item).
+        TableViewExtras.BindRowProperty(vm.SubtitleGrid, Visual.IsVisibleProperty,
+            new Binding(nameof(SubtitleLineViewModel.IsHidden)) { Converter = inverseBooleanConverter });
 
-        // Set up data binding for row visibility based on IsHidden property
-        vm.SubtitleGrid.LoadingRow += (sender, e) =>
-        {
-            e.Row.Bind(DataGridRow.IsVisibleProperty, new Binding(nameof(SubtitleLineViewModel.IsHidden))
+        // Dim reference-only rows so they are visibly not part of the working subtitle (#13449).
+        TableViewExtras.BindRowProperty(vm.SubtitleGrid, Visual.OpacityProperty,
+            new Binding(nameof(SubtitleLineViewModel.IsReferenceOnly)) { Converter = new ReferenceOnlyRowOpacityConverter() });
+
+        // Expose "number: text, start - end, duration" as the row's accessible name so
+        // screen readers announce the full row like SE4's list view did (issues #13015,
+        // #12087). Text stays right after the number so browsing by content is fast; the
+        // time codes follow for review. The error summary is appended because the grid's
+        // cell tints are the only other signal for rule violations, and color never
+        // reaches the accessibility tree.
+        TableViewExtras.BindRowProperty(vm.SubtitleGrid, AutomationProperties.NameProperty,
+            new MultiBinding
             {
-                Converter = inverseBooleanConverter
+                StringFormat = "{0}: {1}, {2} - {3}, {4}{5}",
+                Bindings =
+                {
+                    new Binding(nameof(SubtitleLineViewModel.Number)),
+                    new Binding(nameof(SubtitleLineViewModel.Text)),
+                    new Binding(nameof(SubtitleLineViewModel.StartTime)) { Converter = fullTimeConverter, Mode = BindingMode.OneWay },
+                    new Binding(nameof(SubtitleLineViewModel.EndTime)) { Converter = fullTimeConverter, Mode = BindingMode.OneWay },
+                    new Binding(nameof(SubtitleLineViewModel.Duration)) { Converter = shortTimeConverter, Mode = BindingMode.OneWay },
+                    new Binding(nameof(SubtitleLineViewModel.AccessibleErrorText)),
+                },
             });
 
-            // Tint every other row. Binding to Index keeps the color in sync when rows are recycled,
-            // inserted, or removed. Selection still wins because :selected overrides BackgroundRectangle.Fill.
-            if (alternatingRowBrushConverter != null)
-            {
-                e.Row.Bind(DataGridRow.BackgroundProperty, new Binding(nameof(DataGridRow.Index))
-                {
-                    Source = e.Row,
-                    Converter = alternatingRowBrushConverter,
-                });
-            }
-        };
+        // Tint every other row. Selection still wins because :selected has priority.
+        if (alternatingRowBrush != null)
+        {
+            TableViewExtras.ApplyAlternatingRows(vm.SubtitleGrid, alternatingRowBrush);
+        }
 
-        vm.SubtitleGrid.Columns.Add(new DataGridTemplateColumn
+        var columnManager = new TableViewColumnManager(vm.SubtitleGrid);
+        vm.SubtitleGridColumnManager = columnManager;
+
+        columnManager.Add(new SeTableViewColumn
         {
             Header = Se.Language.General.NumberSymbol,
             Tag = SubtitleGridColumnKeys.Number,
-            Width = new DataGridLength(50),
+            Width = new GridLength(50),
             MinWidth = 40,
-            CellTheme = UiUtil.DataGridNoBorderCellTheme,
+            CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
             CellTemplate = new FuncDataTemplate<SubtitleLineViewModel>((value, namescope) =>
                 new StackPanel
                 {
@@ -178,18 +224,21 @@ public static partial class InitListViewAndEditBox
                             IsHitTestVisible = false,
                             [!Visual.OpacityProperty] = new Binding(nameof(SubtitleLineViewModel.Bookmark)) { Converter = nullToOpacityConverter },
                          },
-                         UiUtil.MakeLabel().WithBindText(value, new Binding(nameof(SubtitleLineViewModel.Number)))
+                         // NumberDisplay, not Number: a reference-only row is not part of the
+                         // working subtitle and shows no number (#13449).
+                         UiUtil.MakeLabel().WithBindText(value, new Binding(nameof(SubtitleLineViewModel.NumberDisplay)))
                     }
                 })
         });
 
-        var startColumn = new DataGridTemplateColumn
+        var startColumn = new SeTableViewColumn
         {
             Header = Se.Language.General.Show,
             Tag = SubtitleGridColumnKeys.Start,
-            Width = new DataGridLength(120),
+            Width = new GridLength(120),
             MinWidth = 100,
-            CellTheme = UiUtil.DataGridNoBorderCellTheme,
+            CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
             CellTemplate = new FuncDataTemplate<SubtitleLineViewModel>((value, nameScope) =>
             {
                 var border = new Border
@@ -206,20 +255,21 @@ public static partial class InitListViewAndEditBox
                 return border;
             }),
         };
-        vm.SubtitleGrid.Columns.Add(startColumn);
-        startColumn.Bind(DataGridColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnStartTime))
+        columnManager.Add(startColumn);
+        startColumn.Bind(SeTableViewColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnStartTime))
         {
             Mode = BindingMode.OneWay,
             Source = vm
         });
 
-        var hideColumn = new DataGridTemplateColumn
+        var hideColumn = new SeTableViewColumn
         {
             Header = Se.Language.General.Hide,
             Tag = SubtitleGridColumnKeys.End,
-            Width = new DataGridLength(120),
+            Width = new GridLength(120),
             MinWidth = 100,
-            CellTheme = UiUtil.DataGridNoBorderCellTheme,
+            CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
             CellTemplate = new FuncDataTemplate<SubtitleLineViewModel>((value, nameScope) =>
             {
                 var border = new Border
@@ -236,20 +286,23 @@ public static partial class InitListViewAndEditBox
                 return border;
             }),
         };
-        vm.SubtitleGrid.Columns.Add(hideColumn);
-        hideColumn.Bind(DataGridColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnEndTime))
+        columnManager.Add(hideColumn);
+        hideColumn.Bind(SeTableViewColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnEndTime))
         {
             Mode = BindingMode.OneWay,
             Source = vm
         });
 
-        var columnDuration = new DataGridTemplateColumn
+        // The DataGrid sized this column to content (Auto); TableView's layout treats
+        // Auto as star, so use a fixed width that fits the "8:88,888" duration format.
+        var columnDuration = new SeTableViewColumn
         {
             Header = Se.Language.General.Duration,
             Tag = SubtitleGridColumnKeys.Duration,
-            Width = new DataGridLength(1, DataGridLengthUnitType.Auto),
+            Width = new GridLength(90),
             MinWidth = 60,
-            CellTheme = UiUtil.DataGridNoBorderCellTheme,
+            CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
             CellTemplate = new FuncDataTemplate<SubtitleLineViewModel>((value, nameScope) =>
             {
                 var border = new Border
@@ -269,20 +322,21 @@ public static partial class InitListViewAndEditBox
                 return border;
             })
         };
-        vm.SubtitleGrid.Columns.Add(columnDuration);
-        columnDuration.Bind(DataGridTextColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnDuration))
+        columnManager.Add(columnDuration);
+        columnDuration.Bind(SeTableViewColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnDuration))
         {
             Mode = BindingMode.OneWay,
             Source = vm,
         });
 
-        vm.SubtitleGrid.Columns.Add(new DataGridTemplateColumn
+        columnManager.Add(new SeTableViewColumn
         {
             Header = Se.Language.General.Text,
             Tag = SubtitleGridColumnKeys.Text,
-            Width = new DataGridLength(1, DataGridLengthUnitType.Star),
+            Width = new GridLength(1, GridUnitType.Star),
             MinWidth = 100,
-            CellTheme = UiUtil.DataGridNoBorderCellTheme,
+            CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
             CellTemplate = new FuncDataTemplate<SubtitleLineViewModel>((value, nameScope) =>
             {
                 var border = new Border
@@ -312,13 +366,14 @@ public static partial class InitListViewAndEditBox
             })
         });
 
-        var originalColumn = new DataGridTemplateColumn
+        var originalColumn = new SeTableViewColumn
         {
             Header = Se.Language.General.OriginalText,
             Tag = SubtitleGridColumnKeys.OriginalText,
-            Width = new DataGridLength(1, DataGridLengthUnitType.Star), // Stretch text column
+            Width = new GridLength(1, GridUnitType.Star), // Stretch text column
             MinWidth = 100,
-            CellTheme = UiUtil.DataGridNoBorderCellTheme,
+            CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
             CellTemplate = new FuncDataTemplate<SubtitleLineViewModel>((value, nameScope) =>
             {
                 var border = new Border
@@ -346,20 +401,21 @@ public static partial class InitListViewAndEditBox
                 return border;
             })
         };
-        originalColumn.Bind(DataGridTextColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnOriginalText))
+        originalColumn.Bind(SeTableViewColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnOriginalText))
         {
             Mode = BindingMode.OneWay,
             Source = vm
         });
-        vm.SubtitleGrid.Columns.Add(originalColumn);
+        columnManager.Add(originalColumn);
 
-        var styleColumn = new DataGridTextColumn
+        var styleColumn = new SeTableViewColumn
         {
             Header = Se.Language.General.Style,
             Tag = SubtitleGridColumnKeys.Style,
             Binding = new Binding(nameof(SubtitleLineViewModel.Style)),
-            Width = new DataGridLength(120),
-            CellTheme = UiUtil.DataGridNoBorderCellTheme,
+            Width = new GridLength(120),
+            CellTheme = UiUtil.TableViewCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
         };
 
         var styleColumnMultiBinding = new MultiBinding
@@ -367,19 +423,42 @@ public static partial class InitListViewAndEditBox
             Converter = booleanAndConverter,
             Bindings =
             {
-                new Binding(nameof(vm.HasFormatStyle)) { Source = vm, Mode = BindingMode.OneWay },
+                new Binding(nameof(vm.IsFormatAssaOrSsa)) { Source = vm, Mode = BindingMode.OneWay },
                 new Binding(nameof(vm.ShowColumnStyle)) { Source = vm, Mode = BindingMode.OneWay }
             }
         };
-        styleColumn.Bind(DataGridColumn.IsVisibleProperty, styleColumnMultiBinding);
-        vm.SubtitleGrid.Columns.Add(styleColumn);
+        styleColumn.Bind(SeTableViewColumn.IsVisibleProperty, styleColumnMultiBinding);
+        columnManager.Add(styleColumn);
 
-        var columnGap = new DataGridTemplateColumn
+        // WebVTT has styles too, but as cue classes inside the cue text instead of a field on
+        // the line - so it needs a column of its own, shown in place of the ASSA one.
+        var webVttStyleColumn = new SeTableViewColumn
+        {
+            Header = Se.Language.General.Style,
+            Tag = SubtitleGridColumnKeys.WebVttStyle,
+            Binding = new Binding(nameof(SubtitleLineViewModel.WebVttStyle)) { Mode = BindingMode.OneWay },
+            Width = new GridLength(120),
+            CellTheme = UiUtil.TableViewCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
+        };
+        webVttStyleColumn.Bind(SeTableViewColumn.IsVisibleProperty, new MultiBinding
+        {
+            Converter = booleanAndConverter,
+            Bindings =
+            {
+                new Binding(nameof(vm.IsFormatWebVtt)) { Source = vm, Mode = BindingMode.OneWay },
+                new Binding(nameof(vm.ShowColumnStyle)) { Source = vm, Mode = BindingMode.OneWay }
+            }
+        });
+        columnManager.Add(webVttStyleColumn);
+
+        var columnGap = new SeTableViewColumn
         {
             Header = Se.Language.General.Gap,
             Tag = SubtitleGridColumnKeys.Gap,
-            Width = new DataGridLength(100),
-            CellTheme = UiUtil.DataGridNoBorderCellTheme,
+            Width = new GridLength(100),
+            CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
             CellTemplate = new FuncDataTemplate<SubtitleLineViewModel>((value, nameScope) =>
             {
                 var border = new Border
@@ -399,34 +478,62 @@ public static partial class InitListViewAndEditBox
                 return border;
             })
         };
-        columnGap.Bind(DataGridTextColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnGap))
+        columnGap.Bind(SeTableViewColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnGap))
         {
             Mode = BindingMode.OneWay,
             Source = vm,
         });
-        vm.SubtitleGrid.Columns.Add(columnGap);
+        columnManager.Add(columnGap);
 
-        var actorColumn = new DataGridTextColumn
+        var actorColumn = new SeTableViewColumn
         {
             Header = Se.Language.General.Actor,
             Tag = SubtitleGridColumnKeys.Actor,
             Binding = new Binding(nameof(SubtitleLineViewModel.Actor)) { Mode = BindingMode.OneWay },
-            Width = new DataGridLength(120),
-            CellTheme = UiUtil.DataGridNoBorderCellTheme,
+            Width = new GridLength(120),
+            CellTheme = UiUtil.TableViewCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
         };
-        vm.SubtitleGrid.Columns.Add(actorColumn);
-        actorColumn.Bind(DataGridColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnActor))
+        columnManager.Add(actorColumn);
+        actorColumn.Bind(SeTableViewColumn.IsVisibleProperty, new MultiBinding
         {
-            Mode = BindingMode.OneWay,
-            Source = vm,
+            Converter = booleanAndConverter,
+            Bindings =
+            {
+                new Binding(nameof(vm.IsFormatWebVtt)) { Source = vm, Mode = BindingMode.OneWay, Converter = inverseBooleanConverter },
+                new Binding(nameof(vm.ShowColumnActor)) { Source = vm, Mode = BindingMode.OneWay },
+            }
         });
 
-        var cpsColumn = new DataGridTemplateColumn
+        // WebVTT's counterpart of the actor is the "<v Name>" voice inside the cue text; it
+        // replaces the Actor column while a WebVTT file is open, sharing its show/hide toggle.
+        var webVttVoiceColumn = new SeTableViewColumn
+        {
+            Header = Se.Language.File.WebVtt.Voice,
+            Tag = SubtitleGridColumnKeys.WebVttVoice,
+            Binding = new Binding(nameof(SubtitleLineViewModel.WebVttVoice)) { Mode = BindingMode.OneWay },
+            Width = new GridLength(120),
+            CellTheme = UiUtil.TableViewCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
+        };
+        columnManager.Add(webVttVoiceColumn);
+        webVttVoiceColumn.Bind(SeTableViewColumn.IsVisibleProperty, new MultiBinding
+        {
+            Converter = booleanAndConverter,
+            Bindings =
+            {
+                new Binding(nameof(vm.IsFormatWebVtt)) { Source = vm, Mode = BindingMode.OneWay },
+                new Binding(nameof(vm.ShowColumnActor)) { Source = vm, Mode = BindingMode.OneWay },
+            }
+        });
+
+        var cpsColumn = new SeTableViewColumn
         {
             Header = Se.Language.General.Cps,
             Tag = SubtitleGridColumnKeys.Cps,
-            Width = new DataGridLength(100),
-            CellTheme = UiUtil.DataGridNoBorderCellTheme,
+            Width = new GridLength(100),
+            CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
             CellTemplate = new FuncDataTemplate<SubtitleLineViewModel>((value, nameScope) =>
             {
                 var border = new Border
@@ -446,19 +553,20 @@ public static partial class InitListViewAndEditBox
                 return border;
             })
         };
-        vm.SubtitleGrid.Columns.Add(cpsColumn);
-        cpsColumn.Bind(DataGridColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnCps))
+        columnManager.Add(cpsColumn);
+        cpsColumn.Bind(SeTableViewColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnCps))
         {
             Mode = BindingMode.OneWay,
             Source = vm,
         });
         
-        var wpmColumn = new DataGridTemplateColumn
+        var wpmColumn = new SeTableViewColumn
         {
             Header = Se.Language.General.Wpm,
             Tag = SubtitleGridColumnKeys.Wpm,
-            Width = new DataGridLength(100),
-            CellTheme = UiUtil.DataGridNoBorderCellTheme,
+            Width = new GridLength(100),
+            CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
             CellTemplate = new FuncDataTemplate<SubtitleLineViewModel>((value, nameScope) =>
             {
                 var border = new Border
@@ -478,19 +586,20 @@ public static partial class InitListViewAndEditBox
                 return border;
             })
         };
-        vm.SubtitleGrid.Columns.Add(wpmColumn);
-        wpmColumn.Bind(DataGridColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnWpm))
+        columnManager.Add(wpmColumn);
+        wpmColumn.Bind(SeTableViewColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnWpm))
         {
             Mode = BindingMode.OneWay,
             Source = vm,
         });
         
-        var pixelWidthColumn = new DataGridTemplateColumn
+        var pixelWidthColumn = new SeTableViewColumn
         {
             Header = Se.Language.General.PixelWidth,
             Tag = SubtitleGridColumnKeys.PixelWidth,
-            Width = new DataGridLength(100),
-            CellTheme = UiUtil.DataGridNoBorderCellTheme,
+            Width = new GridLength(100),
+            CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
             CellTemplate = new FuncDataTemplate<SubtitleLineViewModel>((value, nameScope) =>
             {
                 var textBlock = new TextBlock
@@ -502,64 +611,44 @@ public static partial class InitListViewAndEditBox
                 return textBlock;
             })
         };
-        vm.SubtitleGrid.Columns.Add(pixelWidthColumn);
-        pixelWidthColumn.Bind(DataGridColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnPixelWidth))
+        columnManager.Add(pixelWidthColumn);
+        pixelWidthColumn.Bind(SeTableViewColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnPixelWidth))
         {
             Mode = BindingMode.OneWay,
             Source = vm,
         });
 
-        var layerColumn = new DataGridTextColumn
+        var layerColumn = new SeTableViewColumn
         {
             Header = Se.Language.General.Layer,
             Tag = SubtitleGridColumnKeys.Layer,
             Binding = new Binding(nameof(SubtitleLineViewModel.Layer)),
-            Width = new DataGridLength(23),
-            CellTheme = UiUtil.DataGridNoBorderCellTheme,
+            Width = new GridLength(23),
+            CellTheme = UiUtil.TableViewCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
         };
-        vm.SubtitleGrid.Columns.Add(layerColumn);
-        layerColumn.Bind(DataGridColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnLayer))
+        columnManager.Add(layerColumn);
+        layerColumn.Bind(SeTableViewColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnLayer))
         {
             Mode = BindingMode.OneWay,
             Source = vm,
         });
 
-        // A narrow empty trailing column that reserves space for the DataGrid's overlay
-        // vertical scrollbar, so the bar covers this gutter instead of the outermost text
-        // column (issue #12351). This is the same "give the scrollbar its own space"
-        // approach used for the shortcut key column in the Shortcuts window; a trailing
-        // column is used here (rather than a fixed cell margin) because right to left mode
-        // moves the scrollbar to the other side and mirrors the grid, so the gutter follows
-        // it automatically in both directions without leaving a gap between the Text and
-        // Original columns in translation mode. Kept out of AutoFitColumns so it stays this
-        // fixed width, and excluded from width persistence as a non-stretchy layout helper.
-        vm.SubtitleGrid.Columns.Add(new DataGridTemplateColumn
-        {
-            Tag = SubtitleGridColumnKeys.ScrollbarGutter,
-            Header = string.Empty,
-            Width = new DataGridLength(20, DataGridLengthUnitType.Pixel),
-            MinWidth = 0,
-            CanUserResize = false,
-            CanUserReorder = false,
-            CellTheme = UiUtil.DataGridNoBorderCellTheme,
-            CellTemplate = new FuncDataTemplate<SubtitleLineViewModel>((value, nameScope) => new Border()),
-        });
-
-        RestoreSubtitleGridColumnWidths(vm.SubtitleGrid);
+        RestoreSubtitleGridColumnWidths(columnManager);
 
         vm.SubtitleGrid.DataContext = vm.Subtitles;
         vm.SubtitleGrid.SelectionChanged += vm.SubtitleGrid_SelectionChanged;
 
 
         // Set up two-way binding for SelectedItem
-        vm.SubtitleGrid[!DataGrid.SelectedItemProperty] = new Binding(nameof(vm.SelectedSubtitle))
+        vm.SubtitleGrid[!TableView.SelectedItemProperty] = new Binding(nameof(vm.SelectedSubtitle))
         {
             Mode = BindingMode.TwoWay,
             Source = vm,
         };
 
         // Set up two-way binding for SelectedIndex
-        vm.SubtitleGrid[!DataGrid.SelectedIndexProperty] = new Binding(nameof(vm.SelectedSubtitleIndex))
+        vm.SubtitleGrid[!TableView.SelectedIndexProperty] = new Binding(nameof(vm.SelectedSubtitleIndex))
         {
             Mode = BindingMode.TwoWay,
             Source = vm,
@@ -594,6 +683,38 @@ public static partial class InitListViewAndEditBox
         var sepAssa = new Separator { DataContext = vm };
         sepAssa.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.AreAssaContentMenuItemsVisible)));
         flyout.Items.Add(sepAssa);
+
+        // WebVTT counterpart of the ASSA styles/actors block: cue classes and <v> voices.
+        var webVttStylesMenuItem = new MenuItem
+        {
+            Header = Se.Language.General.Styles,
+            DataContext = vm,
+            Command = vm.SetWebVttStylesForSelectedLinesCommand,
+        };
+        webVttStylesMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.AreWebVttContentMenuItemsVisible)) { Mode = BindingMode.TwoWay });
+        flyout.Items.Add(webVttStylesMenuItem);
+
+        var webVttVoicesMenuItem = new MenuItem
+        {
+            Header = Se.Language.File.WebVtt.Voices,
+            DataContext = vm,
+        };
+        webVttVoicesMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.AreWebVttContentMenuItemsVisible)) { Mode = BindingMode.TwoWay });
+        flyout.Items.Add(webVttVoicesMenuItem);
+        vm.MenuItemWebVttVoices = webVttVoicesMenuItem;
+
+        var webVttBrowserPreviewMenuItem = new MenuItem
+        {
+            Header = Se.Language.File.WebVtt.BrowserPreview,
+            DataContext = vm,
+            Command = vm.ShowWebVttBrowserPreviewCommand,
+        };
+        webVttBrowserPreviewMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsWebVttBrowserPreviewVisible)) { Mode = BindingMode.TwoWay });
+        flyout.Items.Add(webVttBrowserPreviewMenuItem);
+
+        var sepWebVtt = new Separator { DataContext = vm };
+        sepWebVtt.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.AreWebVttContentMenuItemsVisible)));
+        flyout.Items.Add(sepWebVtt);
 
         var showStartTimeMenuItem = new MenuItem
         {
@@ -682,7 +803,8 @@ public static partial class InitListViewAndEditBox
 
         var showActorMenuItem = new MenuItem
         {
-            Header = Se.Language.General.ShowActorColumn,
+            // "Actor" for most formats, "Voice" for WebVTT - the two columns share this toggle.
+            [!MenuItem.HeaderProperty] = new Binding(nameof(vm.ShowActorColumnMenuHeader)),
             Command = vm.ToggleShowColumnActorCommand,
             DataContext = vm,
             Icon = new Icon
@@ -780,6 +902,23 @@ public static partial class InitListViewAndEditBox
         insertSubtitleFileAfterLineMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsInsertSubtitleFileAfterLineVisible)));
         insertSubtitleFileAfterLineMenuItem.Command = vm.InsertSubtitleFileAfterThisLineCommand;
         flyout.Items.Add(insertSubtitleFileAfterLineMenuItem);
+
+        // SE4 had "Copy as text to clipboard" right here - without it the copy commands are only
+        // reachable via shortcuts, and the text-only ones have no default shortcut at all
+        var copyToClipboardMenuItem = new MenuItem { Header = Se.Language.General.CopyToClipboard, DataContext = vm };
+        copyToClipboardMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridDataMenuVisible)));
+        copyToClipboardMenuItem.Command = vm.SubtitleGridCopyCommand;
+        flyout.Items.Add(copyToClipboardMenuItem);
+
+        var copyTextToClipboardMenuItem = new MenuItem { Header = Se.Language.General.CopyTextToClipboard, DataContext = vm };
+        copyTextToClipboardMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridDataMenuVisible)));
+        copyTextToClipboardMenuItem.Command = vm.CopyTextToClipboardCommand;
+        flyout.Items.Add(copyTextToClipboardMenuItem);
+
+        var copyOriginalTextToClipboardMenuItem = new MenuItem { Header = Se.Language.Options.Shortcuts.CopyTextFromOriginalToClipboard, DataContext = vm };
+        copyOriginalTextToClipboardMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.ShowColumnOriginalText)));
+        copyOriginalTextToClipboardMenuItem.Command = vm.CopyTextFromOriginalToClipboardCommand;
+        flyout.Items.Add(copyOriginalTextToClipboardMenuItem);
 
         var copyOriginal = new MenuItem { Header = Se.Language.Main.CopyTextFromOriginalToCurrent, Command = vm.ColumnCopyTextFromOriginalToCurrentCommand };
         copyOriginal.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.ShowColumnOriginalText)));
@@ -1005,6 +1144,12 @@ public static partial class InitListViewAndEditBox
                 },
                 new MenuItem
                 {
+                    Header = Se.Language.Main.Menu.AiReview,
+                    Command = vm.AiReviewSelectedLinesCommand,
+                    DataContext = vm,
+                },
+                new MenuItem
+                {
                     Header = Se.Language.Main.Menu.MultipleReplace,
                     Command = vm.MultipleReplaceSelectedLinesCommand,
                     DataContext = vm,
@@ -1013,6 +1158,12 @@ public static partial class InitListViewAndEditBox
                 {
                     Header = Se.Language.Main.Menu.BeautifyTimeCodes,
                     Command = vm.ShowBeautifyTimeCodesSelectedLinesCommand,
+                    DataContext = vm,
+                },
+                new MenuItem
+                {
+                    Header = Se.Language.Main.Menu.ShowSelectedLinesEarlierLater,
+                    Command = vm.ShowSyncAdjustAllTimesSelectedLinesCommand,
                     DataContext = vm,
                 },
                 new MenuItem
@@ -1106,6 +1257,9 @@ public static partial class InitListViewAndEditBox
 
         // Set the ContextFlyout on the drop host so right-clicks on empty space also show the menu
         dropHost.ContextFlyout = flyout;
+        // In undocked mode the tool windows are topmost while SE is active (#11971), which
+        // covers this context menu and its cascaded submenus (#13325).
+        WindowService.SuspendUndockedTopmostWhileOpen(flyout);
         dropHost.AddHandler(InputElement.PointerPressedEvent, vm.SubtitleGrid_PointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
         dropHost.AddHandler(InputElement.PointerReleasedEvent, vm.SubtitleGrid_PointerReleased, RoutingStrategies.Tunnel, handledEventsToo: true);
         dropHost.AddHandler(InputElement.PointerMovedEvent, vm.SubtitleGrid_PointerMoved, RoutingStrategies.Tunnel, handledEventsToo: true);
@@ -1113,9 +1267,13 @@ public static partial class InitListViewAndEditBox
         // Edit area - restructured with time controls on left, multiline text on right
         var editGrid = new Grid
         {
-            Margin = new Thickness(10),
+            Margin = new Thickness(EditGridMargin),
+            MinHeight = EditGridMinimumHeight,
             ColumnDefinitions = new ColumnDefinitions("Auto, *"), // Two columns: left for time controls, right for text
-            RowDefinitions = new RowDefinitions("Auto")
+            // Star so the section grows when the user drags the splitter above it (#10271):
+            // with Auto, the extra pixel height from the splitter only added dead space below
+            // the fixed-height text box.
+            RowDefinitions = new RowDefinitions("*")
         };
 
         // Left panel for time controls
@@ -1160,7 +1318,7 @@ public static partial class InitListViewAndEditBox
         {
             ToolTip.SetTip(timeCodeUpDown, Se.Language.General.Show);
         }
-        timeCodeUpDown.Bind(TimeCodeUpDown.IsEnabledProperty, new Binding(nameof(vm.LockTimeCodes)) { Mode = BindingMode.TwoWay, Converter = inverseBooleanConverter });
+        timeCodeUpDown.Bind(TimeCodeUpDown.IsEnabledProperty, new Binding(nameof(vm.AreTimeCodesEditable)) { Mode = BindingMode.OneWay });
         startTimePanel.Children.Add(timeCodeUpDown);
         timeCodeUpDown.ValueChanged += vm.StartTimeChanged;
         timeControlsPanel.Children.Add(startTimePanel);
@@ -1192,7 +1350,7 @@ public static partial class InitListViewAndEditBox
         {
             ToolTip.SetTip(endCodeUpDown, Se.Language.General.Hide);
         }
-        endCodeUpDown.Bind(TimeCodeUpDown.IsEnabledProperty, new Binding(nameof(vm.LockTimeCodes)) { Mode = BindingMode.TwoWay, Converter = inverseBooleanConverter });
+        endCodeUpDown.Bind(TimeCodeUpDown.IsEnabledProperty, new Binding(nameof(vm.AreTimeCodesEditable)) { Mode = BindingMode.OneWay });
         endTimePanel.Children.Add(endCodeUpDown);
         endCodeUpDown.ValueChanged += vm.EndTimeChanged;
         timeControlsPanel.Children.Add(endTimePanel);
@@ -1224,7 +1382,7 @@ public static partial class InitListViewAndEditBox
         {
             ToolTip.SetTip(durationUpDown, Se.Language.General.Duration);
         }
-        durationUpDown.Bind(SecondsUpDown.IsEnabledProperty, new Binding(nameof(vm.LockTimeCodes)) { Mode = BindingMode.TwoWay, Converter = inverseBooleanConverter });
+        durationUpDown.Bind(SecondsUpDown.IsEnabledProperty, new Binding(nameof(vm.AreTimeCodesEditable)) { Mode = BindingMode.OneWay });
         durationUpDown.ValueChanged += (_, _) => vm.DurationChanged();
         durationPanel.Children.Add(durationUpDown);
         timeControlsPanel.Children.Add(durationPanel);
@@ -1418,6 +1576,8 @@ public static partial class InitListViewAndEditBox
         };
         textEditor.ContextFlyout = flyoutTextBox;
         flyoutTextBox.Opening += vm.TextBoxContextOpening;
+        // Keep the undocked tool windows from covering the text box context menu (#13325).
+        WindowService.SuspendUndockedTopmostWhileOpen(flyoutTextBox);
 
         var cutMenuItem = new MenuItem { Header = Se.Language.General.Cut };
         cutMenuItem.Command = vm.TextBoxCutCommand;
@@ -1472,6 +1632,38 @@ public static partial class InitListViewAndEditBox
 
         flyoutTextBox.Items.Add(new Separator());
 
+        // Casing was shortcut-only, which made people think it had been removed (#13093).
+        var menuItemTextBoxCasing = new MenuItem { Header = Se.Language.General.Casing };
+        menuItemTextBoxCasing.Items.Add(new MenuItem
+        {
+            Header = Se.Language.General.ToggleCasing,
+            Command = vm.ToggleCasingCommand,
+        });
+        menuItemTextBoxCasing.Items.Add(new MenuItem
+        {
+            Header = Se.Language.General.SelectionToUppercase,
+            Command = vm.SelectionToUpperCommand,
+        });
+        menuItemTextBoxCasing.Items.Add(new MenuItem
+        {
+            Header = Se.Language.General.SelectionToLowercase,
+            Command = vm.SelectionToLowerCommand,
+        });
+        menuItemTextBoxCasing.Items.Add(new MenuItem
+        {
+            Header = Se.Language.General.SelectionToSentenceCase,
+            Command = vm.SelectionToSentenceCaseCommand,
+        });
+        menuItemTextBoxCasing.Items.Add(new Separator());
+        menuItemTextBoxCasing.Items.Add(new MenuItem
+        {
+            Header = Se.Language.Main.Menu.ChangeCasing,
+            Command = vm.ChangeCasingSelectedLinesCommand,
+        });
+        flyoutTextBox.Items.Add(menuItemTextBoxCasing);
+
+        flyoutTextBox.Items.Add(new Separator());
+
         var unicodeSymbols = Se.Settings.Tools.UnicodeSymbolsToInsert.Split(';', System.StringSplitOptions.RemoveEmptyEntries);
         if (unicodeSymbols.Length > 0)
         {
@@ -1504,11 +1696,17 @@ public static partial class InitListViewAndEditBox
         // translation mode (original text)
         var textLabelOriginal = new TextBlock
         {
-            Text = Se.Language.General.OriginalText,
             FontWeight = FontWeight.Bold,
             Margin = new Thickness(3, 0, 0, 0),
         };
         textEditGrid.Add(textLabelOriginal, 0, 1);
+        // The label doubles as the read-only indicator - it says "Original text (read-only)"
+        // when the original was opened as a reference (issue #13449).
+        textLabelOriginal.Bind(TextBlock.TextProperty, new Binding(nameof(vm.OriginalTextLabel))
+        {
+            Mode = BindingMode.OneWay,
+            Source = vm
+        });
         textLabelOriginal.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.ShowColumnOriginalText))
         {
             Mode = BindingMode.OneWay,
@@ -1582,14 +1780,8 @@ public static partial class InitListViewAndEditBox
             Mode = BindingMode.OneWay,
             Source = vm
         });
-        // add label to panelSingleLineLengthsOriginal
-        var singleLineLengthLabel = new TextBlock
-        {
-            Text = "Line lengths: x/x",
-            FontWeight = FontWeight.Bold,
-            Margin = new Thickness(0, 0, 5, 0)
-        };
-        panelSingleLineLengthsOriginal.Children.Add(singleLineLengthLabel);
+        // no seed label here - SubtitleTextInfoHelper.FillLineLengthPanel writes the
+        // "Single line length" label into index 0 itself (and reuses the text blocks)
 
         var buttonPanel = new StackPanel
         {
@@ -1600,61 +1792,37 @@ public static partial class InitListViewAndEditBox
 
         if (Se.Settings.Appearance.TextBoxShowButtonAutoBreak)
         {
-            var autoBreakButton = UiUtil.MakeButton(vm.AutoBreakCommand, IconNames.ScaleBalance);
-            if (Se.Settings.Appearance.ShowHints)
-            {
-                ToolTip.SetTip(autoBreakButton, Se.Language.Main.AutoBreakHint);
-            }
+            var autoBreakButton = UiUtil.MakeButton(vm.AutoBreakCommand, IconNames.ScaleBalance, Se.Language.Main.AutoBreakHint);
             buttonPanel.Children.Add(autoBreakButton);
         }
 
         if (Se.Settings.Appearance.TextBoxShowButtonUnbreak)
         {
-            var unbreakButton = UiUtil.MakeButton(vm.UnbreakCommand, IconNames.SetMerge);
-            if (Se.Settings.Appearance.ShowHints)
-            {
-                ToolTip.SetTip(unbreakButton, Se.Language.Main.UnbreakHint);
-            }
+            var unbreakButton = UiUtil.MakeButton(vm.UnbreakCommand, IconNames.SetMerge, Se.Language.Main.UnbreakHint);
             buttonPanel.Children.Add(unbreakButton);
         }
 
         if (Se.Settings.Appearance.TextBoxShowButtonItalic)
         {
-            var italicButton = UiUtil.MakeButton(vm.ToggleLinesItalicOrSelectedTextCommand, IconNames.Italic);
-            if (Se.Settings.Appearance.ShowHints)
-            {
-                ToolTip.SetTip(italicButton, Se.Language.Main.ItalicHint);
-            }
+            var italicButton = UiUtil.MakeButton(vm.ToggleLinesItalicOrSelectedTextCommand, IconNames.Italic, Se.Language.Main.ItalicHint);
             buttonPanel.Children.Add(italicButton);
         }
 
         if (Se.Settings.Appearance.TextBoxShowButtonColor)
         {
-            var colorButton = UiUtil.MakeButton(vm.ShowColorPickerCommand, IconNames.Palette);
-            if (Se.Settings.Appearance.ShowHints)
-            {
-                ToolTip.SetTip(colorButton, Se.Language.Main.ColorHint);
-            }
+            var colorButton = UiUtil.MakeButton(vm.ShowColorPickerCommand, IconNames.Palette, Se.Language.Main.ColorHint);
             buttonPanel.Children.Add(colorButton);
         }
 
         if (Se.Settings.Appearance.TextBoxShowButtonRemoveFormatting)
         {
-            var removeFormattingButton = UiUtil.MakeButton(vm.RemoveFormattingAllCommand, IconNames.FormatClear);
-            if (Se.Settings.Appearance.ShowHints)
-            {
-                ToolTip.SetTip(removeFormattingButton, Se.Language.Main.RemoveFormattingHint);
-            }
+            var removeFormattingButton = UiUtil.MakeButton(vm.RemoveFormattingAllCommand, IconNames.FormatClear, Se.Language.Main.RemoveFormattingHint);
             buttonPanel.Children.Add(removeFormattingButton);
         }
 
         if (Se.Settings.Appearance.TextBoxShowButtonAiAssistant)
         {
-            var aiAssistantButton = UiUtil.MakeButton(vm.ShowAiAssistantCommand, IconNames.Robot);
-            if (Se.Settings.Appearance.ShowHints)
-            {
-                ToolTip.SetTip(aiAssistantButton, Se.Language.Tools.AiAssistant.Hint);
-            }
+            var aiAssistantButton = UiUtil.MakeButton(vm.ShowAiAssistantCommand, IconNames.Robot, Se.Language.Tools.AiAssistant.Hint);
             buttonPanel.Children.Add(aiAssistantButton);
         }
 
@@ -1665,6 +1833,25 @@ public static partial class InitListViewAndEditBox
 
         Grid.SetRow(editGrid, 1);
         mainGrid.Children.Add(editGrid);
+
+        // GridSplitter overlaying the boundary between the subtitle grid (row 0) and the
+        // edit box (row 1) so the text box section can be resized vertically, like SE4
+        // (#10271). The splitter lives in the edit box's own row (no extra row - an extra
+        // row would shrink the grid viewport and break the grid scroll perf tests); with
+        // VerticalAlignment.Top it resizes the row above (grid, Star) and its own row
+        // (edit box, Auto -> becomes Pixel once the user drags). The negative top margin
+        // centers the 4 px strip on the boundary.
+        var editBoxSplitter = new GridSplitter
+        {
+            Height = UiUtil.SplitterWidthOrHeight,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, -UiUtil.SplitterWidthOrHeight / 2.0, 0, 0)
+        };
+        Grid.SetRow(editBoxSplitter, 1);
+        mainGrid.Children.Add(editBoxSplitter);
+
+        TrackEditSectionMinimumHeight(mainGrid, textEditGrid);
 
 
         textEditGrid.ColumnDefinitions[1].Bind(ColumnDefinition.WidthProperty, new Binding(nameof(vm.ShowColumnOriginalText))
@@ -1688,20 +1875,21 @@ public static partial class InitListViewAndEditBox
         public const string Text = "Text";
         public const string OriginalText = "OriginalText";
         public const string Style = "Style";
+        public const string WebVttStyle = "WebVttStyle";
         public const string Gap = "Gap";
         public const string Actor = "Actor";
+        public const string WebVttVoice = "WebVttVoice";
         public const string Cps = "Cps";
         public const string Wpm = "Wpm";
         public const string PixelWidth = "PixelWidth";
         public const string Layer = "Layer";
-        public const string ScrollbarGutter = "ScrollbarGutter";
     }
 
     // The stretchy text columns keep filling the window, so their width is never stored.
     private static bool IsStretchyColumn(string key)
         => key == SubtitleGridColumnKeys.Text || key == SubtitleGridColumnKeys.OriginalText;
 
-    private static void RestoreSubtitleGridColumnWidths(DataGrid grid)
+    private static void RestoreSubtitleGridColumnWidths(TableViewColumnManager columnManager)
     {
         var saved = Se.Settings.General.SubtitleGridColumnWidths;
         if (saved == null || saved.Count == 0)
@@ -1709,14 +1897,14 @@ public static partial class InitListViewAndEditBox
             return;
         }
 
-        foreach (var column in grid.Columns)
+        foreach (var column in System.Linq.Enumerable.OfType<SeTableViewColumn>(columnManager.Columns))
         {
             if (column.Tag is string key
                 && !IsStretchyColumn(key)
                 && saved.TryGetValue(key, out var width)
                 && width > 0)
             {
-                column.Width = new DataGridLength(width, DataGridLengthUnitType.Pixel);
+                column.Width = new GridLength(Math.Max(width, column.MinWidth));
             }
         }
     }
@@ -1724,19 +1912,18 @@ public static partial class InitListViewAndEditBox
     // Snapshot the current (actual) width of each fixed column so it can be restored on
     // the next launch. Called on exit. Hidden columns report ActualWidth 0 and are skipped,
     // keeping their previously stored width.
-    public static void SaveSubtitleGridColumnWidths(DataGrid? grid)
+    public static void SaveSubtitleGridColumnWidths(TableViewColumnManager? columnManager)
     {
-        if (grid == null)
+        if (columnManager == null)
         {
             return;
         }
 
         var widths = Se.Settings.General.SubtitleGridColumnWidths ??= new();
-        foreach (var column in grid.Columns)
+        foreach (var column in System.Linq.Enumerable.OfType<SeTableViewColumn>(columnManager.Columns))
         {
             if (column.Tag is string key
                 && !IsStretchyColumn(key)
-                && key != SubtitleGridColumnKeys.ScrollbarGutter
                 && column.ActualWidth > 0)
             {
                 widths[key] = column.ActualWidth;
@@ -1755,6 +1942,13 @@ public static partial class InitListViewAndEditBox
         };
         textBox[AutomationProperties.NameProperty] = Se.Language.General.Text;
 
+        // A reference-only row has no translation text to edit - typing would make it a real line.
+        textBox.Bind(TextBox.IsReadOnlyProperty, new Binding(nameof(vm.IsSelectedLineReferenceOnly))
+        {
+            Mode = BindingMode.OneWay,
+            Source = vm
+        });
+
         textBox.TextChanged += vm.SubtitleTextChanged;
         textBox.GotFocus += (_, _) => vm.SubtitleTextBoxGotFocus();
         textBox.AddHandler(InputElement.PointerPressedEvent, (_, e) => vm.StoreTextEditorPointerArgs(e), RoutingStrategies.Tunnel);
@@ -1770,6 +1964,44 @@ public static partial class InitListViewAndEditBox
     /// Makes the subtitle edit text box - a <see cref="SyntaxHighlightingTextBox"/> when
     /// "Color tags" is on, else a normal TextBox.
     /// </summary>
+
+    /// <summary>
+    /// Keeps the edit section's drag floor equal to what the section actually needs: the text
+    /// box's own minimum plus the "Text" header and the "Line length / Total chars" panel that
+    /// sit above and below it. Those two rows are Auto, so their height follows the UI font -
+    /// a hard-coded allowance goes stale as soon as the font size changes, and if it is too
+    /// small the text box (which cannot shrink past its MinHeight) overflows its row and draws
+    /// over the labels (#10271). Measured rather than stored: this is a derived layout fact,
+    /// not something a user should configure.
+    /// </summary>
+    private static void TrackEditSectionMinimumHeight(Grid mainGrid, Grid textEditGrid)
+    {
+        textEditGrid.LayoutUpdated += (_, _) =>
+        {
+            if (textEditGrid.RowDefinitions.Count < 3)
+            {
+                return;
+            }
+
+            var labelRows = textEditGrid.RowDefinitions[0].ActualHeight +
+                            textEditGrid.RowDefinitions[2].ActualHeight;
+            if (labelRows <= 0)
+            {
+                return;
+            }
+
+            var needed = SubtitleTextBoxMinimumHeight + labelRows + EditGridMargin * 2;
+            var row = mainGrid.RowDefinitions[1];
+
+            // Only react to a real change - assigning MinHeight re-triggers layout, so an
+            // unconditional write here would spin.
+            if (Math.Abs(row.MinHeight - needed) > 0.5)
+            {
+                row.MinHeight = needed;
+            }
+        };
+    }
+
     private static TextBox MakeSubtitleTextBox()
     {
         var appearance = Se.Settings.Appearance;
@@ -1780,8 +2012,9 @@ public static partial class InitListViewAndEditBox
 
         textBox.AcceptsReturn = true;
         textBox.TextWrapping = TextWrapping.Wrap;
-        textBox.MinHeight = 92;
-        textBox.Height = 92;
+        // MinHeight keeps the default layout; no fixed Height so the text box grows with the
+        // resizable edit section (#10271).
+        textBox.MinHeight = SubtitleTextBoxMinimumHeight;
         textBox.FontSize = appearance.SubtitleTextBoxFontSize;
         textBox.FontWeight = appearance.SubtitleTextBoxFontBold ? FontWeight.Bold : FontWeight.Normal;
         textBox.IsUndoEnabled = false;
@@ -1807,6 +2040,13 @@ public static partial class InitListViewAndEditBox
         {
             Mode = BindingMode.TwoWay
         };
+
+        // An original opened as a read-only reference must not be typed into (issue #13449).
+        textBox.Bind(TextBox.IsReadOnlyProperty, new Binding(nameof(vm.IsOriginalReadOnly))
+        {
+            Mode = BindingMode.OneWay,
+            Source = vm
+        });
 
         SetupMacContextMenuForTextBox(textBox, vm);
         MainHelpers.RightToLeftHelper.FollowContentDirection(textBox);

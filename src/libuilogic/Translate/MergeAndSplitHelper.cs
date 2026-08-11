@@ -1,10 +1,10 @@
 ﻿using System.Collections.ObjectModel;
 using System.Text;
 using System.Text.RegularExpressions;
-using Nikse.SubtitleEdit.Core.AutoTranslate;
+using Nikse.SubtitleEdit.UiLogic.AutoTranslate;
 using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Core.Settings;
-using Nikse.SubtitleEdit.Core.Translate;
+using Nikse.SubtitleEdit.UiLogic.Translate;
 
 namespace Nikse.SubtitleEdit.UiLogic.Translate;
 
@@ -18,6 +18,9 @@ public static partial class MergeAndSplitHelper
 
     public static bool MergeSplitProblems { get; set; }
 
+    /// <param name="applyRowUpdate">Optional marshaller invoked around every write to the
+    /// UI-bound rows. The Avalonia caller passes a dispatcher invoke so bindings update on
+    /// the UI thread; headless callers (seconv) omit it and rows are written directly.</param>
     public static async Task<int> MergeAndTranslateIfPossible(
         ObservableCollection<TranslateRow> rows,
         TranslationPair source,
@@ -25,8 +28,11 @@ public static partial class MergeAndSplitHelper
         int index,
         IAutoTranslator autoTranslator,
         bool forceSingleLineMode,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<Action>? applyRowUpdate = null)
     {
+        applyRowUpdate ??= action => action();
+
         var noSentenceEndingSource = IsNonMergeLanguage(source);
         var noSentenceEndingTarget = IsNonMergeLanguage(target);
 
@@ -46,10 +52,10 @@ public static partial class MergeAndSplitHelper
 
         if (forceSingleLineMode || mergeResult.ParagraphCount == 1)
         {
-            return ApplySingleLineTranslation(rows, index, formattingList, mergedTranslation);
+            return ApplySingleLineTranslation(rows, index, formattingList, mergedTranslation, applyRowUpdate);
         }
 
-        return TrySplitStrategies(rows, target, index, tempSubtitle, formattingList, mergeResult, mergedTranslation);
+        return TrySplitStrategies(rows, target, index, tempSubtitle, formattingList, mergeResult, mergedTranslation, applyRowUpdate);
     }
 
     /// <summary>
@@ -140,11 +146,12 @@ public static partial class MergeAndSplitHelper
         ObservableCollection<TranslateRow> rows,
         int index,
         List<Formatting> formattingList,
-        string mergedTranslation)
+        string mergedTranslation,
+        Action<Action> applyRowUpdate)
     {
         if (index < rows.Count && formattingList.Count > 0)
         {
-            rows[index].TranslatedText = formattingList[0].ReAddFormatting(mergedTranslation);
+            applyRowUpdate(() => rows[index].TranslatedText = formattingList[0].ReAddFormatting(mergedTranslation));
             return 1;
         }
         return 0;
@@ -157,7 +164,8 @@ public static partial class MergeAndSplitHelper
         TranslateRow[] tempSubtitle,
         List<Formatting> formattingList,
         MergeResult mergeResult,
-        string mergedTranslation)
+        string mergedTranslation,
+        Action<Action> applyRowUpdate)
     {
         var sourceTexts = tempSubtitle.Select(p => p.Text).ToList();
         var mergeCount = mergeResult.ParagraphCount;
@@ -167,11 +175,11 @@ public static partial class MergeAndSplitHelper
         if (IsSplitValid(splitResult, mergeCount, sourceTexts, index) &&
             HasMatchingPeriodCount(mergeResult.Text, mergedTranslation))
         {
-            return ApplySplitResult(rows, index, formattingList, splitResult);
+            return ApplySplitResult(rows, index, formattingList, splitResult, applyRowUpdate);
         }
 
         // Strategy 2: Split per number of lines
-        var lineCountResult = TrySplitByLineCount(rows, target, index, formattingList, mergeResult, mergedTranslation, splitResult);
+        var lineCountResult = TrySplitByLineCount(rows, target, index, formattingList, mergeResult, mergedTranslation, splitResult, applyRowUpdate);
         if (lineCountResult > 0)
         {
             return lineCountResult;
@@ -183,14 +191,14 @@ public static partial class MergeAndSplitHelper
         if (IsSplitValid(splitResult, mergeCount, sourceTexts, index) &&
             HasMatchingPeriodCount(mergeResult.Text, noPeriodsInNumbersTranslation))
         {
-            return ApplySplitResult(rows, index, formattingList, splitResult, restorePeriodPlaceholder: true);
+            return ApplySplitResult(rows, index, formattingList, splitResult, applyRowUpdate, restorePeriodPlaceholder: true);
         }
 
         // Strategy 4: Split by line ending chars (relaxed - no period count check)
         splitResult = SplitMultipleLines(mergeResult, mergedTranslation, target.Code);
         if (IsSplitValid(splitResult, mergeCount, sourceTexts, index))
         {
-            return ApplySplitResult(rows, index, formattingList, splitResult);
+            return ApplySplitResult(rows, index, formattingList, splitResult, applyRowUpdate);
         }
 
         MergeSplitProblems = true;
@@ -212,24 +220,28 @@ public static partial class MergeAndSplitHelper
         int index,
         List<Formatting> formattingList,
         List<string> splitResult,
+        Action<Action> applyRowUpdate,
         bool restorePeriodPlaceholder = false)
     {
         var linesTranslated = 0;
         var idx = 0;
 
-        foreach (var line in splitResult)
+        applyRowUpdate(() =>
         {
-            if (index >= rows.Count || idx >= formattingList.Count)
+            foreach (var line in splitResult)
             {
-                break;
-            }
+                if (index >= rows.Count || idx >= formattingList.Count)
+                {
+                    break;
+                }
 
-            var text = restorePeriodPlaceholder ? line.Replace(PeriodPlaceholder, '.') : line;
-            rows[index].TranslatedText = formattingList[idx].ReAddFormatting(text);
-            index++;
-            linesTranslated++;
-            idx++;
-        }
+                var text = restorePeriodPlaceholder ? line.Replace(PeriodPlaceholder, '.') : line;
+                rows[index].TranslatedText = formattingList[idx].ReAddFormatting(text);
+                index++;
+                linesTranslated++;
+                idx++;
+            }
+        });
 
         return linesTranslated;
     }
@@ -241,7 +253,8 @@ public static partial class MergeAndSplitHelper
         List<Formatting> formattingList,
         MergeResult mergeResult,
         string mergedTranslation,
-        List<string> splitResult)
+        List<string> splitResult,
+        Action<Action> applyRowUpdate)
     {
         var translatedLines = mergedTranslation.SplitToLines();
         if (translatedLines.Count != mergeResult.Text.SplitToLines().Count)
@@ -250,8 +263,10 @@ public static partial class MergeAndSplitHelper
         }
 
         var translatedLinesIdx = 0;
-        var currentRowIndex = index;
 
+        // Build the candidate result in a scratch list first - the rows are live and
+        // UI-bound, so nothing may be written to them until the split has validated.
+        var pending = new List<string>();
         foreach (var mergeItem in mergeResult.MergeResultItems)
         {
             var numberOfParagraphs = mergeItem.EndIndex - mergeItem.StartIndex + 1;
@@ -260,19 +275,24 @@ public static partial class MergeAndSplitHelper
             var translatedText = BuildTranslatedText(translatedLines, ref translatedLinesIdx, numberOfLines);
             var splitParts = TextSplit.SplitMulti(translatedText, numberOfParagraphs, target.TwoLetterIsoLanguageName);
 
-            for (var i = 0; i < splitParts.Count && currentRowIndex < rows.Count; i++)
+            for (var i = 0; i < splitParts.Count && pending.Count < rows.Count - index; i++)
             {
-                rows[currentRowIndex].TranslatedText = AutoBreakIfNeeded(splitParts[i], target.TwoLetterIsoLanguageName);
-                currentRowIndex++;
+                pending.Add(AutoBreakIfNeeded(splitParts[i], target.TwoLetterIsoLanguageName));
             }
         }
 
-        var totalProcessed = currentRowIndex - index;
-        if (totalProcessed == mergeResult.ParagraphCount &&
-            HasSameEmptyLines(rows.Skip(index).Take(totalProcessed).Select<TranslateRow, string>(p => p.TranslatedText).ToList(),
-                              rows.Skip(index).Take(totalProcessed).Select(p => p.Text).ToList(), 0))
+        if (pending.Count == mergeResult.ParagraphCount &&
+            HasSameEmptyLines(pending, rows.Skip(index).Take(pending.Count).Select(p => p.Text).ToList(), 0))
         {
-            return ApplyFormattingToExistingTranslations(rows, index, formattingList, mergeResult.ParagraphCount);
+            applyRowUpdate(() =>
+            {
+                for (var i = 0; i < pending.Count; i++)
+                {
+                    rows[index + i].TranslatedText = pending[i];
+                }
+            });
+
+            return ApplyFormattingToExistingTranslations(rows, index, formattingList, mergeResult.ParagraphCount, applyRowUpdate);
         }
 
         return 0;
@@ -308,21 +328,25 @@ public static partial class MergeAndSplitHelper
         ObservableCollection<TranslateRow> rows,
         int index,
         List<Formatting> formattingList,
-        int count)
+        int count,
+        Action<Action> applyRowUpdate)
     {
         var linesTranslated = 0;
 
-        for (var i = 0; i < count; i++)
+        applyRowUpdate(() =>
         {
-            if (i >= formattingList.Count || index >= rows.Count)
+            for (var i = 0; i < count; i++)
             {
-                break;
-            }
+                if (i >= formattingList.Count || index >= rows.Count)
+                {
+                    break;
+                }
 
-            rows[index].TranslatedText = formattingList[i].ReAddFormatting(rows[index].TranslatedText);
-            index++;
-            linesTranslated++;
-        }
+                rows[index].TranslatedText = formattingList[i].ReAddFormatting(rows[index].TranslatedText);
+                index++;
+                linesTranslated++;
+            }
+        });
 
         return linesTranslated;
     }
@@ -422,6 +446,12 @@ public static partial class MergeAndSplitHelper
         public TranslateRow PreviousRow { get; set; }
         public int StartIndex { get; }
 
+        // Memo for ExceedsMaxSize: result.Text gets a new string identity whenever a row is
+        // merged in, so its URL-encoded length is recomputed only then - not per visited row,
+        // which re-encoded the whole accumulated text every iteration (O(N^2) over a run).
+        public string? EncodedLengthTextRef { get; set; }
+        public int EncodedLengthValue { get; set; }
+
         public MergeContext(TranslateRow[] sourceSubtitle, int index)
         {
             StartIndex = index;
@@ -458,10 +488,43 @@ public static partial class MergeAndSplitHelper
         }
     }
 
+    // Same count as Utilities.CountTagInText(builder.ToString(), c) without materializing the
+    // whole accumulated text into a fresh string per merged row.
+    private static int CountChar(StringBuilder builder, char c)
+    {
+        var count = 0;
+        foreach (var chunk in builder.GetChunks())
+        {
+            foreach (var ch in chunk.Span)
+            {
+                if (ch == c)
+                {
+                    count++;
+                }
+            }
+        }
+
+        return count;
+    }
+
+    private static readonly int NewLineUrlEncodeLength = Utilities.UrlEncodeLength(Environment.NewLine);
+
     private static bool ExceedsMaxSize(MergeResult result, MergeContext context, TranslateRow currentRow, int maxTextSize)
     {
-        return context.CurrentItem != null &&
-               Utilities.UrlEncodeLength(result.Text + Environment.NewLine + currentRow.Text) > maxTextSize;
+        if (context.CurrentItem == null)
+        {
+            return false;
+        }
+
+        // UrlEncodeLength is a per-char sum, so summing the parts equals encoding the
+        // concatenation without building the throwaway "accumulated + row" string.
+        if (!ReferenceEquals(context.EncodedLengthTextRef, result.Text))
+        {
+            context.EncodedLengthTextRef = result.Text;
+            context.EncodedLengthValue = Utilities.UrlEncodeLength(result.Text);
+        }
+
+        return context.EncodedLengthValue + NewLineUrlEncodeLength + Utilities.UrlEncodeLength(currentRow.Text) > maxTextSize;
     }
 
     private static bool ProcessRow(MergeResult result, MergeContext context, TranslateRow currentRow, int rowIndex, bool noSentenceEndingSource)
@@ -527,7 +590,7 @@ public static partial class MergeAndSplitHelper
             context.CurrentItem.TextIndexStart = result.Text.Length;
             context.CurrentItem.TextIndexEnd = result.Text.Length;
             context.CurrentItem.EndChar = endChar;
-            context.CurrentItem.EndCharOccurrences = Utilities.CountTagInText(context.TextBuilder.ToString(), endChar);
+            context.CurrentItem.EndCharOccurrences = CountChar(context.TextBuilder, endChar);
             result.MergeResultItems.Add(context.CurrentItem);
         }
 
@@ -558,7 +621,7 @@ public static partial class MergeAndSplitHelper
             {
                 var endChar = result.Text[^1];
                 context.CurrentItem.EndChar = endChar;
-                context.CurrentItem.EndCharOccurrences = Utilities.CountTagInText(context.TextBuilder.ToString(), endChar);
+                context.CurrentItem.EndCharOccurrences = CountChar(context.TextBuilder, endChar);
                 context.CurrentItem.TextIndexEnd = result.Text.Length;
             }
 
@@ -618,7 +681,7 @@ public static partial class MergeAndSplitHelper
             {
                 var endChar = result.Text[^1];
                 context.CurrentItem.EndChar = endChar;
-                context.CurrentItem.EndCharOccurrences = Utilities.CountTagInText(context.TextBuilder.ToString(), endChar);
+                context.CurrentItem.EndCharOccurrences = CountChar(context.TextBuilder, endChar);
             }
         }
 

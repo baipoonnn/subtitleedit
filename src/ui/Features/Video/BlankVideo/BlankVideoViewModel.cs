@@ -21,6 +21,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Timers;
+using Nikse.SubtitleEdit.UiLogic.Media;
 
 namespace Nikse.SubtitleEdit.Features.Video.BlankVideo;
 
@@ -421,7 +422,7 @@ public partial class BlankVideoViewModel : ObservableObject
             path = Path.Combine(Path.GetDirectoryName(_subtitleFileName) ?? Se.Settings.Video.BurnIn.OutputFolder, videoFileName + ".mkv");
         }
 
-        videoFileName = await _fileHelper.PickSaveFile(Window!, ".mkv", path, Se.Language.Video.SaveVideoAsTitle);
+        videoFileName = await _fileHelper.PickSaveFile(Window!, ".mkv", path, Se.Language.General.SaveVideoAsVideoTitle);
         if (string.IsNullOrEmpty(videoFileName))
         {
             return;

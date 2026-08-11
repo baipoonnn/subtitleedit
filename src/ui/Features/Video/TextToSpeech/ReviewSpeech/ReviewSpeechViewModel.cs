@@ -31,6 +31,7 @@ using System.Threading.Tasks;
 using System.Timers;
 using ElevenLabsSettingsViewModel = Nikse.SubtitleEdit.Features.Video.TextToSpeech.ElevenLabsSettings.ElevenLabsSettingsViewModel;
 using Timer = System.Timers.Timer;
+using Nikse.SubtitleEdit.UiLogic.Media;
 
 namespace Nikse.SubtitleEdit.Features.Video.TextToSpeech.ReviewSpeech;
 
@@ -87,7 +88,7 @@ public partial class ReviewSpeechViewModel : ObservableObject
     private bool _suppressKeywordSync;
 
     public Window? Window { get; set; }
-    public DataGrid LineGrid { get; internal set; }
+    public TableView LineGrid { get; internal set; }
     public AudioVisualizer? AudioVisualizer { get; set; }
     public TtsStepResult[] StepResults { get; set; }
 
@@ -137,7 +138,7 @@ public partial class ReviewSpeechViewModel : ObservableObject
         _folderHelper = folderHelper;
         _windowService = windowService;
 
-        LineGrid = new DataGrid();
+        LineGrid = new TableView();
         Lines = new ObservableCollection<ReviewRow>();
         Engines = new ObservableCollection<ITtsEngine>();
         Voices = new ObservableCollection<Voice>();
@@ -229,7 +230,7 @@ public partial class ReviewSpeechViewModel : ObservableObject
                         nextLine.IsPlaying = true;
                         _playingRow = nextLine;
                         SelectedLine = nextLine;
-                        LineGrid.ScrollIntoView(nextLine, null);
+                        LineGrid.ScrollIntoView(nextLine);
                         await PlayAudio(nextLine.StepResult.CurrentFileName);
                     }
                     else
@@ -425,7 +426,7 @@ public partial class ReviewSpeechViewModel : ObservableObject
         {
             SelectedLine = Lines[0];
             LineGrid.SelectedIndex = 0;
-            LineGrid.ScrollIntoView(LineGrid.SelectedItem, null);
+            LineGrid.ScrollIntoView(Lines[0]);
         }
     }
 
@@ -1511,11 +1512,31 @@ public partial class ReviewSpeechViewModel : ObservableObject
 
             // Same preference order as SelectedModelChanged: the saved language, then English,
             // then whatever comes first.
-            SelectedLanguage = Languages.FirstOrDefault(p => p.Name == Se.Settings.Video.TextToSpeech.ElevenLabsLanguage)
-                               ?? Languages.FirstOrDefault(p => p.Code == "en")
-                               ?? Languages.FirstOrDefault();
+            SelectedLanguage = ResolveSavedLanguage(engine);
         }
     }
+
+    /// <summary>
+    /// The language to preselect for <paramref name="engine"/> from the current
+    /// <see cref="Languages"/> list. The CrispASR cloning engines lead with "Auto" and persist
+    /// per-engine picks — restore those, and fall back to Auto (first entry) rather than English
+    /// so an untouched language combo keeps the engine's pre-language-selection behaviour.
+    /// Everything else keeps the saved-ElevenLabs → English → first order.
+    /// </summary>
+    private TtsLanguage? ResolveSavedLanguage(ITtsEngine engine) => engine switch
+    {
+        MossTtsCrispAsr => Languages.FirstOrDefault(p => p.Name == Se.Settings.Video.TextToSpeech.MossTtsCrispAsrLanguage)
+                           ?? Languages.FirstOrDefault(),
+        OmniVoiceCrispAsr => Languages.FirstOrDefault(p => p.Name == Se.Settings.Video.TextToSpeech.OmniVoiceCrispAsrLanguage)
+                             ?? Languages.FirstOrDefault(),
+        CosyVoice3CrispAsr => Languages.FirstOrDefault(p => p.Name == Se.Settings.Video.TextToSpeech.CosyVoice3CrispAsrLanguage)
+                              ?? Languages.FirstOrDefault(),
+        Qwen3TtsCrispAsr => Languages.FirstOrDefault(p => p.Name == Se.Settings.Video.TextToSpeech.Qwen3TtsCrispAsrLanguage)
+                            ?? Languages.FirstOrDefault(),
+        _ => Languages.FirstOrDefault(p => p.Name == Se.Settings.Video.TextToSpeech.ElevenLabsLanguage)
+             ?? Languages.FirstOrDefault(p => p.Code == "en")
+             ?? Languages.FirstOrDefault(),
+    };
 
     internal void SelectedLanguageChanged(object? sender, SelectionChangedEventArgs e)
     {
@@ -1573,11 +1594,7 @@ public partial class ReviewSpeechViewModel : ObservableObject
                     Languages.Add(language);
                 }
 
-                SelectedLanguage = Languages.FirstOrDefault(p => p.Name == Se.Settings.Video.TextToSpeech.ElevenLabsLanguage);
-                if (SelectedLanguage == null)
-                {
-                    SelectedLanguage = Languages.FirstOrDefault(p => p.Code == "en");
-                }
+                SelectedLanguage = ResolveSavedLanguage(engine);
             }
         });
     }
@@ -1881,7 +1898,7 @@ public partial class ReviewSpeechViewModel : ObservableObject
         UiUtil.SaveWindowPosition(Window);
     }
 
-    internal void DataGridDoubleClicked()
+    internal void LineGridDoubleClicked()
     {
         var line = SelectedLine;
         if (line == null || line.IsPlaying || !line.IsPlayingEnabled)

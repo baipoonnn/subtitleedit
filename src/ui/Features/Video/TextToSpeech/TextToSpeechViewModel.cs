@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
@@ -21,6 +21,7 @@ using Nikse.SubtitleEdit.Features.Video.TextToSpeech.ElevenLabsSettings;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.EncodingSettings;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.Engines;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.F5TtsCrispAsrSettings;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.OmniVoiceCrispAsrSettings;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.VoxCPM2CrispAsrSettings;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.MossTtsCrispAsrSettings;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.IndexTtsCrispAsrSettings;
@@ -53,6 +54,7 @@ using System.Timers;
 using ElevenLabsSettingsViewModel = Nikse.SubtitleEdit.Features.Video.TextToSpeech.ElevenLabsSettings.ElevenLabsSettingsViewModel;
 using ReviewSpeechViewModel = Nikse.SubtitleEdit.Features.Video.TextToSpeech.ReviewSpeech.ReviewSpeechViewModel;
 using Timer = System.Timers.Timer;
+using Nikse.SubtitleEdit.UiLogic.Media;
 
 namespace Nikse.SubtitleEdit.Features.Video.TextToSpeech;
 
@@ -74,8 +76,6 @@ public partial class TextToSpeechViewModel : ObservableObject
     [ObservableProperty] private bool _hasRegion;
     [ObservableProperty] private string _region;
     [ObservableProperty] private bool _hasModel;
-    [ObservableProperty] private int _voiceCount;
-    [ObservableProperty] private string _voiceCountInfo;
     [ObservableProperty] private bool _isVoiceCountVisible;
     [ObservableProperty] private string _linesInfo = string.Empty;
     [ObservableProperty] private bool _hasVideoFile;
@@ -169,7 +169,6 @@ public partial class TextToSpeechViewModel : ObservableObject
         Languages = new ObservableCollection<TtsLanguage>();
         ApiKey = string.Empty;
         Region = string.Empty;
-        VoiceCountInfo = string.Empty;
         ProgressText = string.Empty;
         IsVoiceTestEnabled = true;
         IsVoiceComboEnabled = true;
@@ -243,6 +242,11 @@ public partial class TextToSpeechViewModel : ObservableObject
             new MossTtsCrispAsr(),
 
             new ZonosTtsCrispAsr(),
+
+            // OmniVoice (CrispASR) — the same model family as the standalone OmniVoice TTS
+            // above, but on the shared CrispASR runtime and as a persistent server, so the
+            // model loads once instead of once per line.
+            new OmniVoiceCrispAsr(),
 
             new ChatterboxTtsCpp(),
         ];
@@ -392,6 +396,7 @@ public partial class TextToSpeechViewModel : ObservableObject
             // Shared instruction text with the qwen3-tts.cpp engine so the same voice
             // description applies whichever Qwen3 backend the user picks.
             Se.Settings.Video.TextToSpeech.Qwen3TtsCppInstruction = (Instruction ?? string.Empty).Trim();
+            Se.Settings.Video.TextToSpeech.Qwen3TtsCrispAsrLanguage = SelectedLanguage?.Name ?? string.Empty;
         }
         else if (SelectedEngine is VibeVoiceCrispAsr)
         {
@@ -404,6 +409,7 @@ public partial class TextToSpeechViewModel : ObservableObject
         else if (SelectedEngine is CosyVoice3CrispAsr)
         {
             Se.Settings.Video.TextToSpeech.CosyVoice3CrispAsrModel = SelectedModel ?? CosyVoice3CrispAsr.DefaultModelKey;
+            Se.Settings.Video.TextToSpeech.CosyVoice3CrispAsrLanguage = SelectedLanguage?.Name ?? string.Empty;
         }
         else if (SelectedEngine is F5TtsCrispAsr)
         {
@@ -412,6 +418,11 @@ public partial class TextToSpeechViewModel : ObservableObject
         else if (SelectedEngine is VoxCPM2CrispAsr)
         {
             Se.Settings.Video.TextToSpeech.VoxCPM2CrispAsrModel = SelectedModel ?? VoxCPM2CrispAsr.DefaultModelKey;
+        }
+        else if (SelectedEngine is OmniVoiceCrispAsr)
+        {
+            Se.Settings.Video.TextToSpeech.OmniVoiceCrispAsrModel = SelectedModel ?? OmniVoiceCrispAsr.DefaultModelKey;
+            Se.Settings.Video.TextToSpeech.OmniVoiceCrispAsrLanguage = SelectedLanguage?.Name ?? string.Empty;
         }
         else if (SelectedEngine is MossTtsCrispAsr)
         {
@@ -425,6 +436,13 @@ public partial class TextToSpeechViewModel : ObservableObject
         else if (SelectedEngine is ChatterboxTtsCpp)
         {
             Se.Settings.Video.TextToSpeech.ChatterboxModel = SelectedModel ?? ChatterboxTtsCpp.DefaultModelKey;
+
+            // Turbo is English-only and offers just "Auto" - saving that would discard the
+            // language the user picked for the multilingual Base model.
+            if (ChatterboxTtsCpp.ResolveModelKey(SelectedModel) != ChatterboxTtsCpp.ModelKeyTurbo)
+            {
+                Se.Settings.Video.TextToSpeech.ChatterboxCrispAsrLanguage = SelectedLanguage?.Name ?? string.Empty;
+            }
         }
         else if (SelectedEngine is KokoroTtsCpp)
         {
@@ -581,6 +599,7 @@ public partial class TextToSpeechViewModel : ObservableObject
         string? wavPath = null;
         bool isCosyVoice3 = false;
         bool isVoxCPM2 = false;
+        bool isOmniVoiceCrispAsr = false;
         bool isMossTts = false;
         bool isQwen3Clone = false;
         if (voice.EngineVoice is CosyVoice3Voice cosy && !string.IsNullOrEmpty(cosy.FilePath) && string.IsNullOrEmpty(cosy.RefText))
@@ -603,6 +622,16 @@ public partial class TextToSpeechViewModel : ObservableObject
             {
                 wavPath = vox.FilePath;
                 isVoxCPM2 = true;
+            }
+        }
+        else if (voice.EngineVoice is OmniVoiceCrispAsrVoice omniCrisp && !string.IsNullOrEmpty(omniCrisp.FilePath))
+        {
+            // Empty FilePath means the built-in voice, which clones nothing and needs no ref-text.
+            var existing = TryReadRefTextSibling(omniCrisp.FilePath);
+            if (string.IsNullOrEmpty(existing))
+            {
+                wavPath = omniCrisp.FilePath;
+                isOmniVoiceCrispAsr = true;
             }
         }
         else if (voice.EngineVoice is MossTtsVoice moss && !string.IsNullOrEmpty(moss.FilePath))
@@ -671,6 +700,10 @@ public partial class TextToSpeechViewModel : ObservableObject
             else if (isVoxCPM2)
             {
                 written = VoxCPM2CrispAsr.TryWriteRefTextSidecar(wavPath, result.Text);
+            }
+            else if (isOmniVoiceCrispAsr)
+            {
+                written = OmniVoiceCrispAsr.TryWriteRefTextSidecar(wavPath, result.Text);
             }
             else if (isMossTts)
             {
@@ -1131,6 +1164,10 @@ public partial class TextToSpeechViewModel : ObservableObject
         {
             VoxCPM2CrispAsr.StopServer();
         }
+        if (keepAlive is not OmniVoiceCrispAsr)
+        {
+            OmniVoiceCrispAsr.StopServer();
+        }
         if (keepAlive is not MossTtsCrispAsr)
         {
             MossTtsCrispAsr.StopServer();
@@ -1338,6 +1375,10 @@ public partial class TextToSpeechViewModel : ObservableObject
         {
             await _windowService.ShowDialogAsync<F5TtsCrispAsrSettingsWindow, F5TtsCrispAsrSettingsViewModel>(Window!, vm => vm.Initialize());
         }
+        else if (SelectedEngine is OmniVoiceCrispAsr)
+        {
+            await _windowService.ShowDialogAsync<OmniVoiceCrispAsrSettingsWindow, OmniVoiceCrispAsrSettingsViewModel>(Window!, vm => vm.Initialize());
+        }
         else if (SelectedEngine is VoxCPM2CrispAsr)
         {
             await _windowService.ShowDialogAsync<VoxCPM2CrispAsrSettingsWindow, VoxCPM2CrispAsrSettingsViewModel>(Window!, vm => vm.Initialize());
@@ -1438,6 +1479,9 @@ public partial class TextToSpeechViewModel : ObservableObject
             case VoxCPM2CrispAsr:
                 await _windowService.ShowDialogAsync<DownloadTtsWindow, DownloadTtsViewModel>(Window!, vm => vm.StartDownloadVoxCPM2CrispAsrModels(VoxCPM2CrispAsr.ResolveModelKey(SelectedModel)));
                 break;
+            case OmniVoiceCrispAsr:
+                await _windowService.ShowDialogAsync<DownloadTtsWindow, DownloadTtsViewModel>(Window!, vm => vm.StartDownloadOmniVoiceCrispAsrModels(OmniVoiceCrispAsr.ResolveModelKey(SelectedModel)));
+                break;
             case MossTtsCrispAsr:
                 await _windowService.ShowDialogAsync<DownloadTtsWindow, DownloadTtsViewModel>(Window!, vm => vm.StartDownloadMossTtsCrispAsrModels(MossTtsCrispAsr.ResolveModelKey(SelectedModel)));
                 break;
@@ -1503,6 +1547,9 @@ public partial class TextToSpeechViewModel : ObservableObject
                 ? DownloadDotStatus.UpToDate
                 : DownloadDotStatus.NotInstalled,
             VoxCPM2CrispAsr => VoxCPM2CrispAsr.AreModelsInstalled(modelKey)
+                ? DownloadDotStatus.UpToDate
+                : DownloadDotStatus.NotInstalled,
+            OmniVoiceCrispAsr => OmniVoiceCrispAsr.AreModelsInstalled(modelKey)
                 ? DownloadDotStatus.UpToDate
                 : DownloadDotStatus.NotInstalled,
             MossTtsCrispAsr => MossTtsCrispAsr.AreModelsInstalled(modelKey)
@@ -1682,8 +1729,6 @@ public partial class TextToSpeechViewModel : ObservableObject
         SelectedVoice = Voices.FirstOrDefault(v => v.Name == currentVoiceName)
                         ?? Voices.FirstOrDefault(v => v.Name == Se.Settings.Video.TextToSpeech.Voice)
                         ?? Voices.FirstOrDefault();
-        VoiceCount = Voices.Count;
-        VoiceCountInfo = string.Format(Se.Language.Video.TextToSpeech.XVoices, Voices.Count);
         IsVoiceCountVisible = Voices.Count > 0;
     }
 
@@ -1986,7 +2031,7 @@ public partial class TextToSpeechViewModel : ObservableObject
                 videoFileName,
                 -1,
                 tempWaveFileName,
-                Configuration.Settings.General.VlcWaveTranscodeSettings,
+                "acodec=s16l",
                 out _))
             {
                 process.Start();
@@ -2059,6 +2104,11 @@ public partial class TextToSpeechViewModel : ObservableObject
         IsNotGenerating = true;
         ProgressOpacity = 0;
         OkPressed = true;
+
+        // Tear the preview player down here, before the window starts closing, so libmpv's
+        // native teardown is never concurrent with Avalonia's window teardown (#13376).
+        DisposePreviewPlayer();
+
         Close();
     }
 
@@ -2092,28 +2142,96 @@ public partial class TextToSpeechViewModel : ObservableObject
 
     private void Close()
     {
-        Dispatcher.UIThread.Post(() =>
+        Dispatcher.UIThread.Post(CloseWindowSafely);
+    }
+
+    /// <summary>
+    /// Closes the window without letting a failure escape, for every path that closes the TTS
+    /// window (#12626). An exception thrown out of a dispatcher callback is unhandled and takes
+    /// the whole process down, which is what the crash report shows for the OK button:
+    /// <c>Window.CloseInternal()</c> under the <c>Close</c> command's dispatcher lambda. #12628
+    /// guarded the steps inside the close sequence; this guards the close call itself.
+    /// <para>
+    /// Caveat: this can only contain a <em>managed</em> exception. The reporter's Event Viewer
+    /// entry is an access violation (<c>c0000005</c> in coreclr.dll), which no catch block can
+    /// intercept - if that is the real fault, the crash needs a different root cause.
+    /// </para>
+    /// </summary>
+    private void CloseWindowSafely()
+    {
+        try
         {
             Window?.Close();
+        }
+        catch (Exception ex)
+        {
+            SeLogger.Error(ex, "TTS window: Window.Close() failed");
+            Se.WriteToolsLog("TTS window: Window.Close() failed: " + ex, true);
+        }
+    }
+
+    /// <summary>
+    /// Drops the voice-preview player and destroys its mpv core on a worker thread.
+    /// <para>
+    /// <c>mpv_terminate_destroy</c> blocks until every mpv worker has exited and runs libmpv's
+    /// native win32/audio deinit, so it must not run on the UI thread while a window is closing:
+    /// doing it inline in <c>OnClosing</c> left <c>Window.CloseInternal()</c> to make its next COM
+    /// call (<c>IFrameworkInputPane.Unadvise</c>) into an apartment libmpv's teardown had already
+    /// disturbed - an access violation no catch block can intercept (#13376, same crash reported
+    /// as #12626). Same reasoning as <c>VideoPlayerControl.CloseAndDisposePlayer</c> (#11176).
+    /// </para>
+    /// Safe to call more than once - the second call finds no player and does nothing.
+    /// </summary>
+    private void DisposePreviewPlayer()
+    {
+        LibMpvDynamicPlayer? player;
+        lock (_playLock)
+        {
+            player = _mpvContext;
+            _mpvContext = null;
+        }
+
+        if (player == null)
+        {
+            return;
+        }
+
+        Se.WriteToolsLog("TTS window: disposing audio preview player (mpv) on worker thread");
+        Task.Run(() =>
+        {
+            try
+            {
+                // Stop first so the core tears down from an idle state instead of mid-playback.
+                player.Stop();
+                player.Dispose();
+            }
+            catch (Exception ex)
+            {
+                SeLogger.Error(ex, "TTS window: disposing the audio preview player failed");
+            }
         });
     }
 
     private async Task PlayAudio(string fileName)
     {
+        DisposePreviewPlayer();
+
+        LibMpvDynamicPlayer player;
         lock (_playLock)
         {
-            _mpvContext?.Stop();
-            _mpvContext?.Dispose();
-
-            _mpvContext = new LibMpvDynamicPlayer();
-            _mpvContext.LoadLib(); // core not initialized"
-            var err = _mpvContext.Initialize();
+            player = new LibMpvDynamicPlayer();
+            player.LoadLib(); // core not initialized"
+            var err = player.Initialize();
             if (err < 0)
             {
-                throw new InvalidOperationException($"Failed to initialize mpv: {_mpvContext.GetErrorString(err)}");
+                throw new InvalidOperationException($"Failed to initialize mpv: {player.GetErrorString(err)}");
             }
+
+            _mpvContext = player;
         }
-        await _mpvContext.LoadAudio(fileName);
+
+        // Through the local: a close running now can null the field out from under us.
+        await player.LoadAudio(fileName);
     }
 
     private async Task<bool> IsEngineInstalled(ITtsEngine engine)
@@ -3250,10 +3368,6 @@ public partial class TextToSpeechViewModel : ObservableObject
             {
                 Voices.Add(vo);
             }
-            VoiceCount = Voices.Count;
-            // The label binds VoiceCountInfo; only VoiceCount was ever written, so the voice
-            // count next to the combo stayed permanently blank.
-            VoiceCountInfo = string.Format(Se.Language.Video.TextToSpeech.XVoices, Voices.Count);
             IsVoiceCountVisible = Voices.Count > 0;
 
             var lastVoice = Voices.FirstOrDefault(v => v.Name == Se.Settings.Video.TextToSpeech.Voice);
@@ -3278,15 +3392,25 @@ public partial class TextToSpeechViewModel : ObservableObject
                     Languages.Add(language);
                 }
 
-                // OmniVoice has 646 alphabetically-sorted languages; the first entry ("Abadi") is
-                // a useless default. Default to English so the engine is usable out of the box.
-                // MOSS-TTS restores the saved pick (its list leads with "Auto", which is also the
-                // right fallback - it reproduces the pre-language-selection behaviour).
+                // OmniVoice has 646 alphabetically-sorted languages behind its "Auto" entry;
+                // falling through to the first *language* ("Abadi") would be a useless default,
+                // so omnivoice-tts asks for English explicitly and stays usable out of the box.
+                // The CrispASR cloning engines restore the saved pick (their lists lead with
+                // "Auto", which is also the right fallback - it reproduces the
+                // pre-language-selection behaviour).
                 SelectedLanguage = engine switch
                 {
                     OmniVoiceTtsCpp => Languages.FirstOrDefault(l => l.Code == "en") ?? Languages.FirstOrDefault(),
+                    OmniVoiceCrispAsr => Languages.FirstOrDefault(l => l.Name == Se.Settings.Video.TextToSpeech.OmniVoiceCrispAsrLanguage)
+                                         ?? Languages.FirstOrDefault(),
                     MossTtsCrispAsr => Languages.FirstOrDefault(l => l.Name == Se.Settings.Video.TextToSpeech.MossTtsCrispAsrLanguage)
                                        ?? Languages.FirstOrDefault(),
+                    CosyVoice3CrispAsr => Languages.FirstOrDefault(l => l.Name == Se.Settings.Video.TextToSpeech.CosyVoice3CrispAsrLanguage)
+                                          ?? Languages.FirstOrDefault(),
+                    Qwen3TtsCrispAsr => Languages.FirstOrDefault(l => l.Name == Se.Settings.Video.TextToSpeech.Qwen3TtsCrispAsrLanguage)
+                                        ?? Languages.FirstOrDefault(),
+                    ChatterboxTtsCpp => Languages.FirstOrDefault(l => l.Name == Se.Settings.Video.TextToSpeech.ChatterboxCrispAsrLanguage)
+                                        ?? Languages.FirstOrDefault(),
                     _ => Languages.FirstOrDefault(),
                 };
             }
@@ -3410,6 +3534,16 @@ public partial class TextToSpeechViewModel : ObservableObject
                 IsEngineSettingsVisible = true;
                 IsModelDownloadVisible = true;
             }
+            else if (SelectedEngine is OmniVoiceCrispAsr)
+            {
+                SelectedModel = Models.FirstOrDefault(p => p == Se.Settings.Video.TextToSpeech.OmniVoiceCrispAsrModel);
+                if (string.IsNullOrEmpty(SelectedModel))
+                {
+                    SelectedModel = Models.FirstOrDefault();
+                }
+                IsEngineSettingsVisible = true;
+                IsModelDownloadVisible = true;
+            }
             else if (SelectedEngine is MossTtsCrispAsr)
             {
                 SelectedModel = Models.FirstOrDefault(p => p == Se.Settings.Video.TextToSpeech.MossTtsCrispAsrModel);
@@ -3494,7 +3628,9 @@ public partial class TextToSpeechViewModel : ObservableObject
                 return;
             }
 
-            Window?.Close();
+            // Same guard as the Close command: Escape reaches Avalonia's close machinery through
+            // exactly the same path, so it must not be able to take the app down either (#12626).
+            CloseWindowSafely();
         }
         else if (UiUtil.IsHelp(e))
         {
@@ -3534,21 +3670,12 @@ public partial class TextToSpeechViewModel : ObservableObject
             SeLogger.Error(ex, "TTS window close: stopping the playback timer failed");
         }
 
+        // Only present when Test voice played a clip, and normally already gone: OK disposes it
+        // before the close starts. This covers the paths that close without OK (Cancel, Escape,
+        // title bar). Never dispose it inline here - see DisposePreviewPlayer (#13376).
         try
         {
-            lock (_playLock)
-            {
-                if (_mpvContext != null)
-                {
-                    // Only used when Test voice played a clip. Stop before Dispose so libmpv
-                    // tears down from an idle state instead of mid-playback - this dispose is
-                    // the prime native-crash suspect in #12626.
-                    Se.WriteToolsLog("TTS window: disposing audio preview player (mpv)");
-                    _mpvContext.Stop();
-                    _mpvContext.Dispose();
-                    _mpvContext = null;
-                }
-            }
+            DisposePreviewPlayer();
         }
         catch (Exception ex)
         {
@@ -3638,7 +3765,9 @@ public partial class TextToSpeechViewModel : ObservableObject
                                    ?? Languages.FirstOrDefault(p => p.Name == Se.Settings.Video.TextToSpeech.ElevenLabsLanguage);
                 if (SelectedLanguage == null)
                 {
-                    SelectedLanguage = Languages.FirstOrDefault(p => p.Code == "en");
+                    // Fall back to the list's first entry so the combo is never left empty -
+                    // Chatterbox Turbo, for example, offers only "Auto", whose code is not "en".
+                    SelectedLanguage = Languages.FirstOrDefault(p => p.Code == "en") ?? Languages.FirstOrDefault();
                 }
             }
         });

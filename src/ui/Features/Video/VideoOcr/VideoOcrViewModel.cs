@@ -26,6 +26,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Nikse.SubtitleEdit.UiLogic.LlamaCpp;
+using Nikse.SubtitleEdit.UiLogic.Media;
 
 namespace Nikse.SubtitleEdit.Features.Video.VideoOcr;
 
@@ -109,7 +110,7 @@ public partial class VideoOcrViewModel : ObservableObject
         GlmLanguage = string.Empty;
         LlamaCppModels = new ObservableCollection<LlamaCppModelDisplay>();
         LlamaCppLanguage = string.Empty;
-        LlamaCppServerButtonText = "Start server";
+        LlamaCppServerButtonText = Se.Language.General.StartServer;
         ProgressText = string.Empty;
         PreviewPositionText = string.Empty;
         ScanAreaText = string.Empty;
@@ -223,7 +224,7 @@ public partial class VideoOcrViewModel : ObservableObject
 
     private void UpdateLlamaCppServerButtonText()
     {
-        LlamaCppServerButtonText = LlamaCppServerManager.IsServerRunning ? "Stop server" : "Start server";
+        LlamaCppServerButtonText = LlamaCppServerManager.IsServerRunning ? Se.Language.General.StopServer : Se.Language.General.StartServer;
     }
 
     [RelayCommand]
@@ -301,15 +302,15 @@ public partial class VideoOcrViewModel : ObservableObject
             string message;
             if (!engineInstalled && !modelInstalled)
             {
-                message = "llama.cpp requires the llama-server engine and the selected OCR model to be downloaded. Download now?";
+                message = Se.Language.Ocr.LlamaCppDownloadEngineAndModelPrompt;
             }
             else if (!engineInstalled)
             {
-                message = "llama.cpp requires the llama-server engine to be downloaded. Download now?";
+                message = Se.Language.Ocr.LlamaCppDownloadEnginePrompt;
             }
             else
             {
-                message = "llama.cpp requires the selected OCR model to be downloaded. Download now?";
+                message = Se.Language.Ocr.LlamaCppDownloadModelPrompt;
             }
 
             var answer = await MessageBox.Show(
@@ -970,7 +971,8 @@ public partial class VideoOcrViewModel : ObservableObject
         var settings = Se.Settings.Video.VideoOcr;
         SelectedEngine = Engines.FirstOrDefault(p => p.EngineType.ToString() == settings.Engine) ?? Engines[0];
         OnSelectedEngineChanged(SelectedEngine);
-        SelectedPaddleLanguage = PaddleLanguages.FirstOrDefault(p => p.Code == settings.PaddleLanguage) ??
+        var paddleLanguage = PaddleOcr.NormalizeLanguageCode(settings.PaddleLanguage);
+        SelectedPaddleLanguage = PaddleLanguages.FirstOrDefault(p => p.Code == paddleLanguage) ??
                                  PaddleLanguages.FirstOrDefault(p => p.Code == "en");
         OllamaUrl = settings.OllamaUrl;
         OllamaModel = settings.OllamaModel;
@@ -1103,7 +1105,7 @@ public partial class VideoOcrViewModel : ObservableObject
             e.Handled = true;
             _ = Cancel();
         }
-        else if (e.Key == Key.F1)
+        else if (UiUtil.IsHelp(e))
         {
             e.Handled = true;
             UiUtil.ShowHelp("features/video-ocr");

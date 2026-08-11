@@ -26,6 +26,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Timers;
+using Nikse.SubtitleEdit.UiLogic.Media;
 
 namespace Nikse.SubtitleEdit.Features.Files.ExportImageBased;
 
@@ -68,6 +69,8 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
     [ObservableProperty] ExportContentAlignmentDisplay _selectedContentAlignment;
     [ObservableProperty] private ObservableCollection<int> _lineSpacings;
     [ObservableProperty] int _selectedLineSpacing;
+    [ObservableProperty] private ObservableCollection<double> _frameRates;
+    [ObservableProperty] private double _selectedFrameRate;
     [ObservableProperty] private ObservableCollection<SeExportImagesProfile> _profiles;
     [ObservableProperty] private SeExportImagesProfile? _selectedProfile;
     [ObservableProperty] private string _imageInfo;
@@ -81,6 +84,9 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
     [ObservableProperty] private int _boxPaddingRight;
     [ObservableProperty] private int _boxPaddingTop;
     [ObservableProperty] private int _boxPaddingBottom;
+    [ObservableProperty] private bool _isFullFrame;
+    [ObservableProperty] private Color _fullFrameBackgroundColor;
+    [ObservableProperty] private bool _isFullFrameVisible;
     public ObservableCollection<int> BoxPaddingValues { get; } = new ObservableCollection<int>(Enumerable.Range(0, 100));
 
     private string _outlineColorText = string.Empty;
@@ -106,7 +112,7 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
 
     public Window? Window { get; set; }
     public bool OkPressed { get; private set; }
-    public DataGrid SubtitleGrid { get; set; }
+    public TableView SubtitleGrid { get; set; }
 
     private List<SubtitleLineViewModel>? _selectedSubtitles;
     private bool _dirty;
@@ -154,6 +160,7 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
         FontColor = Colors.White;
         ShadowColor = Colors.Black;
         BoxColor = Color.FromArgb(180, 0, 0, 0);
+        FullFrameBackgroundColor = Colors.Transparent;
         Alignments = new ObservableCollection<ExportAlignmentDisplay>(ExportAlignmentDisplay.GetAlignments());
         SelectedAlignment = Alignments[0];
         ContentAlignments =
@@ -161,7 +168,9 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
         SelectedContentAlignment = ContentAlignments[0];
         LineSpacings = new ObservableCollection<int>(Enumerable.Range(-50, 501));
         SelectedLineSpacing = 0;
-        SubtitleGrid = new DataGrid();
+        FrameRates = new ObservableCollection<double> { 23.976, 24, 25, 29.97, 30, 50, 59.94, 60 };
+        SelectedFrameRate = 25;
+        SubtitleGrid = new TableView();
         Title = string.Empty;
         BitmapPreview = new SKBitmap(1, 1, false).ToAvaloniaBitmap();
         OutlineColor = Colors.Black;
@@ -177,7 +186,7 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
         {
             new FontBoxItem(FontBoxType.None, Se.Language.General.None),
             new FontBoxItem(FontBoxType.OneBox, Se.Language.Video.BurnIn.OneBox),
-            new FontBoxItem(FontBoxType.BoxPerLine, Se.Language.Video.BurnIn.BoxPerLine),
+            new FontBoxItem(FontBoxType.BoxPerLine, Se.Language.General.BoxPerLine),
         };
         SelectedBoxType = BoxTypes[0];
         UpdateBoxTypeLabels();
@@ -417,6 +426,8 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
 
                 var ip = imageParameters[i];
                 ip.Bitmap = GenerateBitmap(ip);
+                // "{\pos(x,y)}" anchors the rendered text, so it needs the bitmap size.
+                ExportTextTags.ApplyPositionTag(ip, Subtitles[i].Text);
                 _exportImageHandler.CreateParagraph(ip);
 
                 lock (_generateLock)
@@ -506,17 +517,17 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
         SelectedSubtitle = item;
     }
 
-    private ImageParameter GetImageParameter(int i)
+    internal ImageParameter GetImageParameter(int i)
     {
         var subtitle = Subtitles[i];
         var imageParameter = new ImageParameter
         {
-            Alignment = GetContentAlignment(subtitle.Text, SelectedAlignment.Alignment),
+            Alignment = ExportTextTags.GetAlignment(subtitle.Text, SelectedAlignment.Alignment),
             ContentAlignment = SelectedContentAlignment.ContentAlignment,
             PaddingLeftRight = SelectedPaddingLeftRight,
             PaddingTopBottom = SelectedPaddingTopBottom,
             Index = i,
-            Text = HtmlUtil.RemoveAssAlignmentTags(subtitle.Text),
+            Text = ExportTextTags.ToRenderableText(subtitle.Text),
             StartTime = subtitle.StartTime,
             EndTime = subtitle.EndTime,
             FontColor = FontColor.ToSKColor(),
@@ -545,60 +556,12 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
             BottomTopMargin = SelectedTopBottomMargin,
             LeftRightMargin = SelectedLeftRightMargin,
             IsRightToLeft = IsRightToLeft,
+            FramesPerSecond = SelectedFrameRate,
+            IsFullFrame = IsFullFrameVisible && IsFullFrame,
+            FullFrameBackgroundColor = FullFrameBackgroundColor.ToSKColor(),
         };
 
         return imageParameter;
-    }
-
-    private ExportAlignment GetContentAlignment(string text, ExportAlignment alignment)
-    {
-        var s = text.Trim();
-        if (s.StartsWith("{\\an1"))
-        {
-            return ExportAlignment.BottomLeft;
-        }
-
-        if (s.StartsWith("{\\an2"))
-        {
-            return ExportAlignment.BottomCenter;
-        }
-
-        if (s.StartsWith("{\\an3"))
-        {
-            return ExportAlignment.BottomRight;
-        }
-
-        if (s.StartsWith("{\\an4"))
-        {
-            return ExportAlignment.MiddleLeft;
-        }
-
-        if (s.StartsWith("{\\an5"))
-        {
-            return ExportAlignment.MiddleCenter;
-        }
-
-        if (s.StartsWith("{\\an6"))
-        {
-            return ExportAlignment.MiddleRight;
-        }
-
-        if (s.StartsWith("{\\an7"))
-        {
-            return ExportAlignment.TopLeft;
-        }
-
-        if (s.StartsWith("{\\an8"))
-        {
-            return ExportAlignment.TopCenter;
-        }
-
-        if (s.StartsWith("{\\an9"))
-        {
-            return ExportAlignment.TopRight;
-        }
-
-        return alignment;
     }
 
     [RelayCommand]
@@ -652,6 +615,8 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
             {
                 var ip = GetImageParameter(Subtitles.IndexOf(SelectedSubtitle));
                 var bitmap = GenerateBitmap(ip);
+                ip.Bitmap = bitmap;
+                ExportTextTags.ApplyPositionTag(ip, SelectedSubtitle.Text);
                 var position = CalculatePosition(ip, bitmap.Width, bitmap.Height);
                 vm.Initialize(bitmap, ip.ScreenWidth, ip.ScreenHeight, position.X, position.Y);
             });
@@ -680,6 +645,11 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
         _exportImageHandler = exportHandler;
         _subtitleFileName = subtitleFileName;
         Title = exportHandler.Title;
+
+        // Only the formats that can carry a frame-sized image: the editing timelines the images
+        // are dropped on (Final Cut Pro & co), and Blu-ray sup, which SE4 offered it for too. The
+        // other formats position the subtitle themselves from its own bitmap size.
+        IsFullFrameVisible = exportHandler.ExportImageType is ExportImageType.Fcp or ExportImageType.BluRaySup;
 
         SelectedSubtitle = Subtitles.FirstOrDefault();
 
@@ -723,55 +693,27 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
 
         var idx = Subtitles.IndexOf(selected);
         var ip = GetImageParameter(idx);
-        BitmapPreview = GenerateBitmap(ip).ToAvaloniaBitmap();
+        ip.Bitmap = GenerateBitmap(ip);
+        BitmapPreview = ip.Bitmap.ToAvaloniaBitmap();
+        ExportTextTags.ApplyPositionTag(ip, text);
         var position = CalculatePosition(ip, BitmapPreview.Size.Width, BitmapPreview.Size.Height);
-        ImageInfo = $"{BitmapPreview.Size.Width}x{BitmapPreview.Size.Height} @ {position.X},{position.Y}";
+
+        // With "full frame image" the exported png is the size of the video frame, not of the
+        // text bitmap shown here - report the size that actually gets written.
+        ImageInfo = ip.IsFullFrame
+            ? $"{ip.ScreenWidth}x{ip.ScreenHeight} @ {position.X},{position.Y}"
+            : $"{BitmapPreview.Size.Width}x{BitmapPreview.Size.Height} @ {position.X},{position.Y}";
     }
 
+    /// <summary>
+    /// Where the subtitle bitmap lands inside the frame. Shares
+    /// <see cref="FullFrameImage.GetPosition"/> with the export handlers - including the
+    /// "{\pos(x,y)}" override that ExportTextTags.ApplyPositionTag put on the parameter - so the
+    /// preview cannot drift from what is exported.
+    /// </summary>
     private static SKPointI CalculatePosition(ImageParameter ip, double width, double height)
     {
-        var x = 0;
-        var y = 0;
-
-        if (ip.Alignment == ExportAlignment.TopLeft ||
-            ip.Alignment == ExportAlignment.MiddleLeft ||
-            ip.Alignment == ExportAlignment.BottomLeft)
-        {
-            x = ip.LeftRightMargin;
-        }
-        else if (ip.Alignment == ExportAlignment.TopCenter ||
-                 ip.Alignment == ExportAlignment.MiddleCenter ||
-                 ip.Alignment == ExportAlignment.BottomCenter)
-        {
-            x = (int)((ip.ScreenWidth - width) / 2);
-        }
-        else if (ip.Alignment == ExportAlignment.TopRight ||
-                 ip.Alignment == ExportAlignment.MiddleRight ||
-                 ip.Alignment == ExportAlignment.BottomRight)
-        {
-            x = (int)(ip.ScreenWidth - width - ip.LeftRightMargin);
-        }
-
-        if (ip.Alignment == ExportAlignment.TopLeft ||
-            ip.Alignment == ExportAlignment.TopCenter ||
-            ip.Alignment == ExportAlignment.TopRight)
-        {
-            y = ip.BottomTopMargin;
-        }
-        else if (ip.Alignment == ExportAlignment.MiddleLeft ||
-                 ip.Alignment == ExportAlignment.MiddleCenter ||
-                 ip.Alignment == ExportAlignment.MiddleRight)
-        {
-            y = (int)((ip.ScreenHeight - height) / 2);
-        }
-        else if (ip.Alignment == ExportAlignment.BottomLeft ||
-                 ip.Alignment == ExportAlignment.BottomCenter ||
-                 ip.Alignment == ExportAlignment.BottomRight)
-        {
-            y = (int)(ip.ScreenHeight - height - ip.BottomTopMargin);
-        }
-
-        return new SKPointI(x, y);
+        return FullFrameImage.GetPosition(ip, (int)width, (int)height);
     }
 
     public static SKBitmap GenerateBitmap(ImageParameter ip)
@@ -828,6 +770,7 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
     partial void OnOutlineColorChanged(Color value) => _dirty = true;
     partial void OnShadowColorChanged(Color value) => _dirty = true;
     partial void OnBoxColorChanged(Color value) => _dirty = true;
+    partial void OnFullFrameBackgroundColorChanged(Color value) => _dirty = true;
     partial void OnBoxPaddingLeftChanged(int value) => _dirty = true;
     partial void OnBoxPaddingRightChanged(int value) => _dirty = true;
     partial void OnBoxPaddingTopChanged(int value) => _dirty = true;
@@ -983,6 +926,9 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
             SelectedPaddingLeftRight = profile.PaddingLeftRight;
             SelectedPaddingTopBottom = profile.PaddingTopBottom;
             SelectedLineSpacing = profile.LineSpacingPercent;
+            SelectedFrameRate = FrameRates.Contains(profile.FramesPerSecond) ? profile.FramesPerSecond : 25;
+            IsFullFrame = profile.IsFullFrame;
+            FullFrameBackgroundColor = profile.FullFrameBackgroundColor.FromHex().ToAvaloniaColor();
         }
     }
 
@@ -1014,6 +960,9 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
             profile.PaddingLeftRight = SelectedPaddingLeftRight;
             profile.PaddingTopBottom = SelectedPaddingTopBottom;
             profile.LineSpacingPercent = SelectedLineSpacing;
+            profile.FramesPerSecond = SelectedFrameRate;
+            profile.IsFullFrame = IsFullFrame;
+            profile.FullFrameBackgroundColor = FullFrameBackgroundColor.FromColorToHex(true);
         }
     }
 

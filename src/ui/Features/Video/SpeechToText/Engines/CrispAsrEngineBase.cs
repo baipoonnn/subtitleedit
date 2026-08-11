@@ -1,5 +1,5 @@
 using Avalonia.Platform;
-using Nikse.SubtitleEdit.Core.AudioToText;
+using Nikse.SubtitleEdit.UiLogic.AudioToText;
 using Nikse.SubtitleEdit.Logic.Config;
 using System;
 using System.Collections.Generic;
@@ -28,9 +28,9 @@ public abstract class CrispAsrEngineBase : ICrispAsrEngine
     /// CrispASR ships several builds per platform whose sizes differ by two orders of magnitude,
     /// and the variant is picked at download time rather than now — so Windows and Linux get a
     /// range rather than a single number that would either understate the GPU bundles or scare
-    /// users off the CPU one. Figures are the v0.8.24 release assets
-    /// (<see cref="Nikse.SubtitleEdit.Logic.Download.CrispAsrDownloadService"/> holds the pin);
-    /// they drift with every release, so treat them as indicative.
+    /// users off the CPU one. Figures are the v0.8.28 release assets —
+    /// <see cref="Nikse.SubtitleEdit.Logic.Download.CrispAsrDownloadService"/>
+    /// holds the pin; they drift with every release, so treat them as indicative.
     /// </summary>
     public virtual string DownloadSizeText
     {
@@ -38,17 +38,17 @@ public abstract class CrispAsrEngineBase : ICrispAsrEngine
         {
             if (OperatingSystem.IsWindows())
             {
-                // CPU ~7 MB, Vulkan ~33 MB, CUDA ~695 MB.
-                return "~7 MB – 695 MB";
+                // CPU ~8 MB (legacy ~7 MB), Vulkan ~33 MB, CUDA ~688 MB.
+                return "~7 MB – 688 MB";
             }
             if (OperatingSystem.IsLinux())
             {
-                // CPU ~24 MB (arm64 ~22 MB), Vulkan ~59 MB, ROCm ~89 MB, CUDA 13 ~205 MB, CUDA 12 ~271 MB.
-                return "~24 MB – 271 MB";
+                // CPU ~37 MB (arm64 ~30 MB), Vulkan ~67 MB, ROCm ~98 MB, CUDA 13 ~202 MB, CUDA 12 ~271 MB.
+                return "~30 MB – 271 MB";
             }
             if (OperatingSystem.IsMacOS())
             {
-                return "~14 MB";
+                return "~15 MB";
             }
             return string.Empty;
         }

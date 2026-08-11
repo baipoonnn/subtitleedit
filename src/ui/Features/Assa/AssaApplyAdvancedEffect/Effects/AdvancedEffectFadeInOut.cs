@@ -12,7 +12,7 @@ namespace Nikse.SubtitleEdit.Features.Assa.AssaApplyAdvancedEffect.Effects;
 /// </summary>
 public class AdvancedEffectFadeInOut : IAdvancedEffectDisplay
 {
-    public string Name => Se.Language.Assa.AdvancedEffectFadeInOut;
+    public string Name => Se.Language.General.FadeInOut;
     public string Description => Se.Language.Assa.AdvancedEffectFadeInOutDescription;
     public bool UsesAudio => false;
 
@@ -29,7 +29,7 @@ public class AdvancedEffectFadeInOut : IAdvancedEffectDisplay
         foreach (var sub in subtitles)
         {
             int durationMs = (int)sub.Duration.TotalMilliseconds;
-            int fadeMs = (int)Math.Min(500, durationMs / 3.0);
+            int fadeMs = Math.Max(0, (int)Math.Min(500, durationMs / 3.0));
 
             var fadeSub = new SubtitleLineViewModel(sub, generateNewId: true);
             fadeSub.Text = $"{{\\fad({fadeMs},{fadeMs})}}" + sub.Text;

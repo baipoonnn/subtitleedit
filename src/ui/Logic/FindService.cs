@@ -13,24 +13,32 @@ public partial class FindService : IFindService
     public int CurrentLineNumber { get; set; } = -1;
     public int CurrentTextIndex { get; set; } = -1;
     public string CurrentTextFound { get; set; } = string.Empty;
+    public bool CurrentMatchInOriginal { get; set; }
     public bool WholeWord { get; set; }
     public FindMode CurrentFindMode { get; set; } = FindMode.CaseInsensitive;
+    public FindScope CurrentScope { get; set; } = FindScope.TextAndOriginal;
+
+    private bool IncludeText => CurrentScope != FindScope.OriginalOnly;
+    private bool IncludeOriginal => CurrentScope != FindScope.TextOnly;
 
     private List<string> _textLines = new List<string>();
+    private List<string>? _originalTextLines;
     private readonly List<string> _searchHistory = new List<string>();
     private const int MaxSearchHistoryItems = 10;
 
     // ReplaceAll/Count/FindAll call into regex mode once per line; caching the last-built Regex
     // avoids recompiling the same pattern for every line in the subtitle.
     private string? _cachedRegexPattern;
+    private RegexOptions _cachedRegexOptions;
     private Regex? _cachedRegex;
 
-    private Regex GetCachedRegex(string pattern)
+    private Regex GetCachedRegex(string pattern, RegexOptions options = RegexOptions.None)
     {
-        if (_cachedRegex == null || _cachedRegexPattern != pattern)
+        if (_cachedRegex == null || _cachedRegexPattern != pattern || _cachedRegexOptions != options)
         {
-            _cachedRegex = new Regex(pattern);
+            _cachedRegex = new Regex(pattern, options);
             _cachedRegexPattern = pattern;
+            _cachedRegexOptions = options;
         }
 
         return _cachedRegex;
@@ -46,16 +54,17 @@ public partial class FindService : IFindService
         }
     }
 
-    public void Initialize(List<string> textLines, int currentLineNumber, bool wholeWord, FindMode findMode)
+    public void Initialize(List<string> textLines, int currentLineNumber, bool wholeWord, FindMode findMode, List<string>? originalTextLines = null)
     {
         _textLines = textLines;
+        _originalTextLines = originalTextLines;
         CurrentLineNumber = Math.Max(-1, Math.Min(currentLineNumber, textLines.Count - 1));
         WholeWord = wholeWord;
         CurrentFindMode = findMode;
         ResetSearchState();
     }
 
-    public int FindNext(string searchText, List<string> textLines, int startLineIndex, int startTextIndex)
+    public int FindNext(string searchText, List<string> textLines, int startLineIndex, int startTextIndex, List<string>? originalTextLines = null, bool startInOriginal = false)
     {
         if (string.IsNullOrEmpty(searchText) || _textLines.Count == 0)
         {
@@ -65,12 +74,14 @@ public partial class FindService : IFindService
 
         SearchText = RegexUtils.EscapeNewLines(searchText);
         _textLines = textLines;
+        _originalTextLines = originalTextLines;
         AddToSearchHistory(searchText);
 
         if (startLineIndex < 0)
         {
             startLineIndex = 0;
             startTextIndex = 0;
+            startInOriginal = false;
         }
         else
         {
@@ -79,10 +90,20 @@ public partial class FindService : IFindService
                 return NotFound();
             }
 
-            // If we've reached the end of current line, move to next line
-            if (startTextIndex >= _textLines[startLineIndex].Length)
+            // If we've reached the end of the current text, move on to the next column
+            // (original text of the same line) or to the next line.
+            if (startTextIndex >= GetLine(startLineIndex, startInOriginal).Length)
             {
-                startLineIndex++;
+                if (!startInOriginal && GetOriginalLine(startLineIndex) != null)
+                {
+                    startInOriginal = true;
+                }
+                else
+                {
+                    startLineIndex++;
+                    startInOriginal = false;
+                }
+
                 startTextIndex = 0;
             }
 
@@ -92,12 +113,42 @@ public partial class FindService : IFindService
             }
         }
 
-        var result = FindInList(searchText, startLineIndex, startTextIndex);
+        var result = FindInList(searchText, startLineIndex, startTextIndex, startInOriginal);
         CurrentLineNumber = result.lineIndex;
         CurrentTextIndex = result.textIndex;
         CurrentTextFound = result.foundText;
+        CurrentMatchInOriginal = result.inOriginal;
 
         return CurrentLineNumber;
+    }
+
+    /// <summary>
+    /// Text of a line in the requested column - the main text, or the original text when
+    /// an original subtitle is loaded (translator mode).
+    /// </summary>
+    private string GetLine(int lineIndex, bool original)
+    {
+        if (original)
+        {
+            return GetOriginalLine(lineIndex) ?? string.Empty;
+        }
+
+        return lineIndex >= 0 && lineIndex < _textLines.Count ? _textLines[lineIndex] : string.Empty;
+    }
+
+    /// <summary>
+    /// Original text of a line, or null when no original subtitle is loaded or the current scope
+    /// leaves the original column out. Returning null here is what makes every column-advance
+    /// step treat the original as absent, so the scope needs no further handling in them.
+    /// </summary>
+    private string? GetOriginalLine(int lineIndex)
+    {
+        if (_originalTextLines == null || !IncludeOriginal || lineIndex < 0 || lineIndex >= _originalTextLines.Count)
+        {
+            return null;
+        }
+
+        return _originalTextLines[lineIndex];
     }
 
     private int NotFound()
@@ -106,7 +157,7 @@ public partial class FindService : IFindService
         return -1;
     }
 
-    public int FindPrevious(string searchText, List<string> textLines, int startLineIndex, int startTextIndex)
+    public int FindPrevious(string searchText, List<string> textLines, int startLineIndex, int startTextIndex, List<string>? originalTextLines = null, bool startInOriginal = false)
     {
         if (string.IsNullOrEmpty(searchText) || _textLines.Count == 0)
         {
@@ -116,6 +167,7 @@ public partial class FindService : IFindService
 
         SearchText = RegexUtils.EscapeNewLines(searchText);
         _textLines = textLines;
+        _originalTextLines = originalTextLines;
         AddToSearchHistory(searchText);
 
         if (startLineIndex < 0)
@@ -127,16 +179,27 @@ public partial class FindService : IFindService
             if (startLineIndex >= _textLines.Count)
             {
                 startLineIndex = _textLines.Count - 1;
-                startTextIndex = _textLines[startLineIndex].Length - 1;
+                startInOriginal = GetOriginalLine(startLineIndex) != null;
+                startTextIndex = GetLine(startLineIndex, startInOriginal).Length - 1;
             }
 
-            // If we've reached the beginning of current line, move to previous line
+            // If we've reached the beginning of the current text, move back to the previous
+            // column (main text of the same line) or to the previous line.
             if (startTextIndex < 0)
             {
-                startLineIndex--;
+                if (startInOriginal)
+                {
+                    startInOriginal = false;
+                }
+                else
+                {
+                    startLineIndex--;
+                    startInOriginal = startLineIndex >= 0 && GetOriginalLine(startLineIndex) != null;
+                }
+
                 if (startLineIndex >= 0)
                 {
-                    startTextIndex = _textLines[startLineIndex].Length - 1;
+                    startTextIndex = GetLine(startLineIndex, startInOriginal).Length - 1;
                 }
             }
 
@@ -146,15 +209,16 @@ public partial class FindService : IFindService
             }
         }
 
-        var result = FindInListReverse(searchText, startLineIndex, startTextIndex);
+        var result = FindInListReverse(searchText, startLineIndex, startTextIndex, startInOriginal);
         CurrentLineNumber = result.lineIndex;
         CurrentTextIndex = result.textIndex;
         CurrentTextFound = result.foundText;
+        CurrentMatchInOriginal = result.inOriginal;
 
         return CurrentLineNumber;
     }
 
-    public int Count(string searchText, IReadOnlyList<string> textLines, bool wholeWord, FindMode findMode)
+    public int Count(string searchText, IReadOnlyList<string> textLines, bool wholeWord, FindMode findMode, IReadOnlyList<string>? originalTextLines = null, FindScope scope = FindScope.TextAndOriginal)
     {
         if (string.IsNullOrEmpty(searchText) || textLines == null || textLines.Count == 0)
         {
@@ -162,9 +226,20 @@ public partial class FindService : IFindService
         }
 
         var total = 0;
-        foreach (var line in textLines)
+        if (scope != FindScope.OriginalOnly)
         {
-            total += CountMatchesInLine(line, searchText, wholeWord, findMode);
+            foreach (var line in textLines)
+            {
+                total += CountMatchesInLine(line, searchText, wholeWord, findMode);
+            }
+        }
+
+        if (originalTextLines != null && scope != FindScope.TextOnly)
+        {
+            foreach (var line in originalTextLines)
+            {
+                total += CountMatchesInLine(line, searchText, wholeWord, findMode);
+            }
         }
 
         return total;
@@ -200,13 +275,29 @@ public partial class FindService : IFindService
 
         int totalReplacements = 0;
 
-        for (int lineIndex = 0; lineIndex < _textLines.Count; lineIndex++)
+        if (IncludeText)
         {
-            var replacedText = ReplaceInLine(_textLines[lineIndex], searchText, replaceText);
-            if (replacedText.replaced)
+            for (int lineIndex = 0; lineIndex < _textLines.Count; lineIndex++)
             {
-                _textLines[lineIndex] = replacedText.newText;
-                totalReplacements += replacedText.replacementCount;
+                var replacedText = ReplaceInLine(_textLines[lineIndex], searchText, replaceText);
+                if (replacedText.replaced)
+                {
+                    _textLines[lineIndex] = replacedText.newText;
+                    totalReplacements += replacedText.replacementCount;
+                }
+            }
+        }
+
+        if (_originalTextLines != null && IncludeOriginal)
+        {
+            for (int lineIndex = 0; lineIndex < _originalTextLines.Count; lineIndex++)
+            {
+                var replacedText = ReplaceInLine(_originalTextLines[lineIndex], searchText, replaceText);
+                if (replacedText.replaced)
+                {
+                    _originalTextLines[lineIndex] = replacedText.newText;
+                    totalReplacements += replacedText.replacementCount;
+                }
             }
         }
 
@@ -234,6 +325,7 @@ public partial class FindService : IFindService
         CurrentLineNumber = -1;
         CurrentTextIndex = -1;
         CurrentTextFound = string.Empty;
+        CurrentMatchInOriginal = false;
     }
 
     private void AddToSearchHistory(string searchText)
@@ -260,23 +352,42 @@ public partial class FindService : IFindService
         Se.Settings.Tools.FindHistory = _searchHistory;
     }
 
-    private (int lineIndex, int textIndex, string foundText) FindInList(string searchText, int startLineIndex, int startTextIndex = 0)
+    // Within a line the main text is searched before the original text, so a search resuming
+    // from a match in the original column skips the main text of that line - SE 4 did the same
+    // via its "match in original" flag (issue #13053).
+    private (int lineIndex, int textIndex, string foundText, bool inOriginal) FindInList(string searchText, int startLineIndex, int startTextIndex, bool startInOriginal)
     {
         for (var i = startLineIndex; i < _textLines.Count; i++)
         {
-            var textIndex = i == startLineIndex ? startTextIndex : 0;
-            var match = FindInLine(_textLines[i], searchText, textIndex);
+            var first = i == startLineIndex;
+            var textIndex = first ? startTextIndex : 0;
 
-            if (match.found)
+            if (IncludeText && !(first && startInOriginal))
             {
-                return (i, match.index, match.foundText);
+                var match = FindInLine(_textLines[i], searchText, textIndex);
+                if (match.found)
+                {
+                    return (i, match.index, match.foundText, false);
+                }
+
+                textIndex = 0;
+            }
+
+            var original = GetOriginalLine(i);
+            if (original != null)
+            {
+                var match = FindInLine(original, searchText, textIndex);
+                if (match.found)
+                {
+                    return (i, match.index, match.foundText, true);
+                }
             }
         }
 
-        return (-1, -1, string.Empty);
+        return (-1, -1, string.Empty, false);
     }
 
-    private (int lineIndex, int textIndex, string foundText) FindInListReverse(string searchText, int startLineIndex, int startTextIndex)
+    private (int lineIndex, int textIndex, string foundText, bool inOriginal) FindInListReverse(string searchText, int startLineIndex, int startTextIndex, bool startInOriginal)
     {
         for (var i = startLineIndex; i >= 0; i--)
         {
@@ -285,16 +396,32 @@ public partial class FindService : IFindService
                 continue;
             }
 
-            var textIndex = i == startLineIndex ? startTextIndex : _textLines[i].Length - 1;
-            var match = FindInLineReverse(_textLines[i], searchText, textIndex);
+            var first = i == startLineIndex;
+            var original = GetOriginalLine(i);
 
-            if (match.found)
+            // Reverse of the forward order: original text first, then the main text.
+            if (original != null && (!first || startInOriginal))
             {
-                return (i, match.index, match.foundText);
+                var textIndex = first ? startTextIndex : original.Length - 1;
+                var match = FindInLineReverse(original, searchText, textIndex);
+                if (match.found)
+                {
+                    return (i, match.index, match.foundText, true);
+                }
+            }
+
+            if (IncludeText)
+            {
+                var mainTextIndex = first && !startInOriginal ? startTextIndex : _textLines[i].Length - 1;
+                var mainMatch = FindInLineReverse(_textLines[i], searchText, mainTextIndex);
+                if (mainMatch.found)
+                {
+                    return (i, mainMatch.index, mainMatch.foundText, false);
+                }
             }
         }
 
-        return (-1, -1, string.Empty);
+        return (-1, -1, string.Empty, false);
     }
 
     private (bool found, int index, string foundText) FindInLine(string line, string searchText, int startIndex = 0)
@@ -457,7 +584,7 @@ public partial class FindService : IFindService
 
         try
         {
-            var regex = new Regex(pattern, options);
+            var regex = GetCachedRegex(pattern, options);
 
             if (startIndex > 0 && maxReplacements == 1)
             {
@@ -503,7 +630,7 @@ public partial class FindService : IFindService
 
             try
             {
-                var match = Regex.Match(searchLine, pattern, options);
+                var match = GetCachedRegex(pattern, options).Match(searchLine);
                 if (match.Success)
                 {
                     return (true, startIndex + match.Index, match.Value);
@@ -537,7 +664,7 @@ public partial class FindService : IFindService
 
             try
             {
-                var matches = Regex.Matches(searchLine, pattern, options);
+                var matches = GetCachedRegex(pattern, options).Matches(searchLine);
                 if (matches.Count > 0)
                 {
                     var lastMatch = matches[matches.Count - 1];
@@ -568,7 +695,7 @@ public partial class FindService : IFindService
             var searchLine = startIndex > 0 ? line.Substring(startIndex) : line;
             var originalLength = searchLine.Length;
             searchLine = NormalizeLineEndingsForRegex(searchLine, out var indexMap);
-            var match = Regex.Match(searchLine, RegexUtils.FixNewLine(searchText));
+            var match = GetCachedRegex(RegexUtils.FixNewLine(searchText)).Match(searchLine);
 
             if (match.Success)
             {
@@ -593,7 +720,7 @@ public partial class FindService : IFindService
 
             // Advance by 1 after each match so overlapping matches are found
             // (e.g. two long lines sharing the \n between them).
-            var regex = new Regex(RegexUtils.FixNewLine(searchText));
+            var regex = GetCachedRegex(RegexUtils.FixNewLine(searchText));
             Match? lastMatch = null;
             var pos = 0;
             while (pos < searchLine.Length)
@@ -630,7 +757,7 @@ public partial class FindService : IFindService
                 try
                 {
                     var searchLine = NormalizeLineEndingsForRegex(line);
-                    return Regex.Matches(searchLine, RegexUtils.FixNewLine(searchText)).Count;
+                    return GetCachedRegex(RegexUtils.FixNewLine(searchText)).Matches(searchLine).Count;
                 }
                 catch (ArgumentException)
                 {
@@ -658,7 +785,7 @@ public partial class FindService : IFindService
                 try
                 {
                     var searchLine = NormalizeLineEndingsForRegex(line, out var indexMap);
-                    var regexMatches = Regex.Matches(searchLine, RegexUtils.FixNewLine(searchText));
+                    var regexMatches = GetCachedRegex(RegexUtils.FixNewLine(searchText)).Matches(searchLine);
                     foreach (Match match in regexMatches)
                     {
                         matches.Add(new FindMatch(MapNormalizedIndex(indexMap, match.Index, line.Length), match.Value));
@@ -682,7 +809,7 @@ public partial class FindService : IFindService
 
                     try
                     {
-                        var regexMatches = Regex.Matches(line, pattern, options);
+                        var regexMatches = GetCachedRegex(pattern, options).Matches(line);
                         foreach (Match match in regexMatches)
                         {
                             matches.Add(new FindMatch(match.Index, match.Value));
@@ -714,8 +841,14 @@ public partial class FindService : IFindService
         return matches;
     }
 
-    private static int MapNormalizedIndex(List<int> indexMap, int normalizedIndex, int originalLength)
+    // A null indexMap means the line had no '\r', i.e. normalization was the identity mapping.
+    private static int MapNormalizedIndex(List<int>? indexMap, int normalizedIndex, int originalLength)
     {
+        if (indexMap == null)
+        {
+            return normalizedIndex < originalLength ? normalizedIndex : originalLength;
+        }
+
         return normalizedIndex < indexMap.Count ? indexMap[normalizedIndex] : originalLength;
     }
 
@@ -746,19 +879,17 @@ public partial class FindService : IFindService
         return normalized.ToString();
     }
 
-    private static string NormalizeLineEndingsForRegex(string line, out List<int> indexMap)
+    private static string NormalizeLineEndingsForRegex(string line, out List<int>? indexMap)
     {
-        indexMap = new List<int>(line.Length);
-
         if (!line.Contains('\r'))
         {
-            for (var i = 0; i < line.Length; i++)
-            {
-                indexMap.Add(i);
-            }
-
+            // The common case: nothing to normalize, so the mapping is the identity - a null
+            // map signals that to MapNormalizedIndex without allocating a per-line List.
+            indexMap = null;
             return line;
         }
+
+        indexMap = new List<int>(line.Length);
 
         var normalized = new StringBuilder(line.Length);
         for (var i = 0; i < line.Length; i++)

@@ -17,6 +17,7 @@ namespace Nikse.SubtitleEdit.Features.Tools.FixNetflixErrors;
 public class FixNetflixErrorsWindow : Window
 {
     private readonly FixNetflixErrorsViewModel _vm;
+    private ComboBox _comboBoxLanguage = null!;
 
     public FixNetflixErrorsWindow(FixNetflixErrorsViewModel vm)
     {
@@ -85,43 +86,56 @@ public class FixNetflixErrorsWindow : Window
 
         Content = grid;
 
-        Activated += delegate { buttonOk.Focus(); }; // hack to make OnKeyDown work
+        Activated += delegate { _comboBoxLanguage.Focus(); }; // initial focus on an input, not an action button - a focused button clicks on bare Space
 
         Closing += delegate { UiUtil.SaveWindowPosition(this); };
         Loaded += delegate { UiUtil.RestoreWindowPosition(this); };
     }
 
-    private static Border MakeSettingsView(FixNetflixErrorsViewModel vm)
+    private Border MakeSettingsView(FixNetflixErrorsViewModel vm)
     {
-        var panelTop = new StackPanel
+        _comboBoxLanguage = UiUtil.MakeComboBox(vm.Languages, vm, nameof(vm.SelectedLanguage));
+        var panelLanguage = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Left,
-            Margin = new Thickness(8),
             Children =
             {
                 UiUtil.MakeTextBlock(Se.Language.General.Language).WithMarginRight(5),
-                UiUtil.MakeComboBox(vm.Languages, vm, nameof(vm.SelectedLanguage))
+                _comboBoxLanguage
             }
         };
 
-        // Grid with list of checks
-        var dataGrid = new DataGrid
+        // Netflix allows higher reading speeds for SDH and requires lower ones for
+        // children's programs, so both change which limits the checks run against.
+        var panelTop = new StackPanel
         {
-            AutoGenerateColumns = false,
-            SelectionMode = DataGridSelectionMode.Single,
-            CanUserResizeColumns = true,
-            CanUserSortColumns = true,
+            Orientation = Orientation.Vertical,
             HorizontalAlignment = HorizontalAlignment.Left,
-            VerticalAlignment = VerticalAlignment.Top,
-            [!DataGrid.ItemsSourceProperty] = new Binding(nameof(vm.Checks))
+            Margin = new Thickness(8),
+            Spacing = 4,
+            Children =
+            {
+                panelLanguage,
+                UiUtil.MakeCheckBox(Se.Language.Tools.NetflixCheckAndFix.ChildrensProgram, vm, nameof(vm.IsChildrenProgram)),
+                UiUtil.MakeCheckBox(Se.Language.Tools.NetflixCheckAndFix.Sdh, vm, nameof(vm.IsSdh)),
+            }
         };
 
-        dataGrid.Columns.Add(new DataGridTemplateColumn
+        // Grid with list of checks. Sorting dropped in the DataGrid -> TableView
+        // conversion: the checks run in list order (RunChecks gets them in collection
+        // order), so the list must not be reordered.
+        // Stretch (the MakeTableView default) instead of the DataGrid's Left/Top: the
+        // star-sized Name column needs the control to fill its fixed-width grid cell.
+        var dataGrid = TableViewExtras.MakeTableView();
+        dataGrid[!TableView.ItemsSourceProperty] = new Binding(nameof(vm.Checks));
+
+        dataGrid.Columns.Add(new SeTableViewColumn
         {
             Header = Se.Language.General.Enabled,
-            CellTheme = UiUtil.DataGridNoBorderNoPaddingCellTheme,
+            CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
             CellTemplate = new FuncDataTemplate<NetflixCheckDisplayItem>((item, _) =>
             {
                 var cb = new CheckBox
@@ -138,18 +152,22 @@ public class FixNetflixErrorsWindow : Window
                     Child = cb
                 };
             }),
-            Width = new DataGridLength(1, DataGridLengthUnitType.Auto)
+            // Content-sized (Auto) on the DataGrid; TableView treats Auto as star.
+            Width = new GridLength(70)
         });
 
-        dataGrid.Columns.Add(new DataGridTextColumn
+        dataGrid.Columns.Add(new SeTableViewColumn
         {
             Header = Se.Language.General.Name,
-            CellTheme = UiUtil.DataGridNoBorderNoPaddingCellTheme,
+            CellTheme = UiUtil.TableViewCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
             Binding = new Binding(nameof(NetflixCheckDisplayItem.Name)),
-            IsReadOnly = true,
-            Width = new DataGridLength(1, DataGridLengthUnitType.Auto)
+            Width = new GridLength(1, GridUnitType.Star)
         });
-        _ = new DataGridCheckboxMultiSelect<NetflixCheckDisplayItem>(dataGrid,
+
+        // Extended selection is native ListBox behavior on TableView; only the
+        // Space-toggles-checkbox piece of the old CheckboxMultiSelect needs wiring.
+        TableViewExtras.AddSpaceToggle<NetflixCheckDisplayItem>(dataGrid,
             item => item.IsSelected, (item, v) => item.IsSelected = v);
 
         var grid = new Grid
@@ -173,24 +191,20 @@ public class FixNetflixErrorsWindow : Window
 
     private Border MakeFixesView(FixNetflixErrorsViewModel vm)
     {
-        var dataGrid = new DataGrid
+        // Sorting dropped in the DataGrid -> TableView conversion: the grid previews
+        // fixes in subtitle order.
+        var dataGrid = TableViewExtras.MakeTableView();
+        dataGrid.Width = double.NaN;
+        dataGrid.Height = double.NaN;
+        dataGrid.DataContext = _vm;
+        dataGrid.ItemsSource = _vm.Fixes;
+        dataGrid.Columns.AddRange(new TableViewColumn[]
         {
-            AutoGenerateColumns = false,
-            SelectionMode = DataGridSelectionMode.Single,
-            CanUserResizeColumns = true,
-            CanUserSortColumns = true,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            VerticalAlignment = VerticalAlignment.Stretch,
-            Width = double.NaN,
-            Height = double.NaN,
-            DataContext = _vm,
-            ItemsSource = _vm.Fixes,
-            Columns =
-            {
-                new DataGridTemplateColumn
+                new SeTableViewColumn
                 {
                     Header = Se.Language.General.Apply,
-                    CellTheme = UiUtil.DataGridNoBorderNoPaddingCellTheme,
+                    CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+                    HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
                     CellTemplate = new FuncDataTemplate<FixNetflixErrorsItem>((item, _) =>
                     {
                         var cb = new CheckBox
@@ -208,19 +222,22 @@ public class FixNetflixErrorsWindow : Window
                             Child = cb,
                         };
                     }),
-                    Width = new DataGridLength(1, DataGridLengthUnitType.Auto)
+                    // Content-sized (Auto) on the DataGrid; TableView treats Auto as star.
+                    Width = new GridLength(70)
                 },
-                new DataGridTextColumn
+                new SeTableViewColumn
                 {
                     Header = Se.Language.General.NumberSymbol,
-                    CellTheme = UiUtil.DataGridNoBorderNoPaddingCellTheme,
+                    CellTheme = UiUtil.TableViewCellTheme,
+                    HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
                     Binding = new Binding(nameof(FixNetflixErrorsItem.IndexDisplay)),
-                    IsReadOnly = true,
+                    Width = new GridLength(60),
                 },
-                new DataGridTemplateColumn
+                new SeTableViewColumn
                 {
                     Header = Se.Language.General.Before,
-                    CellTheme = UiUtil.DataGridNoBorderNoPaddingCellTheme,
+                    CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+                    HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
                     CellTemplate = new FuncDataTemplate<FixNetflixErrorsItem>((item, _) =>
                     {
                         if (item == null)
@@ -236,13 +253,13 @@ public class FixNetflixErrorsWindow : Window
                             Child = beforeBlock,
                         };
                     }),
-                    IsReadOnly = true,
-                    Width = new DataGridLength(1, DataGridLengthUnitType.Star),
+                    Width = new GridLength(1, GridUnitType.Star),
                 },
-                new DataGridTemplateColumn
+                new SeTableViewColumn
                 {
                     Header = Se.Language.General.After,
-                    CellTheme = UiUtil.DataGridNoBorderNoPaddingCellTheme,
+                    CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+                    HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
                     CellTemplate = new FuncDataTemplate<FixNetflixErrorsItem>((item, _) =>
                     {
                         if (item == null)
@@ -258,23 +275,32 @@ public class FixNetflixErrorsWindow : Window
                             Child = afterBlock,
                         };
                     }),
-                    IsReadOnly = true,
-                    Width = new DataGridLength(1, DataGridLengthUnitType.Star),
+                    Width = new GridLength(1, GridUnitType.Star),
                 },
-                new DataGridTextColumn
+                new SeTableViewColumn
                 {
                     Header = Se.Language.General.Reason,
-                    CellTheme = UiUtil.DataGridNoBorderNoPaddingCellTheme,
+                    CellTheme = UiUtil.TableViewCellTheme,
+                    HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
                     Binding = new Binding(nameof(FixNetflixErrorsItem.Reason)),
-                    IsReadOnly = true,
-                    Width = new DataGridLength(1, DataGridLengthUnitType.Star),
+                    Width = new GridLength(1, GridUnitType.Star),
                 },
-            },
-        };
-        dataGrid.Bind(DataGrid.SelectedItemProperty, new Binding(nameof(_vm.SelectedFix)));
-        _ = new DataGridCheckboxMultiSelect<FixNetflixErrorsItem>(dataGrid,
-            item => item.Apply, (item, v) => item.Apply = v,
-            canToggle: item => item.CanBeFixed);
+        });
+        dataGrid.Bind(TableView.SelectedItemProperty, new Binding(nameof(_vm.SelectedFix)));
+
+        // Extended selection is native ListBox behavior on TableView; only the
+        // Space-toggles-checkbox piece of the old CheckboxMultiSelect needs wiring.
+        // Non-fixable rows count as "checked" so they never block the all-checked
+        // toggle, and the setter leaves them alone (the old helper's canToggle).
+        TableViewExtras.AddSpaceToggle<FixNetflixErrorsItem>(dataGrid,
+            item => !item.CanBeFixed || item.Apply,
+            (item, v) =>
+            {
+                if (item.CanBeFixed)
+                {
+                    item.Apply = v;
+                }
+            });
 
         return UiUtil.MakeBorderForControlNoPadding(dataGrid);
     }

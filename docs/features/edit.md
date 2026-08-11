@@ -34,6 +34,8 @@ Options:
 
 > **Matching a line break with a regular expression:** use `\n` between the words on the two lines (for example `ear\ntwice`). `\r\n` and `\r` are accepted too and are treated the same as `\n`, so a rule works regardless of how it was written or which platform created it.
 
+> **Translator mode:** with an original subtitle loaded, both the text and the original text are searched. Within a line the text is searched first, then the original text, and the match is selected in the text box of the column it was found in.
+
 <!-- Screenshot: Find window -->
 ![Find](../screenshots/find.png)
 
@@ -43,6 +45,14 @@ Find and replace text in the subtitle.
 
 - **Menu:** Edit → Replace
 - **Shortcut:** `Ctrl+H`
+
+With an editable original subtitle loaded, a **Replace/search in** drop-down appears with three choices:
+
+- **Text and original text** - both columns (the default, and what Find always does)
+- **Text only** - leave the original subtitle alone
+- **Original text only** - only change the original subtitle
+
+The choice is remembered between sessions. It also applies to `F3` / `Shift+F3` until the Find window is used again, which always searches both columns. The drop-down is hidden when there is no original subtitle, or when the original is opened as a read-only reference - a read-only original is never written to.
 
 <!-- Screenshot: Replace window -->
 ![Replace](../screenshots/replace.png)
@@ -152,8 +162,7 @@ Select or deselect subtitle lines based on rules (e.g., text contains, duration,
 
 - **Menu:** Edit → Modify selection...
 
-<!-- Screenshot: Modify selection window -->
-![Modify Selection](../screenshots/modify-selection.png)
+See [Modify Selection](modify-selection.md) for the full list of rules and selection actions.
 
 ## Select All
 

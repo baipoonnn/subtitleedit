@@ -13,6 +13,7 @@ using Nikse.SubtitleEdit.Core.SubtitleFormats;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
 using SkiaSharp;
+using System;
 using System.IO;
 using System.Linq;
 
@@ -152,6 +153,19 @@ public static class InitToolbar
             isLastSeparator = false;
         }
 
+        if (appearance.ToolbarShowMultipleReplace)
+        {
+            stackPanelLeft.Children.Add(new Button
+            {
+                Content = MakeImage("MultipleReplace"),
+                Command = vm.ShowMultipleReplaceCommand,
+                Background = Brushes.Transparent,
+                [AutomationProperties.NameProperty] = languageHints.MultipleReplaceHint,
+                [ToolTip.TipProperty] = UiUtil.MakeToolTip(languageHints.MultipleReplaceHint, shortcuts, nameof(vm.ShowMultipleReplaceCommand)),
+            });
+            isLastSeparator = false;
+        }
+
 
         if (!isLastSeparator)
         {
@@ -211,6 +225,19 @@ public static class InitToolbar
             isLastSeparator = false;
         }
 
+        if (appearance.ToolbarShowPointSync)
+        {
+            stackPanelLeft.Children.Add(new Button
+            {
+                Content = MakeImage("PointSync"),
+                Command = vm.ShowPointSyncViaOtherCommand,
+                Background = Brushes.Transparent,
+                [AutomationProperties.NameProperty] = languageHints.PointSyncHint,
+                [ToolTip.TipProperty] = UiUtil.MakeToolTip(languageHints.PointSyncHint, shortcuts, nameof(vm.ShowPointSyncViaOtherCommand)),
+            });
+            isLastSeparator = false;
+        }
+
         if (appearance.ToolbarShowBeautifyTimeCodes)
         {
             stackPanelLeft.Children.Add(new Button
@@ -233,6 +260,32 @@ public static class InitToolbar
                 Background = Brushes.Transparent,
                 [AutomationProperties.NameProperty] = languageHints.BurnInHint,
                 [ToolTip.TipProperty] = UiUtil.MakeToolTip(languageHints.BurnInHint, shortcuts, nameof(vm.ShowVideoBurnInCommand)),
+            });
+            isLastSeparator = false;
+        }
+
+        if (appearance.ToolbarShowAutoTranslate)
+        {
+            stackPanelLeft.Children.Add(new Button
+            {
+                Content = MakeImage("AutoTranslate"),
+                Command = vm.ShowAutoTranslateCommand,
+                Background = Brushes.Transparent,
+                [AutomationProperties.NameProperty] = languageHints.AutoTranslateHint,
+                [ToolTip.TipProperty] = UiUtil.MakeToolTip(languageHints.AutoTranslateHint, shortcuts, nameof(vm.ShowAutoTranslateCommand)),
+            });
+            isLastSeparator = false;
+        }
+
+        if (appearance.ToolbarShowSpeechToText)
+        {
+            stackPanelLeft.Children.Add(new Button
+            {
+                Content = MakeImage("SpeechToText"),
+                Command = vm.ShowSpeechToTextWhisperCommand,
+                Background = Brushes.Transparent,
+                [AutomationProperties.NameProperty] = languageHints.SpeechToTextHint,
+                [ToolTip.TipProperty] = UiUtil.MakeToolTip(languageHints.SpeechToTextHint, shortcuts, nameof(vm.ShowSpeechToTextWhisperCommand)),
             });
             isLastSeparator = false;
         }
@@ -308,8 +361,26 @@ public static class InitToolbar
             ssaSeparator.DataContext = vm;
             ssaSeparator.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsFormatSsa)) { Mode = BindingMode.TwoWay });
 
+            var webVttSeparator = MakeSeparator();
+            stackPanelLeft.Children.Add(webVttSeparator);
+            webVttSeparator.DataContext = vm;
+            webVttSeparator.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsFormatWebVtt)) { Mode = BindingMode.TwoWay });
+
             isLastSeparator = true;
         }
+
+        stackPanelLeft.Children.Add(new Button
+        {
+            Content = MakeImage("AssaStyle"),
+            Command = vm.ShowWebVttStylesCommand,
+            Background = Brushes.Transparent,
+            [AutomationProperties.NameProperty] = languageHints.WebVttStylesHint,
+            [ToolTip.TipProperty] = UiUtil.MakeToolTip(languageHints.WebVttStylesHint, shortcuts, nameof(vm.ShowWebVttStylesCommand)),
+            [!Visual.IsVisibleProperty] = new Binding(nameof(vm.IsFormatWebVtt))
+            {
+                Source = vm,
+            },
+        });
 
         stackPanelLeft.Children.Add(new Button
         {
@@ -529,11 +600,43 @@ public static class InitToolbar
             EnsureImagePath();
         }
 
-        return new Image
+        var filePath = Path.Combine(_imagePath, image + ".png");
+        try
         {
-            Source = MakeOneColor(Path.Combine(_imagePath, image + ".png")),
-            Stretch = Stretch.Uniform,
-        };
+            return new Image
+            {
+                Source = MakeOneColor(filePath),
+                Stretch = Stretch.Uniform,
+            };
+        }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // The unpacked theme folder can lag behind the app (an icon added between releases
+            // without a version bump made every startup crash here, since version.txt said the
+            // folder was current). Repair by re-unpacking Themes.zip and retry once; if the icon
+            // is still missing, show a blank image rather than killing the MainView build.
+            if (Logic.Initializers.ThemeInitializer.TryRepair(filePath))
+            {
+                try
+                {
+                    return new Image
+                    {
+                        Source = MakeOneColor(filePath),
+                        Stretch = Stretch.Uniform,
+                    };
+                }
+                catch (Exception retryException)
+                {
+                    Se.LogError(retryException, $"Theme image \"{filePath}\" still missing after re-unpacking Themes.zip");
+                }
+            }
+            else
+            {
+                Se.LogError(e, $"Could not load theme image \"{filePath}\"");
+            }
+
+            return new Image { Stretch = Stretch.Uniform };
+        }
     }
 
     private static unsafe Bitmap MakeOneColor(string filePath)

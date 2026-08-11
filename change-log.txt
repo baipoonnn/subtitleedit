@@ -3,6 +3,333 @@ Subtitle Edit Changelog
 
 -----------------------------------------------------------------------------------------------------
 
+v5.2.0-beta10 (11th of August 2026)
+
+* Add "BDN/xml 8-bit" export with palette-indexed PNGs
+* Add "Multiple replace" to the toolbar
+* Add 23-language selection to Chatterbox TTS (and re-download of the English-only models)
+* Bring back the "Full frame image" option when exporting images
+* Open a non-matching original as a read-only reference instead of dropping lines - thx bichitoxxx
+* Let the replace window pick which columns to search - thx jugorakita-creator
+* Honor the Subtitle Edit proxy settings in downloads, update check, and cloud OCR
+* Show the number of forced cues in the Matroska track picker
+* Show the filtered file count in batch convert
+* Improve VobSub color isolation for letters like "i", "j" and umlauts - thx tekk42
+* Fix wrong burn-in quality with the VideoToolbox encoders on new installs (macOS)
+* Fix Persian/RTL text and dark theme highlighting in the compare window - thx saeead
+* Fix keyboard focus being stolen from an open modal dialog - thx GrampaWildWilly
+* Fix AI review failing with engines that reject some request parameters - thx joseacuna80
+* Fix blank space above the first line after End followed by Home
+* Fix wrong uppercasing after ASSA tags in "Fix casing" - thx ivandrofly
+* Update CrispASR to v0.8.28
+* Update Japanese translation - thx hisui3393
+* Update Korean translation - thx 12si27
+* Update Traditional Chinese translation - thx love80312
+* Update Turkish translation - thx bilimiyorum
+* Update Russian translation - thx jekovcar
+* Update Bulgarian translation - thx jekovcar
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta9 (10th of August 2026)
+
+* Add image subtitle preview and VobSub export to the Matroska track chooser
+* Add "Train nOCR" from SE 4, and speed up nOCR matching with a result cache
+* Make "Set up like Subtitle Edit 4" also arrange the waveform toolbar like SE 4
+* Default to the h264_videotoolbox hardware encoder for burn-in on macOS
+* Improve nOCR matching of small and sensitive characters (O/o/0, quotes, dashes)
+* Stop "play selection" on the line's last visible frame instead of overshooting
+* Sync the Paddle OCR language list with PaddleOCR 3.4 and the bundled models
+* Let the CrispEmbed OCR hardware build be re-picked after the first install
+* Fix target file size when burning in with VideoToolbox encoders - thx luisblop
+* Fix burn-in re-runs reusing the previous run's bit rate, and a stuck dialog when the bit rate was too low
+* Fix subtitles intermittently missing in fullscreen playback - thx Davanix
+* Fix secondary subtitle showing tiny or huge in the video player, and preview flicker - thx GrampaWildWilly
+* Fix lost window focus after applying settings with undocked windows - thx GrampaWildWilly
+* Fix modal dialogs dropping behind other windows - thx GrampaWildWilly
+* Fix "Fix names" preview races and make the preview update instantly - thx ivandrofly
+* Fix ASSA output writing a mismatched events Format line for files from MKV
+* Fix OCR scrolling away from the selected line when stopping OCR
+* Fix spell check source image preview showing a large transparent area
+* Fix 22 broken format string placeholders in the Bulgarian translation
+* Update CrispEmbed OCR to v0.17.8
+* Update Russian translation - thx jekovcar
+* Update Bulgarian translation - thx jekovcar
+* Update Korean translation - thx 12si27
+* Update Japanese translation - thx hisui3393
+* Minor performance improvements in text processing - thx ivandrofly
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta8 (9th of August 2026)
+
+* Add Apple VideoToolbox hardware encoders to "Burn-in" on macOS (and only list encoders available on the OS)
+* Add "Go to next empty line" shortcut (SE 4 parity) - thx Surlime
+* Add frame rate to the export images window (fixes wrong BDN/XML fps)
+* Add update check settings (stable/beta channel) and a passive update notification at startup - thx korsosattila73
+* Fix rule profiles not applying the minimum/maximum duration limits
+* Fix rule profiles losing the custom continuation style on save/load, and one bad profile breaking the whole list
+* Fix dialogs, popups and Alt+letter menus hiding behind undocked tool windows - thx GrampaWildWilly
+* Fix lost focus after window activation loss and caret position when navigating the grid - thx St0rmXtr00per
+* Fix crash in ElevenLabs text to speech preview - thx cvrle77
+* Fix bold "Line length" label after switching layouts - thx Davanix
+* Fix "Remove text for HI" reporting a trailing empty line as a change - thx Davanix
+* Tag all HEVC burn-in output for QuickTime/Apple compatibility (hvc1)
+* Minor performance improvements in OCR and list handling - thx ivandrofly
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta7 (8th of August 2026)
+
+* WebVTT: bring back the style manager, voices and the browser preview from SE 4
+* WebVTT: show styles and voices in the subtitle grid
+* Add advanced ASSA effects: Word flip 3D, Lower third and Cinematic title
+* Restore the four missing SE 4 subtitle grid double-click actions - thx PatriceBG
+* Add Shift+Backspace as forward-delete in the text boxes (for keyboards without a Delete key)
+* Point sync now also works without a video loaded - thx fraternl
+* Update the Netflix quality checks to the current Timed Text Style Guides
+* Update the auto-translate model lists (August 2026)
+* Update llama.cpp to b10310 and CrispEmbed OCR to v0.17.6
+* Fix crashes, locale number corruption and wrong tags in the advanced ASSA effects
+* Fix "Set position" writing coordinates in video pixels instead of script resolution - thx Bibi-skz
+* Fix "Set position" preview not using the line's own style - thx Bibi-skz
+* Fix "Apply custom override tags" preview ignoring the file's styles, and OK without video - thx Bibi-skz
+* Fix ASSA styles being lost in batch convert "Split long lines" and waveform "Delete lines from video position"
+* Fix typing accents (dead keys) on Linux with ibus - thx Pemicope
+* Fix the video playing briefly when opening a file - thx rRobis
+* Fix the grid jumping to the next line after "play selection, then stop" - thx ghostminhtoan
+* Fix text to speech engines cluttering their voice folder instead of using the output folder - thx subof
+* Fix the chosen language being ignored by OmniVoice speech generation - thx subof
+* Fix seven bugs found in a review of the beta 6 changes (message box keys, batch convert, file names)
+* Faster "Fix common errors" select-all, "replace all" with whole word, and file compare
+* Update French translation - thx Need74
+* Update Polish translation - thx Adam Malich
+* Update Korean translation - thx 12si27
+* Update Japanese translation - thx hisui3393
+* Update Hungarian translation - thx Zityi
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta6 (7th of August 2026)
+
+* Add "do not break after" list and bottom-heavy percent to the auto-break settings - thx Davanix
+* Add an editor for the "do not break after" lists - thx Davanix
+* Add option to include the language code in batch speech to text file names - thx wjcarpenter
+* Add the CrispEmbed OCR engine to batch convert
+* Batch convert: choose the frame rate source for "Beautify time codes" (matching video file or fixed rate)
+* Make the subtitle text box section resizable - thx Ironship
+* Move focus between message box buttons with the arrow keys
+* Show Ollama OCR errors instead of silently producing empty lines - thx perkesfurmah-collab
+* Fix "merge as dialog" not using the configured dialog style - thx jugorakita-creator
+* Fix stuck ".xdp-" temp file names when saving via the Flatpak document portal - thx wjcarpenter
+* Fix delete not working on the first subtitle row right after startup - thx Davanix
+* Fix changes to the original subtitle being lost when closing with "Yes" - thx Ironship
+* Fix menu bar keyboard issues: focus drops, Escape highlight, F10 underlines, submenu z-order - thx GrampaWildWilly
+* Fix "split line at cursor" not applying the continuation style - thx Ironship
+* Fix command line convert adding periods before known names in "Fix common errors" - thx Ironship
+* Fix repeated folder names when extracting 7-Zip archives (Faster Whisper XXL) - thx Ironship
+* Fix the app closing completely when clicking OK in "Text to speech" - thx Ironship
+* Fix the AI review delay input being too narrow - thx pdjdev
+* Faster typing and video preview with mpv - thx hisui3393
+* Fewer string allocations in hot paths - thx ivandrofly
+* Update Japanese translation - thx hisui3393
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta5 (6th of August 2026)
+
+* Add option to keep the end time when merging lines (allow overlap) - thx hisui3393
+* Add "Beautify time codes" to batch convert - thx xyv1997
+* Open the matching video automatically after OCR - thx fraternl
+* Use the container's default audio track when opening a video - thx fraternl
+* OCR: add the DeepSeek-OCR-2 backend (CrispEmbed v0.17.5)
+* Apply duration limits: the "do not go past shot change" option now works
+* Speech to text: select a Whisper engine on first run
+* Auto-translate via copy-paste: keep all ASSA tag groups in the translated text - thx FoxyLoon
+* Text to speech: keep the target language on cloning and detect the reference language - thx subof
+* ASSA: pick the most visible color for the subtitle grid when fading colors are used - thx rRobis
+* Copy ASSA/SSA lines to the clipboard without the file header - thx ghostminhtoan
+* Keep exact WebVTT cue position settings on save - thx Foxaryse
+* Keep multi-word "do not break" phrases together when auto-breaking - thx uckthis
+* Fix subtitle images changing vertical position with the text in PGS/VobSub export - thx robertmajsky
+* Fix SoftNI sub export always writing 25 fps instead of the project frame rate - thx rodnvs
+* Fix the CJK line termination check with Whisper Chinese - thx ajaska
+* Fix auto-trim white space merging Dutch words like "ze 's avonds" - thx fraternl
+* Fix "Start with uppercase letter after paragraph" treating single-letter lines as paragraph ends - thx fraternl
+* Fix long localized menu items being clipped by the popup width cap - thx Need74
+* Fix subtitle language names in the MP4 track picker - thx 5mrpcn
+* Fix "Download VLC" never completing when libVLC is already installed - thx hisui3393
+* Fix poor contrast of the settings icons with custom colors - thx rRobis
+* Fix the last change log line being covered by the horizontal scrollbar - thx ivandrofly
+* Fix "Return" not working as a shortcut when the subtitle grid has focus - thx Surlime
+* Fix the first line not being selected when opening a subtitle - thx fraternl
+* Faster waveform dragging and text editing - thx hisui3393
+* Faster merging of selected lines, auto-break and image based export
+* Fewer allocations in the UI value converters
+* Update Turkish translation - thx bilimiyorum
+* Update French translation - thx Need74
+* Update Traditional Chinese translation - thx love80312
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta4 (5th of August 2026)
+
+* Read subtitles from fragmented MP4 (DASH/CMAF): WebVTT, TTML/IMSC1 and tx3g
+* Offer the MP4 track picker for fragmented files with several subtitle tracks
+* Read stxt/sbtt text streams, tx3g styles and the VobSub palette from MP4
+* Source view: find/replace, go to line, live format check and a prompt before discarding edits
+* Add "Go to first line"/"Go to last line" shortcuts with video sync (Ctrl+Home/End) - thx GrampaWildWilly
+* OCR: add the PP-OCRv6 backend (CrispEmbed v0.17.2)
+* AI review/assistant: add Gemma 4 E2B, EuroLLM 9B/22B and Granite 4.1 8B
+* Update ffmpeg downloads - Windows 9.0, macOS ARM 8.1, macOS Intel 8.0
+* Update llama.cpp to b10256
+* Accessibility: announce combo box and spinner value changes, and let Alt close an open drop-down - thx Shaima-Almarzooqi
+* Spell check: detect the subtitle language again after opening/importing a file - thx fraternl
+* Fix right-to-left text rendering in dialog subtitle grids - thx AliNet1974
+* Fix the Settings dialog not opening with focus - thx GrampaWildWilly
+* Fix the subtitle grid getting stuck on the first caption after opening a file - thx GrampaWildWilly
+* Fix the initial video position not being 0:00 - thx GrampaWildWilly
+* Fix menus hidden behind the undocked audio visualizer - thx GrampaWildWilly
+* Fix undocked video controls popping up on mouse movement in other apps - thx GrampaWildWilly
+* Fix OmniVoice text to speech failing to start with the CUDA engine - thx subof
+* Explain native engine exit codes instead of showing a raw number - thx subof
+* Fix the CrispEmbed server exiting with code 127 on Linux - thx perkesfurmah-collab
+* Fix speech to text failing to start in the Flathub package (missing OpenBLAS) - thx DarkSwan86
+* Fix Statistics and batch convert crashing with the Bulgarian UI (bad format strings)
+* Fix the burn-in window losing its minimum width while generating
+* Faster subtitle grid selection handling and time code display - thx ivandrofly
+* Update Polish translation - thx potplayer-fanpack
+* Update French translation - thx Need74
+* Update Korean translation - thx 12si27
+* Update Japanese translation - thx hisui3393
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta3 (4th of August 2026)
+
+* Extract ARIB STD-B24 captions from transport streams (Japanese ISDB, Brazilian SBTVD)
+* Add D-Cinema interop properties dialog - thx igitlin
+* ASSA: embed fonts from the font collector, in the style editor and in batch convert
+* OCR: auto-detect source language and let the dictionary follow the language combo - thx fraternl
+* Text to speech: output language for CosyVoice3/Qwen3 cross-lingual cloning - thx subof
+* Text to speech: OmniVoice now works on Pascal/Volta CUDA cards - thx subof
+* Fix common errors: draggable splitter between the fixes and the preview - thx perkesfurmah-collab
+* Accessibility: announce grid time codes and name the Shortcuts list items - thx Shaima-Almarzooqi
+* Fix video playback on Windows ARM64 (an x64 mpv was downloaded) - thx Shaima-Almarzooqi
+* Fix crash on macOS with AV1 video by updating the bundled dav1d - thx almog6500
+* Fix "Copy text only" pasting lines out of order for a reverse selection - thx hisui3393
+* Fix keyboard navigation of the menu bar with no subtitle loaded - thx GrampaWildWilly
+* Auto-translate via copy-paste: overwrite re-translated lines instead of appending them - thx revov
+* Fix window cleanup running twice when closing - thx ivandrofly
+* Fix "Remove formatting - font name" doing nothing - thx Ironship
+* Fix Enter not working in the "Replace with" box - thx Ironship
+* Fix Escape not closing the "Generating audio" window - thx Ironship
+* Fix double key handling in the Media info window - thx Ironship
+* Fix the indeterminate progress bar not resetting on stop - thx Ironship
+* Fix the output folder field staying disabled in Batch convert settings - thx Ironship
+* Fix Binary OCR database windows showing nOCR titles - thx Ironship
+* Fix the burn-in window layout: progress bar overlapping the file size box - thx Ironship
+* Fix the file size converter keeping the suffix of the previously loaded language - thx Ironship
+* Use the dark theme background in the syntax text editor - thx pdjdev
+* Add "Pl." (plaza) to the Spanish abbreviation list - thx fraternl
+* Localize many remaining hardcoded strings (downloads, export menus, engines) - thx Ironship
+* Update Polish translation - thx potplayer-fanpack
+* Update Turkish translation - thx bilimiyorum
+* Update Portuguese (Brazil) translation - thx igorruckert
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta2 (3rd of August 2026)
+
+* Add type-to-search to all combo boxes - thx 9jfcc
+* Add "Sentence case" and make the casing options visible in the text box context menu - thx shanedk
+* Restore the copy-to-clipboard items in the subtitle grid context menu
+* Column "Paste from clipboard" accepts plain text again (text column only, like SE4)
+* Fix common errors: don't uppercase the word after an abbreviation like "dhr." - thx fraternl
+* Add abbreviation lists for 30 more languages
+* Fix the ASSA style editor losing data on rename and style switch - thx SiriosDev
+* Fix F10 not activating the menu bar: the default F10 binding is removed - thx GrampaWildWilly
+* Fix Alt not activating the menu bar after a dialog opened while Alt was held - thx GrampaWildWilly
+* Fix errors and a hang after closing the video player (mpv teardown race) - thx GrampaWildWilly
+* Text box: place the cursor at the line start when navigating between lines - thx lsmxpftz-cmyk
+* Join subtitles: the files can be rearranged again - thx Nino-kun
+* Source view: fix ASSA property contrast in the light theme, make empty areas clickable
+* Fix the Polish translation not loading (trailing commas in the JSON) and validate all in CI
+* Update Japanese translation - thx hisui3393
+* Update Korean translation - thx 12si27
+* Update Polish translation - thx potplayer-fanpack
+* Update Chinese Traditional translation
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta1 (2nd of August 2026)
+
+* Auto-translate: advanced llama.cpp and Ollama engines with batch context - thx subof
+* Auto-translate: system prompt, parameter settings and schema-forced output for these engines
+* Statistics: new dashboard view with tiles, meters, checks and a CPS histogram
+* Add "Remove/replace Unicode characters" tool (SE4 plugin port) - thx fraternl
+* Add ASSA font collector
+* Find/replace: SE4-style regex snippet context menu
+* Import plain text: add "Align time codes via forced aligner" - thx subof/David
+* Cut video: option to also cut the subtitle
+* Batch convert: brightness, alpha and color adjustments for image output
+* Open video from URL: video/subtitle checkboxes and auto-generated subtitles
+* Open video from URL: show the yt-dlp update prompt as a message box
+* Clean up YouTube auto-generated captions on load into one plain-text cue per spoken line
+* Waveform: per-track audio picker with size estimates, live progress and cancel - thx shanytc
+* Waveform: copy the subtitle at the video position and paste at the waveform position - thx shanytc
+* Text to speech: custom voice models for Piper
+* Fix common errors: context menu with applied-rule details and a rule filter
+* Add default save location setting - thx gadkarisid
+* Add auto-break settings under Settings -> Tools - thx citizenhelene
+* Add more proxy settings: domain, system credentials and a bypass list
+* Add optional Auto-translate, Speech to text and Point sync toolbar icons - thx fraternl
+* Add "Show selected lines earlier/later" to the subtitle grid context menu
+* Add "Go to video position..." to the Video menu and a toggle-subtitles video player shortcut
+* Add export support for Audacity/Tenacity labels
+* Machine-readable ffmpeg progress for shot changes, burn-in, re-encode and transparent subtitles
+* Help: respect a custom help shortcut, wire F1 in more windows, and add five new help pages
+* Remove the MLX Whisper speech-to-text engine - thx ruonghieu
+* Performance: faster hot paths across the UI and core libraries - thx ivandrofly
+* Build asset zips from source folders at build time and ship translations compressed
+* Move auto-translate, speech to text and OCR to libuilogic, keeping libse a pure subtitle library
+* Honor ASSA override tags (position, alignment, colors, ...) in image-based export - thx Maxia1
+* Honor {\pos(x,y)} in VobSub and DVD sup export
+* Fix red and blue being swapped in VobSub, SSA and TextST colors
+* Read the frame size from a standalone VobSub .idx
+* Keep the source position when re-exporting image subtitles
+* Fix undo wiping the original subtitle text column - thx abasameer
+* Fix Paddle OCR not starting from the GUI on macOS - thx HongyuS
+* Fix a batch of auto-translate bugs found in a bug hunt
+* Make ComboBox dropdowns follow the UI scale setting - thx goonis
+* Fix Google Lens OCR putting dialog dashes on their own lines - thx flashmasta
+* Fix inverted I/1-to-l OCR rule and extend the Dutch OCR replace list - thx fraternl
+* Restore total seconds/milliseconds time codes in export custom text format
+* Self-repair the unpacked theme folder when an icon file is missing
+* Point sync via another subtitle: take left times from the original timings - thx fraternl
+* Apply "extend to line before/after" to all selected lines - thx NiggleHub
+* Skip an auto-backup tick while a save is still in flight - thx ivandrofly
+* Download 64-bit libVLC on Windows x64 - thx StandAloof
+* Screen readers: the subtitle grid exposes keyboard focus via UI Automation again - thx Urs2026
+* The main subtitle grid and all dialog grids now use TableView
+* Accessibility: announce rule violations in the grid row's accessible name, safer initial focus
+* Accessibility: accessible names for icon buttons, keep grid keyboard focus on Home/End jumps
+* Page up/down moves the selected line in the subtitle grid and dialog grids - thx SiriosDev
+* Flatpak: bundle OpenBLAS so the CrispASR engines can start in the sandbox - thx DarkSwan86
+* Speech to text: report a missing shared library instead of silently returning an empty result
+* Fix "set start/end time" doing nothing when the video position was past the other time code - thx LabinSub
+* Modify selection: new "Hearing impaired (SDH)" rule - thx subof
+* Add "AI review" to the subtitle grid "Selected lines" context menu
+* AI review: new "delay in seconds between requests" setting for rate-limited cloud engines
+* Find and replace: also search the original text column in translator mode - thx radektuma
+* Fix the SSA storage styles context menu reading the file style list
+* Fix the UI freezing while text to speech seeded reference voices with ffmpeg
+* Update Italian translation - thx bovirus, SiriosDev
+* Update Korean translation - thx 12si27
+* Update Polish translation - thx potplayer-fanpack
+
+-----------------------------------------------------------------------------------------------------
+
 v5.1.0 (29th of July 2026)
 
 Subtitle Edit 5.1 is the first feature release after 5.0, collecting the work of

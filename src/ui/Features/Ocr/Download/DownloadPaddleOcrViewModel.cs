@@ -7,6 +7,7 @@ using Nikse.SubtitleEdit.Features.Shared;
 using Nikse.SubtitleEdit.Logic.Config;
 using Nikse.SubtitleEdit.Logic.Download;
 using Nikse.SubtitleEdit.Logic.SevenZipExtractor;
+using Nikse.SubtitleEdit.UiLogic.Http;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -97,7 +98,7 @@ public partial class DownloadPaddleOcrViewModel : ObservableObject, IClosingClea
                         ProgressText = $"Starting download {_downloadTaskIndex + 1} of {_downloadTaskUrls.Count}...";
                         var url = _downloadTaskUrls[_downloadTaskIndex];
                         var fileName = Path.Combine(_tempFolder, Path.GetFileName(url));
-                        _downloadTask = DownloadHelper.DownloadFileAsync(new HttpClient(), url, fileName, new Progress<float>(number =>
+                        _downloadTask = DownloadHelper.DownloadFileAsync(HttpClientFactoryWithProxy.CreateHttpClientWithProxy(), url, fileName, new Progress<float>(number =>
                         {
                             var percentage = (int)Math.Round(number * 100.0, MidpointRounding.AwayFromZero);
                             var pctString = percentage.ToString(CultureInfo.InvariantCulture);
@@ -113,8 +114,8 @@ public partial class DownloadPaddleOcrViewModel : ObservableObject, IClosingClea
 
                 if (!AllFileExists())
                 {
-                    ProgressText = "Download failed";
-                    Error = "No data received";
+                    ProgressText = Se.Language.General.DownloadFailed;
+                    Error = Se.Language.General.NoDataReceived;
                     return;
                 }
 
@@ -171,7 +172,7 @@ public partial class DownloadPaddleOcrViewModel : ObservableObject, IClosingClea
                     // otherwise hang the dialog with no error shown (#12127).
                     Se.LogError(exception, "PaddleOCR unpack failed");
                     StopIndeterminateProgress();
-                    ProgressText = "Unpacking failed";
+                    ProgressText = Se.Language.General.UnpackingFailed;
                     Error = exception.Message;
                     return;
                 }
@@ -187,13 +188,13 @@ public partial class DownloadPaddleOcrViewModel : ObservableObject, IClosingClea
                 var ex = _downloadTask.Exception?.InnerException ?? _downloadTask.Exception;
                 if (ex is OperationCanceledException)
                 {
-                    ProgressText = "Download canceled";
+                    ProgressText = Se.Language.General.DownloadCanceled;
                     Close();
                 }
                 else
                 {
-                    ProgressText = "Download failed";
-                    Error = ex?.Message ?? "Unknown error";
+                    ProgressText = Se.Language.General.DownloadFailed;
+                    Error = ex?.Message ?? Se.Language.General.UnknownError;
                 }
             }
         }
@@ -280,28 +281,28 @@ public partial class DownloadPaddleOcrViewModel : ObservableObject, IClosingClea
             _downloadTaskUrls.AddRange(PaddleOcr.UrlsSupportFiles);
             var url = _downloadTaskUrls[_downloadTaskIndex];
             var fileName = Path.Combine(_tempFolder, Path.GetFileName(url));
-            _downloadTask = DownloadHelper.DownloadFileAsync(new HttpClient(), url, fileName, downloadProgress, _cancellationTokenSource.Token);
+            _downloadTask = DownloadHelper.DownloadFileAsync(HttpClientFactoryWithProxy.CreateHttpClientWithProxy(), url, fileName, downloadProgress, _cancellationTokenSource.Token);
         }
         else if (_downloadType == PaddleOcrDownloadType.EngineGpu11)
         {
             _downloadTaskUrls.AddRange(PaddleOcr.UrlsWindowsGpuCuda11);
             var url = _downloadTaskUrls[_downloadTaskIndex];
             var fileName = Path.Combine(_tempFolder, Path.GetFileName(url));
-            _downloadTask = DownloadHelper.DownloadFileAsync(new HttpClient(), url, fileName, downloadProgress, _cancellationTokenSource.Token);
+            _downloadTask = DownloadHelper.DownloadFileAsync(HttpClientFactoryWithProxy.CreateHttpClientWithProxy(), url, fileName, downloadProgress, _cancellationTokenSource.Token);
         }
         else if (_downloadType == PaddleOcrDownloadType.EngineGpu12)
         {
             _downloadTaskUrls.AddRange(PaddleOcr.UrlsWindowsGpuCuda12);
             var url = _downloadTaskUrls[_downloadTaskIndex];
             var fileName = Path.Combine(_tempFolder, Path.GetFileName(url));
-            _downloadTask = DownloadHelper.DownloadFileAsync(new HttpClient(), url, fileName, downloadProgress, _cancellationTokenSource.Token);
+            _downloadTask = DownloadHelper.DownloadFileAsync(HttpClientFactoryWithProxy.CreateHttpClientWithProxy(), url, fileName, downloadProgress, _cancellationTokenSource.Token);
         }
         else if (_downloadType == PaddleOcrDownloadType.EngineCpu)
         {
             _downloadTaskUrls.AddRange(PaddleOcr.UrlsWindowsCpu);
             var url = _downloadTaskUrls[_downloadTaskIndex];
             var fileName = Path.Combine(_tempFolder, Path.GetFileName(url));
-            _downloadTask = DownloadHelper.DownloadFileAsync(new HttpClient(), url, fileName, downloadProgress,
+            _downloadTask = DownloadHelper.DownloadFileAsync(HttpClientFactoryWithProxy.CreateHttpClientWithProxy(), url, fileName, downloadProgress,
                 _cancellationTokenSource.Token);
         }
         else if (_downloadType == PaddleOcrDownloadType.EngineGpuLinux)
@@ -309,19 +310,19 @@ public partial class DownloadPaddleOcrViewModel : ObservableObject, IClosingClea
             _downloadTaskUrls.AddRange(PaddleOcr.UrlsLinuxGpu);
             var url = _downloadTaskUrls[_downloadTaskIndex];
             var fileName = Path.Combine(_tempFolder, Path.GetFileName(url));
-            _downloadTask = DownloadHelper.DownloadFileAsync(new HttpClient(), url, fileName, downloadProgress, _cancellationTokenSource.Token);
+            _downloadTask = DownloadHelper.DownloadFileAsync(HttpClientFactoryWithProxy.CreateHttpClientWithProxy(), url, fileName, downloadProgress, _cancellationTokenSource.Token);
         }            
         else if (_downloadType == PaddleOcrDownloadType.EngineCpuLinux)
         {
             _downloadTaskUrls.AddRange(PaddleOcr.UrlsLinuxCpu);
             var url = _downloadTaskUrls[_downloadTaskIndex];
             var fileName = Path.Combine(_tempFolder, Path.GetFileName(url));
-            _downloadTask = DownloadHelper.DownloadFileAsync(new HttpClient(), url, fileName, downloadProgress, _cancellationTokenSource.Token);
+            _downloadTask = DownloadHelper.DownloadFileAsync(HttpClientFactoryWithProxy.CreateHttpClientWithProxy(), url, fileName, downloadProgress, _cancellationTokenSource.Token);
         }         
         else
         {
             Se.LogError($"Unknown Paddle OCR download type: {_downloadType}");
-            ProgressText = "Download failed";
+            ProgressText = Se.Language.General.DownloadFailed;
             Error = "Unknown download type";
             return;
         }

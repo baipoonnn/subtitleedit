@@ -3,12 +3,8 @@
 public class LanguageBeautifyTimeCodes
 {
     public string Title { get; set; }
-    public string BeautifySettings { get; set; }
     public string SnapToFrames { get; set; }
-    public string FrameGap { get; set; }
     public string MinDuration { get; set; }
-    public string ShotChangeThreshold { get; set; }
-    public string ShotChangeOffset { get; set; }
     public string Original { get; set; }
     public string Beautified { get; set; }
     public string SubtitlesCount { get; set; }
@@ -25,16 +21,16 @@ public class LanguageBeautifyTimeCodes
     public string PreviousChange { get; set; }
     public string NextChange { get; set; }
     public string EditProfile { get; set; }
+    public string BatchSnapToShotChanges { get; set; }
+    public string BatchFrameRateFromVideo { get; set; }
+    public string BatchFrameRateFixed { get; set; }
+    public string BatchInfo { get; set; }
 
     public LanguageBeautifyTimeCodes()
     {
         Title = "Beautify time codes";
-        BeautifySettings = "Beautify Settings";
         SnapToFrames = "Snap to Frames";
-        FrameGap = "Frame Gap";
         MinDuration = "Min Duration (ms)";
-        ShotChangeThreshold = "Shot Change Threshold (ms)";
-        ShotChangeOffset = "Shot Change Offset (frames)";
         Original = "Original";
         Beautified = "Beautified";
         SubtitlesCount = "Subtitles";
@@ -51,5 +47,9 @@ public class LanguageBeautifyTimeCodes
         PreviousChange = "Previous change";
         NextChange = "Next change";
         EditProfile = "Edit profile...";
+        BatchSnapToShotChanges = "Snap cues to shot changes (if available)";
+        BatchFrameRateFromVideo = "Use frame rate from video file with same name as subtitle file";
+        BatchFrameRateFixed = "Use fixed frame rate";
+        BatchInfo = "Shot changes are read from a video file with the same name as the subtitle file, if one is found.";
     }
 }

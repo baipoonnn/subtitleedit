@@ -191,8 +191,9 @@ public static class InitNativeMacMenu
             v => !v.ShowColumnOriginalText, nameof(MainViewModel.ShowColumnOriginalText)));
         fileItems.Items.Add(Conditional(Clean(l.CloseOriginal), v => v.FileCloseOriginalCommand,
             v => v.ShowColumnOriginalText, nameof(MainViewModel.ShowColumnOriginalText)));
+        // Hidden for a read-only original - see the same item in InitMenu (issue #13449).
         fileItems.Items.Add(Conditional(Clean(l.CloseTranslation), v => v.FileCloseTranslationCommand,
-            v => v.ShowColumnOriginalText, nameof(MainViewModel.ShowColumnOriginalText)));
+            v => v.CanEditOriginal, nameof(MainViewModel.CanEditOriginal)));
 
         state.ReopenItem = new NativeMenuItem(Clean(l.Reopen)) { Menu = new NativeMenu() };
         fileItems.Items.Add(state.ReopenItem);
@@ -231,6 +232,7 @@ public static class InitNativeMacMenu
         var exportItems = new NativeMenu();
         exportItems.Items.Add(Item(Se.Language.General.BluRaySup, v => v.ExportBluRaySupCommand));
         exportItems.Items.Add(Item(Se.Language.General.BdnXml, v => v.ExportBdnXmlCommand));
+        exportItems.Items.Add(Item(Se.Language.General.BdnXml8Bit, v => v.ExportBdnXml8BitCommand));
         exportItems.Items.Add(Item(new CapMakerPlus().Name, v => v.ExportCapMakerPlusCommand));
         exportItems.Items.Add(Item(CheetahCaption.NameOfFormat, v => v.ExportCheetahCaptionCommand));
         exportItems.Items.Add(Item(CheetahCaptionOld.NameOfFormat, v => v.ExportCheetahCaptionOldCommand));
@@ -238,14 +240,14 @@ public static class InitNativeMacMenu
         exportItems.Items.Add(Item(lExport.TitleExportDCinemaInteropPng, v => v.ExportDCinemaInteropPngCommand));
         exportItems.Items.Add(Item(lExport.TitleExportDCinemaSmpte2014Png, v => v.ExportDCinemaSmpte2014PngCommand));
         exportItems.Items.Add(Item(Ebu.NameOfFormat, v => v.ExportEbuStlCommand));
-        exportItems.Items.Add(Item("DOST/png", v => v.ExportDostPngCommand));
+        exportItems.Items.Add(Item(lExport.TitleExportDostPng, v => v.ExportDostPngCommand));
         exportItems.Items.Add(Item(lExport.TitleExportDvdSup, v => v.ExportDvdSupCommand));
-        exportItems.Items.Add(Item("Final Cut Pro + image", v => v.ExportFcpPngCommand));
+        exportItems.Items.Add(Item(lExport.TitleExportFcpImage, v => v.ExportFcpPngCommand));
         exportItems.Items.Add(Item(Se.Language.General.ImagesWithTimeCode, v => v.ExportImagesWithTimeCodeCommand));
         exportItems.Items.Add(Item(Pac.NameOfFormat, v => v.ExportPacCommand));
         exportItems.Items.Add(Item(new PacUnicode().Name, v => v.ExportPacUnicodeCommand));
         exportItems.Items.Add(Item(lExport.TitleExportVobSub, v => v.ExportVobSubCommand));
-        exportItems.Items.Add(Item("WebVTT png", v => v.ExportWebVttThumbnailsCommand));
+        exportItems.Items.Add(Item(lExport.TitleExportWebVttThumbnails, v => v.ExportWebVttThumbnailsCommand));
         exportItems.Items.Add(new NativeMenuItemSeparator());
         exportItems.Items.Add(Item(Clean(lExport.CustomTextFormatsDotDotDot), v => v.ShowExportCustomTextFormatCommand));
         exportItems.Items.Add(Item(Clean(lExport.PlainTextDotDotDot), v => v.ShowExportPlainTextCommand));

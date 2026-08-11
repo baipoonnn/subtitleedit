@@ -34,6 +34,7 @@ public partial class AiReviewViewModel : ObservableObject
     [ObservableProperty] private string _openAiCompatibleUrl;
     [ObservableProperty] private string _openAiCompatibleModel;
     [ObservableProperty] private string _openAiCompatibleApiKey;
+    [ObservableProperty] private int _requestDelaySeconds;
     [ObservableProperty] private ObservableCollection<LlamaCppModelDisplay> _llamaCppModels;
     [ObservableProperty] private LlamaCppModelDisplay? _selectedLlamaCppModel;
     [ObservableProperty] private string _languageDisplay;
@@ -67,14 +68,13 @@ public partial class AiReviewViewModel : ObservableObject
     {
         _windowService = windowService;
 
-        Engines = new ObservableCollection<string> { SeAiReview.EngineLlamaCpp, SeAiReview.EngineOllama, SeAiReview.EngineOpenAiCompatible };
-        SelectedEngine = Engines.Contains(Se.Settings.Tools.AiReview.Engine)
-            ? Se.Settings.Tools.AiReview.Engine
-            : SeAiReview.EngineLlamaCpp;
+        Engines = new ObservableCollection<string>();
+        SelectedEngine = AiEngineCombo.Populate(Engines, Se.Settings.Tools.AiReview.Engine);
         OllamaModel = Se.Settings.Tools.AiReview.OllamaModel;
         OpenAiCompatibleUrl = Se.Settings.Tools.AiReview.OpenAiCompatibleUrl;
         OpenAiCompatibleModel = Se.Settings.Tools.AiReview.OpenAiCompatibleModel;
         OpenAiCompatibleApiKey = Se.Settings.Tools.AiReview.OpenAiCompatibleApiKey;
+        RequestDelaySeconds = Se.Settings.Tools.AiReview.RequestDelaySeconds;
         LlamaCppModels = new ObservableCollection<LlamaCppModelDisplay>();
         SelectedLlamaCppModel = LlamaCppDownloadHelper.PopulateModels(
             LlamaCppModels,
@@ -91,7 +91,7 @@ public partial class AiReviewViewModel : ObservableObject
         var l = Se.Language.Tools.AiReview;
         FilterChips = new ObservableCollection<ReviewFilterChip>
         {
-            new() { Category = null, Label = l.CategoryAll, IsActive = true },
+            new() { Category = null, Label = Se.Language.General.All, IsActive = true },
             new() { Category = ReviewCategory.Spelling, Label = l.CategorySpelling },
             new() { Category = ReviewCategory.Grammar, Label = l.CategoryGrammar },
             new() { Category = ReviewCategory.Punctuation, Label = l.CategoryPunctuation },
@@ -178,6 +178,17 @@ public partial class AiReviewViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Re-fills the engine combo so its llama.cpp install-status dot is recomputed - the rows keep
+    /// the status they were built with, so an engine download/update leaves a stale dot otherwise.
+    /// </summary>
+    private void RefreshEngines()
+    {
+        var selected = SelectedEngine;
+        SelectedEngine = string.Empty; // drop the selection first, so the combo also rebuilds the closed-state row
+        SelectedEngine = AiEngineCombo.Populate(Engines, selected);
+    }
+
+    /// <summary>
     /// Opens the shared llama.cpp engine settings dialog (installed backend, pinned release, install
     /// status). Its download button stops the server first - it holds llama-server open, so a running
     /// server would block replacing the binary - then re-downloads and refreshes the model dots.
@@ -195,6 +206,7 @@ public partial class AiReviewViewModel : ObservableObject
             vm => vm.Initialize(RedownloadLlamaCppEngineAsync));
 
         RefreshLlamaCppModels();
+        RefreshEngines();
     }
 
     private async Task RedownloadLlamaCppEngineAsync()
@@ -220,6 +232,7 @@ public partial class AiReviewViewModel : ObservableObject
             forceEngineDownload: true);
 
         RefreshLlamaCppModels();
+        RefreshEngines(); // the engine binary just changed - re-evaluate its dot (amber -> green)
     }
 
     private void SaveSettings()
@@ -231,6 +244,7 @@ public partial class AiReviewViewModel : ObservableObject
         settings.OpenAiCompatibleUrl = OpenAiCompatibleUrl.Trim();
         settings.OpenAiCompatibleModel = OpenAiCompatibleModel.Trim();
         settings.OpenAiCompatibleApiKey = OpenAiCompatibleApiKey.Trim();
+        settings.RequestDelaySeconds = RequestDelaySeconds;
         Se.SaveSettings();
     }
 
@@ -256,10 +270,12 @@ public partial class AiReviewViewModel : ObservableObject
                     LlamaCppServerManager.GetAllReviewModels(), persistAsTranslateModel: false))
             {
                 RefreshLlamaCppModels();
+                RefreshEngines();
                 return;
             }
 
             RefreshLlamaCppModels(); // pick up the fresh install state (green dot)
+            RefreshEngines();
             display = SelectedLlamaCppModel;
             if (display == null)
             {
@@ -326,6 +342,29 @@ public partial class AiReviewViewModel : ObservableObject
         using var client = new AiReviewClient();
         var processedLines = 0;
         var consecutiveErrors = 0;
+        var delay = TimeSpan.FromSeconds(Math.Max(0, RequestDelaySeconds));
+        var lastRequestCompletedUtc = DateTime.MinValue;
+
+        // Cloud engines enforce strict requests-per-minute limits and answer with 429 when they are
+        // exceeded, so wait until the delay has passed since the previous request finished - the same
+        // rule auto-translate uses. The first request of a run never waits.
+        async Task<string> ChatWithDelayAsync(string content)
+        {
+            var remaining = delay - (DateTime.UtcNow - lastRequestCompletedUtc);
+            if (remaining > TimeSpan.Zero)
+            {
+                await Task.Delay(remaining, ct);
+            }
+
+            try
+            {
+                return await client.ChatAsync(url, model, systemPrompt, content, ct, apiKey);
+            }
+            finally
+            {
+                lastRequestCompletedUtc = DateTime.UtcNow;
+            }
+        }
 
         try
         {
@@ -340,12 +379,12 @@ public partial class AiReviewViewModel : ObservableObject
                 List<AiReviewChange>? changes = null;
                 try
                 {
-                    var reply = await client.ChatAsync(url, model, systemPrompt, userContent, ct, apiKey);
+                    var reply = await ChatWithDelayAsync(userContent);
                     changes = AiReviewProtocol.ParseChanges(reply, editableNumbers);
                     if (changes.Count == 0 && AiReviewProtocol.ExtractJsonObject(reply) == null)
                     {
                         // invalid reply - one retry for this chunk
-                        reply = await client.ChatAsync(url, model, systemPrompt, userContent, ct, apiKey);
+                        reply = await ChatWithDelayAsync(userContent);
                         changes = AiReviewProtocol.ParseChanges(reply, editableNumbers);
                     }
 

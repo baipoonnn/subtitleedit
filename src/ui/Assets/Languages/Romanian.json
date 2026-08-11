@@ -1,6 +1,6 @@
 {
   "title": "Subtitle Edit",
-  "version": "v5.0.0",
+  "version": "v5.1.0",
   "translatedBy": "zildan v1 05.04.26",
   "cultureName": "ro-RO",
   "general": {
@@ -1016,7 +1016,7 @@
     "undoPerformed": "Anulare efectuată",
     "undoPerformedXActionLeft": "Anulare efectuată (acțiuni rămase: {0})",
     "xLinesCopiedFromOriginal": "{0} rânduri copiate din subtitrarea originală",
-    "xLinesMerged": "Liniile X au fuzionat",
+    "xLinesMerged": "Liniile {0} au fuzionat",
     "xLinesSelectedOfY": "{0} linii selectate din {1}",
     "xLinesSwitched": "{0} linii schimbate",
     "xShotChangedLoaded": "S-au încărcat {0} modificări de fotografie",

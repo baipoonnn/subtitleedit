@@ -55,6 +55,7 @@ public class MainView : ViewBase
             _vm.Window = hostWindow;
             _vm.Window.Closing += _vm.OnClosing;
             _vm.Window.Deactivated += _vm.OnWindowDeactivated;
+            _vm.Window.Activated += _vm.OnWindowActivated;
             _vm.Window.Loaded += (_, _) =>
             {
                 _vm.OnLoaded();
@@ -112,7 +113,7 @@ public class MainView : ViewBase
 
                 _vm.ContentGrid.InvalidateMeasure();
                 _vm.ContentGrid.InvalidateArrange();
-                Dispatcher.UIThread.Post(() => _vm.SubtitleGrid.Focus());
+                Dispatcher.UIThread.Post(() => TableViewExtras.FocusRow(_vm.SubtitleGrid));
             }, DispatcherPriority.Loaded);
         };
 

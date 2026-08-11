@@ -25,6 +25,7 @@ using Nikse.SubtitleEdit.Features.Tools.SplitBreakLongLines;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
 using Nikse.SubtitleEdit.Logic.Dictionaries;
+using Nikse.SubtitleEdit.Logic.Media;
 using Nikse.SubtitleEdit.Logic.LlamaCpp;
 using Nikse.SubtitleEdit.UiLogic.Ocr;
 using SkiaSharp;
@@ -47,6 +48,7 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
 {
     public static readonly string FormatAyato = new Ayato().Name;
     public const string FormatBdnXml = "BDN-XML";
+    public const string FormatBdnXml8Bit = "BDN-XML 8-bit";
     public const string FormatBluRaySup = "Blu-ray sup";
     public static readonly string FormatCavena890 = new Cavena890().Name;
     public const string FormatDCinemaInterop = "D-Cinema interop/png";
@@ -63,6 +65,10 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
 
     private BatchConvertConfig _config;
     private List<SubtitleFormat> _subtitleFormats;
+
+    // Font-name -> found font files, shared across the items of one batch run so the
+    // "Embed fonts" function does not rescan the font folders for every file.
+    private readonly Dictionary<string, List<string>> _fontFilesCache = new(StringComparer.OrdinalIgnoreCase);
 
     public SubtitleFormat Format { get; set; } = new SubRip();
 
@@ -92,6 +98,7 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
     {
         _config = config;
         _subtitleFormats = SubtitleFormatHelper.GetSubtitleFormatsWithFavoritesAtTop();
+        _fontFilesCache.Clear();
     }
 
     /// <summary>
@@ -315,11 +322,27 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
             }
             else if (Se.Settings.Tools.BatchConvert.OcrEngine.Equals("Ollama", StringComparison.OrdinalIgnoreCase))
             {
-                await RunOllamaOcr(imageSubtitle, item, cancellationToken);
+                // A false return means the runner already set a terminal status (engine not
+                // downloaded, startup failure, cancelled, every line blank) - stop here so the
+                // save path below cannot overwrite it with "Converted" or a generic error.
+                if (!await RunOllamaOcr(imageSubtitle, item, cancellationToken))
+                {
+                    return;
+                }
             }
             else if (Se.Settings.Tools.BatchConvert.OcrEngine.Equals("llama.cpp", StringComparison.OrdinalIgnoreCase))
             {
-                await RunLlamaCppOcr(imageSubtitle, item, cancellationToken);
+                if (!await RunLlamaCppOcr(imageSubtitle, item, cancellationToken))
+                {
+                    return;
+                }
+            }
+            else if (Se.Settings.Tools.BatchConvert.OcrEngine.Equals(CrispEmbedEngine.StaticName, StringComparison.OrdinalIgnoreCase))
+            {
+                if (!await RunCrispEmbedOcr(imageSubtitle, item, cancellationToken))
+                {
+                    return;
+                }
             }
             else
             {
@@ -446,6 +469,17 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
             }
         }
 
+        foreach (var aribPid in tsParser.AribSubtitlesLookup)
+        {
+            foreach (var language in aribPid.Value)
+            {
+                if (language.Value.Count > 0)
+                {
+                    result.Add(new TransportStreamResult { IsImage = false, Subtitle = new Subtitle(language.Value) });
+                }
+            }
+        }
+
         return result;
     }
 
@@ -535,31 +569,7 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
 
     internal static List<VobSubMergedPack> LoadVobSubFromMatroska(MatroskaTrackInfo matroskaSubtitleInfo, MatroskaFile matroska, out Core.VobSub.Idx? idx)
     {
-        var mergedVobSubPacks = new List<VobSubMergedPack>();
-        if (matroskaSubtitleInfo.ContentEncodingType == 1)
-        {
-            idx = null;
-            return mergedVobSubPacks;
-        }
-
-        var sub = matroska.GetSubtitle(matroskaSubtitleInfo.TrackNumber, null);
-        idx = new Core.VobSub.Idx(matroskaSubtitleInfo.GetCodecPrivate().SplitToLines());
-        foreach (var p in sub)
-        {
-            mergedVobSubPacks.Add(new VobSubMergedPack(p.GetData(matroskaSubtitleInfo), TimeSpan.FromMilliseconds(p.Start), 32, null));
-            if (mergedVobSubPacks.Count > 0)
-            {
-                mergedVobSubPacks[mergedVobSubPacks.Count - 1].EndTime = TimeSpan.FromMilliseconds(p.End);
-            }
-
-            // fix overlapping (some versions of Handbrake makes overlapping time codes - thx Hawke)
-            if (mergedVobSubPacks.Count > 1 && mergedVobSubPacks[mergedVobSubPacks.Count - 2].EndTime > mergedVobSubPacks[mergedVobSubPacks.Count - 1].StartTime)
-            {
-                mergedVobSubPacks[mergedVobSubPacks.Count - 2].EndTime = TimeSpan.FromMilliseconds(mergedVobSubPacks[mergedVobSubPacks.Count - 1].StartTime.TotalMilliseconds - 1);
-            }
-        }
-
-        return mergedVobSubPacks;
+        return MatroskaImageSubtitleExtractor.ExtractVobSub(matroskaSubtitleInfo, matroska, out idx);
     }
 
 
@@ -1255,7 +1265,12 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
         }
     }
     
-    private async Task RunOllamaOcr(IOcrSubtitle imageSubtitles, BatchConvertItem item, CancellationToken cancellationToken)
+    /// <returns>
+    /// True when the item should continue through convert functions and save; false when the
+    /// runner already set a terminal status (not downloaded, startup failure, cancelled, every
+    /// line blank) that the save path must not overwrite.
+    /// </returns>
+    private async Task<bool> RunOllamaOcr(IOcrSubtitle imageSubtitles, BatchConvertItem item, CancellationToken cancellationToken)
     {
         var ollamaOcr = new OllamaOcr();
         var url = Se.Settings.Ocr.OllamaUrl;
@@ -1288,10 +1303,14 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
             item.Subtitle.Paragraphs.All(p => string.IsNullOrWhiteSpace(p.Text)))
         {
             item.Status = Se.Language.Ocr.OllamaModelLikelyWrong;
+            return false;
         }
+
+        return !cancelled;
     }
 
-    private async Task RunLlamaCppOcr(IOcrSubtitle imageSubtitles, BatchConvertItem item, CancellationToken cancellationToken)
+    /// <inheritdoc cref="RunOllamaOcr"/>
+    private async Task<bool> RunLlamaCppOcr(IOcrSubtitle imageSubtitles, BatchConvertItem item, CancellationToken cancellationToken)
     {
         // Curated OCR model from settings (picked in batch convert settings / the OCR window).
         // The batch run never downloads - the settings dialog prompts for that on OK.
@@ -1300,7 +1319,7 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
         if (model == null || !LlamaCppServerManager.IsEngineInstalled() || !LlamaCppServerManager.IsModelInstalled(model))
         {
             item.Status = Se.Language.Ocr.LlamaCppNotDownloaded;
-            return;
+            return false;
         }
 
         try
@@ -1311,7 +1330,7 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
         catch (Exception ex)
         {
             item.Status = string.Format(Se.Language.General.ErrorX, ex.Message);
-            return;
+            return false;
         }
 
         var engine = new LlamaCppOcr(Se.Settings.Ocr.LlamaCppOcrTimeoutMinutes);
@@ -1345,7 +1364,96 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
             item.Subtitle.Paragraphs.All(p => string.IsNullOrWhiteSpace(p.Text)))
         {
             item.Status = Se.Language.Ocr.LlamaCppReturnedNoText;
+            return false;
         }
+
+        return !cancelled;
+    }
+
+    /// <inheritdoc cref="RunOllamaOcr"/>
+    private async Task<bool> RunCrispEmbedOcr(IOcrSubtitle imageSubtitles, BatchConvertItem item, CancellationToken cancellationToken)
+    {
+        // Backend/model picked in batch convert settings (shared with the OCR window). The batch
+        // run never downloads - the settings dialog prompts for that on OK.
+        var backend = CrispEmbedEngine.GetBackends().FirstOrDefault(b => b.Name == Se.Settings.Ocr.CrispEmbedBackend);
+        var model = backend?.Models.FirstOrDefault(m => m.Name == Se.Settings.Ocr.CrispEmbedModel)
+                    ?? backend?.Models.FirstOrDefault(m => backend.IsModelInstalled(m));
+        if (backend == null || model == null || !CrispEmbedEngine.IsEngineInstalled() || !backend.IsModelInstalled(model))
+        {
+            item.Status = Se.Language.Ocr.CrispEmbedNotDownloaded;
+            return false;
+        }
+
+        using var engine = new CrispEmbedOcr(Se.Settings.Ocr.CrispEmbedOcrTimeoutMinutes);
+
+        // PP-OCRv6 is a detector+recognizer pair driven through the CLI; the VLM backends load
+        // once into crispembed-server per file - see CrispEmbedOcr.
+        item.Status = Se.Language.General.OcrDotDotDot;
+        bool started;
+        try
+        {
+            started = backend.UsesTextDetector
+                ? engine.StartCliPipeline(
+                    CrispEmbedEngine.GetCliExecutable(),
+                    backend.GetModelPath(model),
+                    backend.GetDetectorPath(model))
+                : await engine.StartServerAsync(
+                    CrispEmbedEngine.GetServerExecutable(),
+                    backend.GetModelPath(model),
+                    cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            item.Status = Se.Language.General.Cancelled;
+            return false;
+        }
+
+        if (!started)
+        {
+            item.Status = string.Format(Se.Language.General.ErrorX, engine.Error);
+            return false;
+        }
+
+        item.Subtitle = new Subtitle();
+        var cancelled = false;
+        for (var i = 0; i < imageSubtitles.Count; i++)
+        {
+            var pct = (i + 1) * 100 / imageSubtitles.Count;
+            item.Status = string.Format(Se.Language.General.OcrPercentX, pct);
+            var bitmap = imageSubtitles.GetBitmap(i);
+
+            string text;
+            try
+            {
+                text = await engine.Ocr(bitmap, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                item.Status = Se.Language.General.Cancelled;
+                return false;
+            }
+
+            var p = new Paragraph(text, imageSubtitles.GetStartTime(i).TotalMilliseconds, imageSubtitles.GetEndTime(i).TotalMilliseconds);
+            item.Subtitle.Paragraphs.Add(p);
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                item.Status = Se.Language.General.Cancelled;
+                cancelled = true;
+                break;
+            }
+        }
+
+        // Every line blank means the engine/model setup is broken - flag the file so the user
+        // notices instead of ending up with a silently-empty subtitle.
+        if (!cancelled && item.Subtitle.Paragraphs.Count > 0 &&
+            item.Subtitle.Paragraphs.All(p => string.IsNullOrWhiteSpace(p.Text)))
+        {
+            item.Status = Se.Language.Ocr.CrispEmbedReturnedNoText;
+            return false;
+        }
+
+        return !cancelled;
     }
 
     /// <summary>
@@ -1403,6 +1511,8 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
             return;
         }
 
+        var profile = GetExportImagesProfile();
+
         var imageParameters = new List<ImageParameter>();
         for (var i = 0; i < imageSubtitle.Count; i++)
         {
@@ -1431,6 +1541,12 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
                 BottomTopMargin = 0,
                 LeftRightMargin = 0,
                 Bitmap = ApplyImageAdjustments(imageSubtitle.GetBitmap(i)),
+                // The export handlers read these off the parameters: FCP/BDN take their
+                // timecode frame rate from here (falling back to a 25/23.976 default), and
+                // FCP/Blu-ray render onto a frame-sized canvas when full frame is on.
+                FramesPerSecond = profile.FramesPerSecond,
+                IsFullFrame = profile.IsFullFrame,
+                FullFrameBackgroundColor = profile.FullFrameBackgroundColor.FromHexToColor().ToSKColor(),
             };
             var position = imageSubtitle.GetPosition(i);
             if (position.X >= 0 && position.Y >= 0)
@@ -1458,6 +1574,12 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
         if (_config.TargetFormatName == FormatBdnXml)
         {
             exportHandler = new ExportHandlerBdnXml();
+            extension = string.Empty; // folder
+        }
+
+        if (_config.TargetFormatName == FormatBdnXml8Bit)
+        {
+            exportHandler = new ExportHandlerBdnXml(true);
             extension = string.Empty; // folder
         }
 
@@ -1536,6 +1658,13 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
                         s.Footer = _config.AssaFooter;
                     }
                 }
+
+                // After the header/footer template above, so fonts are collected from the
+                // styles that are actually written and the embedding is not overwritten.
+                if (_config.AssaEmbedFonts.IsActive)
+                {
+                    AssaFontEmbedder.EmbedUsedFonts(s, cancellationToken, _fontFilesCache);
+                }
             }
 
             var converted = targetFormat.ToText(s, Path.GetFileNameWithoutExtension(item.FileName));
@@ -1570,23 +1699,24 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
         }
     }
 
+    /// <summary>The export-images profile the target-format settings dialog edits and saves.</summary>
+    private static SeExportImagesProfile GetExportImagesProfile()
+    {
+        return Se.Settings.File.ExportImages.Profiles.FirstOrDefault(p => p.ProfileName == Se.Settings.File.ExportImages.LastProfileName)
+               ?? Se.Settings.File.ExportImages.Profiles.FirstOrDefault()
+               ?? new SeExportImagesProfile();
+    }
+
     private IOcrSubtitle? CreateImageSubtitles(BatchConvertItem item)
     {
-        var profile = Se.Settings.File.ExportImages.Profiles.FirstOrDefault(p => p.ProfileName == Se.Settings.File.ExportImages.LastProfileName);
-        if (profile == null)
-        {
-            profile = Se.Settings.File.ExportImages.Profiles.FirstOrDefault();
-        }
-
-        if (profile == null)
-        {
-            profile = new SeExportImagesProfile();
-        }
+        var profile = GetExportImagesProfile();
 
         if (item.Subtitle == null)
         {
             return null;
         }
+
+        var (scriptWidth, scriptHeight) = ExportTextTags.GetScriptResolution(item.Subtitle.Header);
 
         var imageParameters = new List<ImageParameter>();
         for (var i = 0; i < item.Subtitle.Paragraphs.Count; i++)
@@ -1594,12 +1724,14 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
             Paragraph? subtitle = item.Subtitle.Paragraphs[i];
             var imageParameter = new ImageParameter
             {
-                Alignment = ExportAlignment.BottomCenter,
+                // "{\an8}" & co. were stripped from the text but not honored, so top-positioned
+                // lines silently ended up at the bottom (issue #13025).
+                Alignment = ExportTextTags.GetAlignment(subtitle.Text, ExportAlignment.BottomCenter),
                 ContentAlignment = ExportContentAlignment.Center,
                 PaddingLeftRight = profile.PaddingLeftRight,
                 PaddingTopBottom = profile.PaddingTopBottom,
                 Index = i,
-                Text = HtmlUtil.RemoveAssAlignmentTags(subtitle.Text),
+                Text = ExportTextTags.ToRenderableText(subtitle.Text),
                 StartTime = subtitle.StartTime.TimeSpan,
                 EndTime = subtitle.EndTime.TimeSpan,
                 FontColor = profile.FontColor.FromHexToColor().ToSKColor(),
@@ -1617,9 +1749,20 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
                 ScreenHeight = profile.ScreenHeight,
                 BottomTopMargin = profile.BottomTopMargin,
                 LeftRightMargin = profile.LeftRightMargin,
+                // The export handlers read these off the parameters: FCP/BDN take their
+                // timecode frame rate from here (falling back to a 25/23.976 default), and
+                // FCP/Blu-ray render onto a frame-sized canvas when full frame is on.
+                FramesPerSecond = profile.FramesPerSecond,
+                IsFullFrame = profile.IsFullFrame,
+                FullFrameBackgroundColor = profile.FullFrameBackgroundColor.FromHexToColor().ToSKColor(),
             };
 
             imageParameter.Bitmap = ExportImageBasedViewModel.GenerateBitmap(imageParameter);
+
+            // "{\pos(x,y)}" anchors the rendered text, so it needs the bitmap size - and the
+            // coordinates are in the script's own resolution, not the export canvas.
+            ExportTextTags.ApplyPositionTag(imageParameter, subtitle.Text, scriptWidth, scriptHeight);
+
             imageParameters.Add(imageParameter);
         }
 
@@ -1640,6 +1783,7 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
             s = ChangeSpeed(s);
             s = BridgeGaps(s);
             s = ApplyMinGap(s);
+            s = BeautifyTimeCodes(s, item.FileName);
         }
         else
         {
@@ -1667,6 +1811,7 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
             s = FixRightToLeft(s);
             s = AssaChangeResolution(s);
             s = AssaChangeStyle(s);
+            s = BeautifyTimeCodes(s, item.FileName);
             s = SortBy(s);
         }
 
@@ -1979,7 +2124,10 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
         subtitle.Paragraphs.Clear();
         foreach (var sv in subtitlesFixed)
         {
-            subtitle.Paragraphs.Add(sv.ToParagraph());
+            // Pass the format: a bare ToParagraph leaves Paragraph.Extra empty, and the ASSA
+            // writer reads the Dialogue style column from Extra - every line in a styled file
+            // would fall back to the first style in the header.
+            subtitle.Paragraphs.Add(sv.ToParagraph(subtitle.OriginalFormat));
         }
 
         return subtitle;
@@ -2057,6 +2205,75 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
             }
         }
 
+        return subtitle;
+    }
+
+    private Subtitle BeautifyTimeCodes(Subtitle subtitle, string subtitleFileName)
+    {
+        if (!_config.BeautifyTimeCodes.IsActive)
+        {
+            return subtitle;
+        }
+
+        // Frame rate comes from either a fixed user-chosen rate or a video file matching
+        // the subtitle file name, when one exists. Shot changes are only available if they
+        // were previously generated/imported for that video (they are cached on disk per
+        // video file).
+        //
+        // Without a fixed rate or a matching video, fall back to the frame rate this batch
+        // is actually producing: the target of the "change frame rate" step when it runs
+        // (it runs before this one), otherwise the project frame rate. Configuration
+        // .Settings.General.DefaultFrameRate is not usable here - nothing in the UI ever
+        // assigns it, so it is always libse's built-in 23.976.
+        var frameRate = _config.ChangeFrameRate.IsActive && _config.ChangeFrameRate.ToFrameRate > 0
+            ? _config.ChangeFrameRate.ToFrameRate
+            : Se.Settings.General.CurrentFrameRate;
+        if (frameRate <= 0)
+        {
+            frameRate = Se.Settings.General.DefaultFrameRate;
+        }
+
+        if (_config.BeautifyTimeCodes.UseFixedFrameRate && _config.BeautifyTimeCodes.FixedFrameRate > 0)
+        {
+            frameRate = _config.BeautifyTimeCodes.FixedFrameRate;
+        }
+
+        var shotChanges = new List<double>();
+
+        if (FindVideoFileName.TryFindVideoFileName(subtitleFileName, out var videoFileName))
+        {
+            if (!_config.BeautifyTimeCodes.UseFixedFrameRate)
+            {
+                try
+                {
+                    var mediaInfo = FfmpegMediaInfo2.Parse(videoFileName);
+                    if (mediaInfo.FramesRate > 0)
+                    {
+                        frameRate = (double)mediaInfo.FramesRate;
+                    }
+                }
+                catch
+                {
+                    // no ffmpeg or unreadable video file - keep the fallback frame rate
+                }
+            }
+
+            if (_config.BeautifyTimeCodes.SnapToShotChanges)
+            {
+                try
+                {
+                    shotChanges = ShotChangesHelper.FromDisk(videoFileName);
+                }
+                catch
+                {
+                    // unreadable/corrupt shot-changes cache - beautify without them rather
+                    // than aborting the rest of the batch
+                    shotChanges = new List<double>();
+                }
+            }
+        }
+
+        new Core.Forms.TimeCodesBeautifier(subtitle, frameRate, new List<double>(), shotChanges).Beautify();
         return subtitle;
     }
 

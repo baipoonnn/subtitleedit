@@ -45,17 +45,19 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
     [ObservableProperty] private bool _isTakeUsagesFromVisible;
     [ObservableProperty] private bool _isSetStyleAsDefaultVisible;
     [ObservableProperty] private bool _isCopyToFileStylesVisible;
+    [ObservableProperty] private bool _isMoveVisible;
 
     public Window? Window { get; set; }
     public bool OkPressed { get; private set; }
     public string Header { get; set; }
-    public DataGrid FileStyleGrid { get; set; }
-    public DataGrid StorageStyleGrid { get; set; }
+    public TableView FileStyleGrid { get; set; }
+    public TableView StorageStyleGrid { get; set; }
     public Subtitle ResultSubtitle => _subtitle;
 
     private readonly IFileHelper _fileHelper;
     private readonly IWindowService _windowService;
     private IApplySsaStyles? _applySsaStyles;
+    private readonly FileStyleRenameTracker _renameTracker;
     private Subtitle _subtitle;
     private string _subtitleFileName;
     private volatile bool _isClosing;
@@ -73,8 +75,8 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
         BorderTypes = new ObservableCollection<BorderStyleItem>(BorderStyleItem.List());
         SelectedBorderType = BorderTypes[0];
         CurrentTitle = string.Empty;
-        FileStyleGrid = new DataGrid();
-        StorageStyleGrid = new DataGrid();
+        FileStyleGrid = new TableView();
+        StorageStyleGrid = new TableView();
 
         Header = string.Empty;
         _subtitle = new Subtitle();
@@ -82,8 +84,24 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
 
         LoadSettings();
 
+        _renameTracker = new FileStyleRenameTracker(FileStyles, () => _subtitle, UpdateUsages);
+
         _timerUpdatePreview = new System.Timers.Timer(500);
         _timerUpdatePreview.Elapsed += TimerUpdatePreviewElapsed;
+    }
+
+    /// <summary>
+    /// The font combo box binds SelectedItem to CurrentStyle.FontName; a font missing from
+    /// the item list would make Avalonia clear the selection and null out the style's font.
+    /// Make sure the font is listed before the style becomes current (#13101).
+    /// </summary>
+    partial void OnCurrentStyleChanging(StyleDisplay? value)
+    {
+        var fontName = value?.FontName;
+        if (!string.IsNullOrEmpty(fontName) && !Fonts.Contains(fontName))
+        {
+            Fonts.Insert(0, fontName);
+        }
     }
 
     private void TimerUpdatePreviewElapsed(object? sender, System.Timers.ElapsedEventArgs e)
@@ -144,8 +162,8 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
             return;
         }
 
-        var s = Subtitle.Parse(fileName, format);
-        if (s == null || string.IsNullOrEmpty(s.Header))
+        var ssaStyles = StyleFileImportHelper.LoadStyles(fileName, format);
+        if (ssaStyles.Count == 0)
         {
             await MessageBox.Show(
                 Window,
@@ -155,8 +173,6 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
                 MessageBoxIcon.Error);
             return;
         }
-
-        var ssaStyles = AdvancedSubStationAlpha.GetSsaStylesFromHeader(s.Header);
 
         var result = await _windowService.ShowDialogAsync<AssaStylePickerWindow, AssaStylePickerViewModel>(Window, vm =>
         {
@@ -216,7 +232,7 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
     [RelayCommand]
     private void FileRemove()
     {
-        var selectedItems = FileStyleGrid.SelectedItems.Cast<StyleDisplay>().ToList();
+        var selectedItems = FileStyleGrid.SelectedItems?.Cast<StyleDisplay>().ToList() ?? new List<StyleDisplay>();
         if (Window == null || selectedItems.Count == 0)
         {
             return;
@@ -238,9 +254,30 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
     }
 
     [RelayCommand]
+    private void FileMoveUp() => MoveFileStyles(ListMoveDirection.Up);
+
+    [RelayCommand]
+    private void FileMoveDown() => MoveFileStyles(ListMoveDirection.Down);
+
+    [RelayCommand]
+    private void FileMoveToTop() => MoveFileStyles(ListMoveDirection.Top);
+
+    [RelayCommand]
+    private void FileMoveToBottom() => MoveFileStyles(ListMoveDirection.Bottom);
+
+    /// <summary>
+    /// Reorders the selected file styles. The list order is not presentation-only - it is
+    /// the order the styles are written to the file header on OK (#13056).
+    /// </summary>
+    private void MoveFileStyles(ListMoveDirection direction)
+    {
+        TableViewExtras.MoveSelectedRows(FileStyleGrid, FileStyles, direction);
+    }
+
+    [RelayCommand]
     private void FilesDuplicate()
     {
-        var selectedItems = FileStyleGrid.SelectedItems.Cast<StyleDisplay>().ToList();
+        var selectedItems = FileStyleGrid.SelectedItems?.Cast<StyleDisplay>().ToList() ?? new List<StyleDisplay>();
         if (Window == null || selectedItems.Count == 0)
         {
             return;
@@ -302,7 +339,7 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
     [RelayCommand]
     private void FileCopyToStorage()
     {
-        var selectedItems = FileStyleGrid.SelectedItems.Cast<StyleDisplay>().ToList();
+        var selectedItems = FileStyleGrid.SelectedItems?.Cast<StyleDisplay>().ToList() ?? new List<StyleDisplay>();
         if (Window == null || selectedItems.Count == 0)
         {
             return;
@@ -365,8 +402,8 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
             return;
         }
 
-        var s = Subtitle.Parse(fileName, format);
-        if (s == null || string.IsNullOrEmpty(s.Header))
+        var ssaStyles = StyleFileImportHelper.LoadStyles(fileName, format);
+        if (ssaStyles.Count == 0)
         {
             await MessageBox.Show(
                 Window,
@@ -376,8 +413,6 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
                 MessageBoxIcon.Error);
             return;
         }
-
-        var ssaStyles = AdvancedSubStationAlpha.GetSsaStylesFromHeader(s.Header);
 
         var result = await _windowService.ShowDialogAsync<AssaStylePickerWindow, AssaStylePickerViewModel>(Window, vm =>
         {
@@ -418,7 +453,7 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
     [RelayCommand]
     private void StorageRemove()
     {
-        var selectedItems = StorageStyleGrid.SelectedItems.Cast<StyleDisplay>().ToList();
+        var selectedItems = StorageStyleGrid.SelectedItems?.Cast<StyleDisplay>().ToList() ?? new List<StyleDisplay>();
         if (Window == null || selectedItems.Count == 0)
         {
             return;
@@ -474,7 +509,7 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
                 }
             }
 
-            StorageStyleGrid.Focus();
+            TableViewExtras.FocusRow(StorageStyleGrid);
         });
     }
 
@@ -487,7 +522,7 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
     [RelayCommand]
     private void StorageDuplicate()
     {
-        var selectedItems = StorageStyleGrid.SelectedItems.Cast<StyleDisplay>().ToList();
+        var selectedItems = StorageStyleGrid.SelectedItems?.Cast<StyleDisplay>().ToList() ?? new List<StyleDisplay>();
         if (Window == null || selectedItems.Count == 0)
         {
             return;
@@ -547,7 +582,7 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
     [RelayCommand]
     private void StorageCopyToFiles()
     {
-        var selectedItems = StorageStyleGrid.SelectedItems.Cast<StyleDisplay>().ToList();
+        var selectedItems = StorageStyleGrid.SelectedItems?.Cast<StyleDisplay>().ToList() ?? new List<StyleDisplay>();
         if (Window == null || selectedItems.Count == 0)
         {
             return;
@@ -644,7 +679,7 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
         }
 
         IsFileStyleSelected = SelectedFileStyle != null;
-        IsTakeUsagesFromVisible = FileStyleGrid.SelectedItems.Count == 1;
+        IsTakeUsagesFromVisible = FileStyleGrid.SelectedItems?.Count == 1;
 
         _timerUpdatePreview.Start();
     }
@@ -669,7 +704,7 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
     {
         foreach (var style in FileStyles)
         {
-            style.UsageCount = _subtitle.Paragraphs.Count(p => p.Extra != null && p.Extra.TrimStart('*').Equals(style.Name.TrimStart('*')));
+            style.UsageCount = _subtitle.Paragraphs.Count(p => p.Extra != null && p.Extra.TrimStart('*').Equals(style.Name.TrimStart('*'), StringComparison.OrdinalIgnoreCase));
         }
     }
 
@@ -895,7 +930,7 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
         CurrentTitle = Se.Language.Assa.StylesInFile;
         SelectedBorderType = selectedStyle?.BorderStyle ?? BorderTypes[0];
         IsFileStyleSelected = selectedStyle != null;
-        IsTakeUsagesFromVisible = FileStyleGrid.SelectedItems.Count == 1;
+        IsTakeUsagesFromVisible = FileStyleGrid.SelectedItems?.Count == 1;
     }
 
     private void SwitchToStorageStyle()
@@ -905,8 +940,8 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
         CurrentTitle = Se.Language.Assa.StylesSaved;
         SelectedBorderType = selectedStyle?.BorderStyle ?? BorderTypes[0];
         IsStorageStyleSelected = selectedStyle != null;
-        IsSetStyleAsDefaultVisible = StorageStyleGrid.SelectedItems.Count == 1;
-        IsCopyToFileStylesVisible = StorageStyleGrid.SelectedItems.Count > 0;
+        IsSetStyleAsDefaultVisible = StorageStyleGrid.SelectedItems?.Count == 1;
+        IsCopyToFileStylesVisible = StorageStyleGrid.SelectedItems?.Count > 0;
     }
 
     internal void BorderTypeChanged(object? sender, SelectionChangedEventArgs e)
@@ -926,6 +961,30 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
         {
             var selectedStyle = SelectedFileStyle;
             DeleteFileStyle(selectedStyle);
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>
+    /// Ctrl+Up/Ctrl+Down reorder the selected styles, as in SE 4. Tunneled, because the
+    /// ListBox underneath TableView handles Ctrl+Arrow itself (move focus without changing
+    /// the selection) and a bubbling handler would never see the key.
+    /// </summary>
+    internal void FileStylesMoveKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.KeyModifiers != KeyModifiers.Control || e.Source is TextBox)
+        {
+            return;
+        }
+
+        if (e.Key == Key.Up)
+        {
+            MoveFileStyles(ListMoveDirection.Up);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Down)
+        {
+            MoveFileStyles(ListMoveDirection.Down);
             e.Handled = true;
         }
     }
@@ -976,7 +1035,7 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
                 UpdateUsages();
             }
 
-            FileStyleGrid.Focus();
+            TableViewExtras.FocusRow(FileStyleGrid);
         });
     }
 
@@ -1026,7 +1085,7 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
             }
 
             UpdateUsages();
-            FileStyleGrid.Focus();
+            TableViewExtras.FocusRow(FileStyleGrid);
         });
     }
 
@@ -1047,11 +1106,15 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
     {
         IsDeleteAllVisible = FileStyles.Count > 0;
         IsDeleteVisible = SelectedFileStyle != null;
+        IsMoveVisible = FileStyles.Count > 1 && FileStyleGrid.SelectedItems?.Count > 0;
     }
 
     internal void StoreContextMenuOpening(object? sender, EventArgs e)
     {
-        IsDeleteAllVisible = FileStyles.Count > 0;
-        IsDeleteVisible = SelectedFileStyle != null;
+        // The storage menu's "Delete"/"Clear" must follow the storage list, not the file list -
+        // reading FileStyles here hid "Delete" whenever no file style happened to be selected,
+        // and offered "Clear" on an empty storage list.
+        IsDeleteAllVisible = StorageStyles.Count > 0;
+        IsDeleteVisible = SelectedStorageStyle != null;
     }
 }

@@ -62,7 +62,7 @@ public class ExportImageBasedWindow : Window
         var comboProfile = UiUtil.MakeComboBox(vm.Profiles, vm, nameof(vm.SelectedProfile));
         comboProfile.SelectionChanged += vm.ProfileChanged;
         var labelProfile = UiUtil.MakeLabel(Se.Language.General.Profile);
-        var buttonProfileBrowse = UiUtil.MakeButtonBrowse(vm.ShowProfileCommand).WithMarginLeft(5);
+        var buttonProfileBrowse = UiUtil.MakeButtonBrowse(vm.ShowProfileCommand, accessibleName: Se.Language.General.Profile).WithMarginLeft(5);
         var panelProfile = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -99,7 +99,7 @@ public class ExportImageBasedWindow : Window
 
         Content = grid;
 
-        Activated += delegate { buttonExport.Focus(); }; // hack to make OnKeyDown work
+        Activated += delegate { TableViewExtras.FocusRow(vm.SubtitleGrid); }; // initial focus on an input, not an action button - a focused button clicks on bare Space
         KeyDown += (_, e) => vm.OnKeyDown(e);
         KeyUp += (_, e) => vm.OnKeyUp(e);
         Loaded += (_, e) => vm.OnLoaded();
@@ -111,50 +111,52 @@ public class ExportImageBasedWindow : Window
 
     private Border MakeSubtitlesView(ExportImageBasedViewModel vm)
     {
-        vm.SubtitleGrid = new DataGrid
-        {
-            Height = double.NaN, // auto size inside scroll viewer
-            Margin = new Thickness(2),
-            ItemsSource = vm.Subtitles, // Use ItemsSource instead of Items
-            CanUserSortColumns = false,
-            IsReadOnly = true,
-            SelectionMode = DataGridSelectionMode.Extended,
-            DataContext = vm.Subtitles,
-        };
+        vm.SubtitleGrid = TableViewExtras.MakeTableView();
+        vm.SubtitleGrid.Height = double.NaN; // auto size inside scroll viewer
+        vm.SubtitleGrid.Margin = new Thickness(2);
+        vm.SubtitleGrid.ItemsSource = vm.Subtitles;
+        vm.SubtitleGrid.DataContext = vm.Subtitles;
 
         //   vm.SubtitleGrid.DoubleTapped += vm.OnSubtitleGridDoubleTapped;
 
         var fullTimeConverter = new TimeSpanToDisplayFullConverter();
         var shortTimeConverter = new TimeSpanToDisplayShortConverter();
+        var textToFlowDirectionConverter = new TextToFlowDirectionConverter();
 
         // Columns
-        vm.SubtitleGrid.Columns.Add(new DataGridTextColumn
+        vm.SubtitleGrid.Columns.Add(new SeTableViewColumn
         {
             Header = Se.Language.General.NumberSymbol,
             Binding = new Binding(nameof(SubtitleLineViewModel.Number)),
-            Width = new DataGridLength(50),
-            CellTheme = UiUtil.DataGridNoBorderCellTheme,
+            Width = new GridLength(50),
+            CellTheme = UiUtil.TableViewCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
         });
-        vm.SubtitleGrid.Columns.Add(new DataGridTextColumn
+        vm.SubtitleGrid.Columns.Add(new SeTableViewColumn
         {
             Header = Se.Language.General.Show,
             Binding = new Binding(nameof(SubtitleLineViewModel.StartTime)) { Converter = fullTimeConverter },
-            Width = new DataGridLength(120),
-            CellTheme = UiUtil.DataGridNoBorderCellTheme,
+            Width = new GridLength(120),
+            CellTheme = UiUtil.TableViewCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
         });
-        vm.SubtitleGrid.Columns.Add(new DataGridTextColumn
+        vm.SubtitleGrid.Columns.Add(new SeTableViewColumn
         {
             Header = Se.Language.General.Hide,
             Binding = new Binding(nameof(SubtitleLineViewModel.EndTime)) { Converter = fullTimeConverter },
-            Width = new DataGridLength(120),
-            CellTheme = UiUtil.DataGridNoBorderCellTheme,
+            Width = new GridLength(120),
+            CellTheme = UiUtil.TableViewCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
         });
 
-        vm.SubtitleGrid.Columns.Add(new DataGridTemplateColumn
+        // The DataGrid sized this column to content (Auto); TableView treats Auto as
+        // star, so use a fixed width that fits the short duration format.
+        vm.SubtitleGrid.Columns.Add(new SeTableViewColumn
         {
             Header = Se.Language.General.Duration,
-            Width = new DataGridLength(1, DataGridLengthUnitType.Auto),
-            CellTheme = UiUtil.DataGridNoBorderCellTheme,
+            Width = new GridLength(90),
+            CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
             CellTemplate = new FuncDataTemplate<SubtitleLineViewModel>((value, nameScope) =>
             {
                 var border = new Border
@@ -175,11 +177,12 @@ public class ExportImageBasedWindow : Window
             })
         });
 
-        vm.SubtitleGrid.Columns.Add(new DataGridTemplateColumn
+        vm.SubtitleGrid.Columns.Add(new SeTableViewColumn
         {
             Header = Se.Language.General.Text,
-            Width = new DataGridLength(1, DataGridLengthUnitType.Star),
-            CellTheme = UiUtil.DataGridNoBorderCellTheme,
+            Width = new GridLength(1, GridUnitType.Star),
+            CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
             CellTemplate = new FuncDataTemplate<SubtitleLineViewModel>((value, nameScope) =>
             {
                 var border = new Border
@@ -192,7 +195,11 @@ public class ExportImageBasedWindow : Window
                 {
                     VerticalAlignment = VerticalAlignment.Center,
                     TextWrapping = TextWrapping.Wrap,
-                    [!TextBlock.TextProperty] = new Binding(nameof(SubtitleLineViewModel.Text))
+                    [!TextBlock.TextProperty] = new Binding(nameof(SubtitleLineViewModel.Text)),
+
+                    // Right-to-left text needs a right-to-left cell, or Avalonia splits the
+                    // line at every zero width non-joiner and reverses the word order (#13160).
+                    [!TextBlock.FlowDirectionProperty] = new Binding(nameof(SubtitleLineViewModel.Text)) { Converter = textToFlowDirectionConverter },
                 };
 
                 border.Child = textBlock;
@@ -201,7 +208,7 @@ public class ExportImageBasedWindow : Window
         });
 
         vm.SubtitleGrid.DataContext = vm.Subtitles;
-        vm.SubtitleGrid.Bind(DataGrid.SelectedItemProperty, new Binding(nameof(vm.SelectedSubtitle))
+        vm.SubtitleGrid.Bind(TableView.SelectedItemProperty, new Binding(nameof(vm.SelectedSubtitle))
         {
             Source = vm,
             Mode = BindingMode.TwoWay
@@ -375,8 +382,18 @@ public class ExportImageBasedWindow : Window
         // column 3
         var checkBoxBold = UiUtil.MakeCheckBox(Se.Language.General.Bold, vm, nameof(vm.IsBold));
         checkBoxBold.IsCheckedChanged += vm.CheckBoxChanged;
-        grid.Add(checkBoxBold, 0, 5);
-        
+        var checkBoxRightToLeft = UiUtil.MakeCheckBox(Se.Language.General.RightToLeft, vm, nameof(vm.IsRightToLeft));
+        checkBoxRightToLeft.IsCheckedChanged += vm.CheckBoxChanged;
+        var panelBoldAndRightToLeft = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 10,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children = { checkBoxBold, checkBoxRightToLeft }
+        };
+        grid.Add(panelBoldAndRightToLeft, 0, 5);
+
+
         var labelOutlineWidth = UiUtil.MakeLabel(Se.Language.General.OutlineWidth);
         var comboBoxOutlineWidth = UiUtil.MakeComboBox(vm.OutlineWidths, vm, nameof(vm.SelectedOutlineWidth));
         comboBoxOutlineWidth.SelectionChanged += vm.ComboChanged;
@@ -424,9 +441,31 @@ public class ExportImageBasedWindow : Window
         grid.Add(labelBoxType, 5, 4);
         grid.Add(comboBoxBoxType, 5, 5);
         
-        var checkBoxRightToLeft = UiUtil.MakeCheckBox(Se.Language.General.RightToLeft, vm, nameof(vm.IsRightToLeft));
-        checkBoxRightToLeft.IsCheckedChanged += vm.CheckBoxChanged;
-        grid.Add(checkBoxRightToLeft, 6, 5);
+        var labelFrameRate = UiUtil.MakeLabel(Se.Language.General.FrameRate);
+        var comboBoxFrameRate = UiUtil.MakeComboBox(vm.FrameRates, vm, nameof(vm.SelectedFrameRate));
+        comboBoxFrameRate.SelectionChanged += vm.ComboChanged;
+        grid.Add(labelFrameRate, 6, 4);
+        grid.Add(comboBoxFrameRate, 6, 5);
+
+        // Only shown for the formats that can use a frame-sized image (see IsFullFrameVisible).
+        var checkBoxFullFrame = UiUtil.MakeCheckBox(Se.Language.File.Export.FullFrameImage, vm, nameof(vm.IsFullFrame));
+        checkBoxFullFrame.IsCheckedChanged += vm.CheckBoxChanged;
+        var colorPickerFullFrame = UiUtil.MakeColorPickerButton(vm, nameof(vm.FullFrameBackgroundColor), true);
+        colorPickerFullFrame.Bind(IsVisibleProperty, new Binding(nameof(vm.IsFullFrame)) { Source = vm });
+        if (Se.Settings.Appearance.ShowHints)
+        {
+            ToolTip.SetTip(checkBoxFullFrame, Se.Language.File.Export.FullFrameImageHint);
+            ToolTip.SetTip(colorPickerFullFrame, Se.Language.General.BackgroundColor);
+        }
+
+        var panelFullFrame = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 5,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children = { checkBoxFullFrame, colorPickerFullFrame },
+        }.WithBindIsVisible(vm, nameof(vm.IsFullFrameVisible));
+        grid.Add(panelFullFrame, 7, 0, 1, 6);
 
         return UiUtil.MakeBorderForControl(grid);
     }

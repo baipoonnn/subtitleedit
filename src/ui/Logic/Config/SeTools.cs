@@ -18,6 +18,7 @@ public class SeTools
     public SeBatchConvert BatchConvert { get; set; } = new();
     public SeChangeCasing ChangeCasing { get; set; } = new();
     public SeRemoveTextForHi RemoveTextForHi { get; set; } = new();
+    public SeRemoveUnicodeCharacters RemoveUnicodeCharacters { get; set; } = new();
     public SeMergeSameTimeCode MergeSameTimeCode { get; set; } = new();
     public SeMergeSameText MergeSameText { get; set; } = new();
 
@@ -29,6 +30,8 @@ public class SeTools
     public string GroqPrompt { get; set; }
     public string OpenRouterPrompt { get; set; }
     public string NvidiaPrompt { get; set; }
+    public bool MergeKeepEndTime { get; set; }
+    public bool MergeKeepEndTimeOnlyAssa { get; set; } = true;
     public bool JoinKeepTimeCodes { get; set; }
     public int JoinAppendMilliseconds { get; set; }
     public bool BinEditAppendKeepTimeCodes { get; set; }
@@ -61,6 +64,7 @@ public class SeTools
     public string? SplitSubtitleEncoding { get; set; }
     public string SplitOddLinesAction { get; set; }
     public bool GoToLineNumberAlsoSetVideoPosition { get; set; }
+    public bool GoToFirstAndLastLineAlsoSetVideoPosition { get; set; }
     public bool SplitRebalanceLongLinesSplit { get; set; }
     public bool SplitRebalanceLongLinesRebalance { get; set; }
     public string UnicodeSymbolsToInsert { get; set; }
@@ -152,6 +156,8 @@ public class SeTools
     public bool AutoBreakDashEarly { get; set; } = true;
     public bool AutoBreakUsePixelWidth { get; set; } = true;
     public bool AutoBreakPreferBottomHeavy { get; set; } = true;
+    public double AutoBreakPreferBottomPercent { get; set; } = 5;
+    public bool UseNoLineBreakAfter { get; set; } = false;
     public bool SpellCheckEnglishTreatInApostropheAsIng { get; set; } = true;
     public bool WriteToolsLog { get; set; } = false;
 
@@ -187,6 +193,7 @@ public class SeTools
         SplitOutputFolder = string.Empty;
         SplitSubtitleFormat = new SubRip().Name;
         GoToLineNumberAlsoSetVideoPosition = true;
+        GoToFirstAndLastLineAlsoSetVideoPosition = true;
         SplitRebalanceLongLinesSplit = true;
         SplitRebalanceLongLinesRebalance = true;
         SplitOddLinesAction = nameof(SplitOddLinesActionType.Smart);

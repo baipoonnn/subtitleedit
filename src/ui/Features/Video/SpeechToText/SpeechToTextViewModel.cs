@@ -4,7 +4,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Nikse.SubtitleEdit.Core.AudioToText;
+using Nikse.SubtitleEdit.UiLogic.AudioToText;
 using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Core.ContainerFormats.Matroska;
 using Nikse.SubtitleEdit.Core.SubtitleFormats;
@@ -35,6 +35,8 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Timers;
+using Nikse.SubtitleEdit.UiLogic.Media;
+using Nikse.SubtitleEdit.UiLogic.Common;
 
 namespace Nikse.SubtitleEdit.Features.Video.SpeechToText;
 
@@ -55,6 +57,7 @@ public partial class SpeechToTextViewModel : ObservableObject
     [ObservableProperty] private bool _doTranslateToEnglish;
     [ObservableProperty] private bool _doAdjustTimings;
     [ObservableProperty] private bool _doPostProcessing;
+    [ObservableProperty] private bool _addLanguageCodeToFileName;
 
     [ObservableProperty] private string _parameters;
 
@@ -136,11 +139,12 @@ public partial class SpeechToTextViewModel : ObservableObject
     public TextBox TextBoxConsoleLogBatch { get; internal set; }
     public TextBox TextBoxConsoleLogSingle { get; internal set; }
     public Button? CopyConsoleLogButton { get; internal set; }
-    public DataGrid BatchGrid { get; internal set; }
+    public TableView BatchGrid { get; internal set; }
 
     private bool _unknownArgument;
     private bool _cudaOutOfMemory;
     private bool _incompleteModel;
+    private string? _missingSharedLibrary;
     private bool _loadedFromStdOut;
     private string? _videoFileName;
     private string _audioFileName = string.Empty;
@@ -193,6 +197,8 @@ public partial class SpeechToTextViewModel : ObservableObject
 
     private readonly IWindowService _windowService;
     private readonly IFileHelper _fileHelper;
+    private readonly IFolderHelper _folderHelper;
+    private string? _batchOutputFolder;
     private bool _isUpdatingWhisperCppBackend;
     private bool _isUpdatingCrispAsrBackend;
     private static bool _crispAsrUpdatePromptShown;
@@ -207,10 +213,11 @@ public partial class SpeechToTextViewModel : ObservableObject
     /// </summary>
     public Action? RefreshEngineCombo { get; set; }
 
-    public SpeechToTextViewModel(IWindowService windowService, IFileHelper fileHelper)
+    public SpeechToTextViewModel(IWindowService windowService, IFileHelper fileHelper, IFolderHelper folderHelper)
     {
         _windowService = windowService;
         _fileHelper = fileHelper;
+        _folderHelper = folderHelper;
 
         Engines = [new WhisperCppEngine()];
         if (OperatingSystem.IsWindows())
@@ -232,15 +239,6 @@ public partial class SpeechToTextViewModel : ObservableObject
         {
             Engines.Add(new WhisperEngineCTranslate2());
         }
-
-        // MLX Whisper runs Whisper on the Apple GPU / Neural Engine and is arm64-only, so offer it
-        // only on Apple Silicon.
-        if (OperatingSystem.IsMacOS() &&
-            RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-        {
-            Engines.Add(new MlxWhisperMac());
-        }
-
 
         Engines.Add(new WhisperEngineOpenAi());
 
@@ -297,7 +295,7 @@ public partial class SpeechToTextViewModel : ObservableObject
         TranscribedSubtitle = new Subtitle();
         TextBoxConsoleLogBatch = new TextBox();
         TextBoxConsoleLogSingle = new TextBox();
-        BatchGrid = new DataGrid();
+        BatchGrid = new TableView();
         ReDownloadText = string.Empty;
         EngineDownloadHint = string.Empty;
         _audioTrackNumber = -1;
@@ -317,6 +315,7 @@ public partial class SpeechToTextViewModel : ObservableObject
         DoTranslateToEnglish = false;
         DoAdjustTimings = Se.Settings.Tools.AudioToText.WhisperAutoAdjustTimings;
         DoPostProcessing = Se.Settings.Tools.AudioToText.PostProcessing;
+        AddLanguageCodeToFileName = Se.Settings.Tools.AudioToText.WhisperAddLanguageCodeToFileName;
 
         OpenAiCompatibleSttUrl = Se.Settings.Tools.OpenAiCompatibleSttUrl;
         OpenAiCompatibleSttApiKey = Se.Settings.Tools.OpenAiCompatibleSttApiKey;
@@ -374,6 +373,7 @@ public partial class SpeechToTextViewModel : ObservableObject
     {
         Se.Settings.Tools.AudioToText.WhisperAutoAdjustTimings = DoAdjustTimings;
         Se.Settings.Tools.AudioToText.PostProcessing = DoPostProcessing;
+        Se.Settings.Tools.AudioToText.WhisperAddLanguageCodeToFileName = AddLanguageCodeToFileName;
         var engine = GetEffectiveSelectedEngine();
         engine.CommandLineParameter = Parameters;
         Se.Settings.Tools.AudioToText.WhisperChoice = engine.Choice;
@@ -759,7 +759,13 @@ public partial class SpeechToTextViewModel : ObservableObject
                 ProgressValue = 100;
 
                 var hasError = false;
-                if (_incompleteModel)
+                if (_missingSharedLibrary != null)
+                {
+                    await MessageBox.Show(Window!, "Speech to text engine could not start",
+                        GetMissingSharedLibraryMessage(_missingSharedLibrary));
+                    hasError = true;
+                }
+                else if (_incompleteModel)
                 {
                     await MessageBox.Show(Window!, "Incomplete model",
                         "The model is incomplete. Please download the full model.");
@@ -922,6 +928,28 @@ public partial class SpeechToTextViewModel : ObservableObject
         _timerWhisper.Start();
     }
 
+    /// <summary>
+    /// Builds the message shown when the engine binary could not be started because a shared
+    /// library it links against is missing (issue #12970).
+    /// </summary>
+    private static string GetMissingSharedLibraryMessage(string libraryName)
+    {
+        var message =
+            $"The speech to text engine could not start - the shared library \"{libraryName}\" is missing.{Environment.NewLine}{Environment.NewLine}" +
+            "Install it with your package manager and try again.";
+
+        if (libraryName.StartsWith("libopenblas", StringComparison.OrdinalIgnoreCase))
+        {
+            message +=
+                $"{Environment.NewLine}{Environment.NewLine}" +
+                $"Debian/Ubuntu: sudo apt install libopenblas0{Environment.NewLine}" +
+                $"Fedora: sudo dnf install openblas{Environment.NewLine}" +
+                "Arch: sudo pacman -S openblas";
+        }
+
+        return message;
+    }
+
     private void ProcessQwen3AsrCppTranscription(SeAudioToText settings)
     {
         var jsonPath = _qwen3AsrOutputJsonPath;
@@ -951,6 +979,15 @@ public partial class SpeechToTextViewModel : ObservableObject
             Dispatcher.UIThread.Invoke<Task>(async () =>
             {
                 LogToConsole($"Speech to text ({settings.WhisperChoice}) done in {_sw.Elapsed}{Environment.NewLine}");
+                if (_missingSharedLibrary != null)
+                {
+                    await MessageBox.Show(Window!, "Speech to text engine could not start",
+                        GetMissingSharedLibraryMessage(_missingSharedLibrary));
+                    ProgressValue = 100;
+                    IsTranscribeEnabled = true;
+                    return;
+                }
+
                 if (_unknownArgument && !string.IsNullOrEmpty(settings.WhisperCustomCommandLineArguments))
                 {
                     await MessageBox.Show(Window!, $"Unknown argument: {settings.WhisperCustomCommandLineArguments}",
@@ -1713,7 +1750,8 @@ public partial class SpeechToTextViewModel : ObservableObject
         if (transcribedSubtitle != null && transcribedSubtitle.Paragraphs.Count > 0)
         {
             currentItem.Status = Se.Language.General.Converted;
-            var subtitleFileName = GetSubtitleFileName(currentItem.InputVideoFileName);
+            var languageCode = AddLanguageCodeToFileName ? GetFileNameLanguageCode(transcribedSubtitle) : null;
+            var subtitleFileName = GetSubtitleFileName(currentItem.InputVideoFileName, languageCode, _batchOutputFolder);
             var format = new SubRip();
             var text = format.ToText(transcribedSubtitle, string.Empty);
             File.WriteAllText(subtitleFileName, text);
@@ -1756,7 +1794,7 @@ public partial class SpeechToTextViewModel : ObservableObject
                 }
 
                 BatchGrid.SelectedItem = jobItem;
-                BatchGrid.ScrollIntoView(jobItem, null);
+                BatchGrid.ScrollIntoView(jobItem);
             });
 
             var startGenerateAudioFileOk = GenerateAudioFile(_videoFileName, _audioTrackNumber);
@@ -1805,20 +1843,94 @@ public partial class SpeechToTextViewModel : ObservableObject
         });
     }
 
-    private static string GetSubtitleFileName(string videoFileName)
+    public static string GetSubtitleFileName(string videoFileName, string? languageCode, string? outputFolder = null)
     {
-        var path = Path.GetDirectoryName(videoFileName);
+        // For document portal video paths the output goes to the folder picked in
+        // Transcribe() - only the granted video file name itself can exist in such a folder.
+        var path = !string.IsNullOrEmpty(outputFolder) && DocumentPortal.IsPortalPath(videoFileName)
+            ? outputFolder
+            : Path.GetDirectoryName(videoFileName);
         var fileName = Path.GetFileNameWithoutExtension(videoFileName);
+        // "video.en.srt" style - the language token must stay right before the
+        // extension for media players to pick it up, so the collision counter
+        // goes on the base name: "video_2.en.srt".
+        var languagePart = string.IsNullOrWhiteSpace(languageCode) ? string.Empty : "." + languageCode;
         var extension = ".srt";
-        var subtitleFileName = Path.Combine(path!, fileName + extension);
+        var subtitleFileName = Path.Combine(path!, fileName + languagePart + extension);
         int count = 2;
         while (File.Exists(subtitleFileName))
         {
-            subtitleFileName = Path.Combine(path!, fileName + "_" + count + extension);
+            subtitleFileName = Path.Combine(path!, fileName + "_" + count + languagePart + extension);
             count++;
         }
 
         return subtitleFileName;
+    }
+
+    /// <summary>
+    /// The language code to embed in a generated subtitle file name ("video.en.srt"),
+    /// or null when no usable code can be determined. Resolution mirrors PostProcess:
+    /// selected language, then the online engine's configured hint, then auto-detection
+    /// on the transcript itself - but "auto" is never usable as a file name token.
+    /// </summary>
+    private string? GetFileNameLanguageCode(Subtitle? transcript)
+    {
+        if (DoTranslateToEnglish)
+        {
+            return "en";
+        }
+
+        var languageCode = SelectedLanguage?.Code;
+        if (string.IsNullOrWhiteSpace(languageCode) || languageCode.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            // Normalized here (not just at the end) so a hint that can't be mapped to a
+            // code falls through to auto-detection instead of being dropped outright.
+            languageCode = NormalizeFileNameLanguageCode(GetOnlineEngineLanguageHint());
+        }
+
+        if (string.IsNullOrWhiteSpace(languageCode) && transcript != null)
+        {
+            languageCode = LanguageAutoDetect.AutoDetectGoogleLanguageOrNull(transcript);
+        }
+
+        if (string.IsNullOrWhiteSpace(languageCode) || languageCode.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return NormalizeFileNameLanguageCode(languageCode);
+    }
+
+    /// <summary>
+    /// Maps a language token to a code usable as a file name part, or null when it can't be.
+    /// The token may come from the online engines' free-text "language hint" setting, so it
+    /// can be a full name ("English" - the APIs accept those) or any arbitrary text; a full
+    /// name is mapped to its whisper code and anything not code-shaped is dropped rather than
+    /// embedded in the file name (path separators and the like would make the save throw).
+    /// </summary>
+    internal static string? NormalizeFileNameLanguageCode(string? languageCode)
+    {
+        if (string.IsNullOrWhiteSpace(languageCode))
+        {
+            return null;
+        }
+
+        var token = languageCode.Trim();
+        var match = WhisperLanguage.Languages.FirstOrDefault(p =>
+            p.Code.Equals(token, StringComparison.OrdinalIgnoreCase) ||
+            p.Name.Equals(token, StringComparison.OrdinalIgnoreCase));
+        if (match != null)
+        {
+            return match.Code;
+        }
+
+        // Unknown but code-shaped ("pt-BR", "yue") - keep as typed, lowercased.
+        if (token.Length <= 6 && token.All(c => char.IsAsciiLetter(c) || c == '-'))
+        {
+            return token.ToLowerInvariant();
+        }
+
+        return null;
     }
 
     private Subtitle PostProcess(Subtitle transcript)
@@ -1849,7 +1961,7 @@ public partial class SpeechToTextViewModel : ObservableObject
 
         if (DoAdjustTimings || DoPostProcessing)
         {
-            ProgressText = "Post-processing...";
+            ProgressText = Se.Language.Video.PostProcessing;
         }
 
         var postProcessor = new SpeechToTextPostProcessor(DoTranslateToEnglish ? "en" : languageCode)
@@ -2417,7 +2529,7 @@ public partial class SpeechToTextViewModel : ObservableObject
 
         if (string.IsNullOrEmpty(error))
         {
-            await MessageBox.Show(Window!, "Unknown error", $"Unable to start {engine.Name}!");
+            await MessageBox.Show(Window!, Se.Language.General.UnknownError, $"Unable to start {engine.Name}!");
         }
         else
         {
@@ -2872,12 +2984,6 @@ public partial class SpeechToTextViewModel : ObservableObject
                 viewModal.BreakSplitLongLines = Se.Settings.Tools.AudioToText.WhisperPostProcessingSplitLines;
                 viewModal.ChangeUnderlineToColor = Se.Settings.Tools.AudioToText.WhisperPostProcessingChangeUnderlineToColor;
                 viewModal.ChangeUnderlineToColorColor = Se.Settings.Tools.AudioToText.WhisperPostProcessingChangeUnderlineToColorColor.FromHexToColor();
-                viewModal.CueRebuild = Se.Settings.Tools.AudioToText.WhisperCueRebuild;
-                viewModal.CueMaxChars = Se.Settings.Tools.AudioToText.WhisperCueMaxChars;
-                viewModal.CueMaxSeconds = Se.Settings.Tools.AudioToText.WhisperCueMaxSeconds;
-                viewModal.CueMaxCps = Se.Settings.Tools.AudioToText.WhisperCueMaxCps;
-                viewModal.VocabularyPrompt = Se.Settings.Tools.AudioToText.WhisperVocabularyPrompt;
-                viewModal.BeamSize = Se.Settings.Tools.AudioToText.WhisperBeamSize;
             });
 
         if (vm.OkPressed)
@@ -2891,12 +2997,6 @@ public partial class SpeechToTextViewModel : ObservableObject
             Se.Settings.Tools.AudioToText.WhisperPostProcessingSplitLines = vm.BreakSplitLongLines;
             Se.Settings.Tools.AudioToText.WhisperPostProcessingChangeUnderlineToColor = vm.ChangeUnderlineToColor;
             Se.Settings.Tools.AudioToText.WhisperPostProcessingChangeUnderlineToColorColor = vm.ChangeUnderlineToColorColor.FromColorToHex();
-            Se.Settings.Tools.AudioToText.WhisperCueRebuild = vm.CueRebuild;
-            Se.Settings.Tools.AudioToText.WhisperCueMaxChars = vm.CueMaxChars;
-            Se.Settings.Tools.AudioToText.WhisperCueMaxSeconds = vm.CueMaxSeconds;
-            Se.Settings.Tools.AudioToText.WhisperCueMaxCps = vm.CueMaxCps;
-            Se.Settings.Tools.AudioToText.WhisperVocabularyPrompt = vm.VocabularyPrompt ?? string.Empty;
-            Se.Settings.Tools.AudioToText.WhisperBeamSize = vm.BeamSize;
         }
     }
 
@@ -3003,6 +3103,24 @@ public partial class SpeechToTextViewModel : ObservableObject
         if (IsBatchMode && BatchItems.Count > 0)
         {
             _videoFileName = BatchItems[0].InputVideoFileName;
+
+            // Every run picks its output folder anew - a folder chosen for an earlier batch
+            // in this dialog session must not silently receive a later batch's output.
+            _batchOutputFolder = null;
+
+            if (BatchItems.Any(b => DocumentPortal.IsPortalPath(b.InputVideoFileName)))
+            {
+                // Videos opened through the Flatpak document portal live in a single-file
+                // grant where a sibling .srt can never materialize as a real file (issue
+                // #13308), so ask for a real output folder before transcribing.
+                var folder = await _folderHelper.PickFolderAsync(Window!, Se.Language.General.PickOutputFolder);
+                if (string.IsNullOrEmpty(folder))
+                {
+                    return;
+                }
+
+                _batchOutputFolder = folder;
+            }
         }
 
         if (string.IsNullOrEmpty(_videoFileName))
@@ -3027,34 +3145,13 @@ public partial class SpeechToTextViewModel : ObservableObject
             _unknownArgument = false;
             _cudaOutOfMemory = false;
             _incompleteModel = false;
+            _missingSharedLibrary = null;
             _loadedFromStdOut = false;
 
             Se.Settings.Tools.AudioToText.WhisperChoice = engine.Choice;
 
             if (!engine.IsEngineInstalled())
             {
-                if (engine is MlxWhisperMac)
-                {
-                    // pip-managed engine - Subtitle Edit cannot download it. The message explains
-                    // the detection model (SE looks for a Python that can import mlx_whisper, not a
-                    // binary) and the pipx/venv/conda caveat, since a user who installed it that way
-                    // otherwise hits "not found" with no idea why (#12209).
-                    await MessageBox.Show(
-                        Window!,
-                        $"{engine.Name} not found",
-                        "Subtitle Edit could not find a Python that can import the \"mlx_whisper\" package." + Environment.NewLine +
-                        Environment.NewLine +
-                        "If it is not installed yet, install it with:" + Environment.NewLine +
-                        "    pip3 install mlx-whisper" + Environment.NewLine +
-                        Environment.NewLine +
-                        "If you installed it with pipx, a virtual environment, or conda, Subtitle Edit finds it " +
-                        "automatically only when the \"mlx_whisper\" command is on your PATH or at " +
-                        "~/.local/bin/mlx_whisper (where pipx puts it). Check with:" + Environment.NewLine +
-                        "    which mlx_whisper");
-                    return;
-                }
-
-
                 if (engine is ICrispAsrEngine && Configuration.IsRunningOnWindows)
                 {
                     var answer = await MessageBox.Show(
@@ -3484,7 +3581,7 @@ public partial class SpeechToTextViewModel : ObservableObject
                 }
 
                 BatchGrid.SelectedItem = jobItem;
-                BatchGrid.ScrollIntoView(jobItem, null);
+                BatchGrid.ScrollIntoView(jobItem);
             });
         }
 
@@ -3564,8 +3661,7 @@ public partial class SpeechToTextViewModel : ObservableObject
         ProgressOpacity = 1;
         ProgressText = GetProgressText();
 
-        _useCenterChannelOnly = Configuration.Settings.General.FFmpegUseCenterChannelOnly &&
-                                FfmpegMediaInfo.Parse(_videoFileName).HasFrontCenterAudio(_audioTrackNumber);
+        _useCenterChannelOnly = false; // FFmpeg center-channel extraction is not configurable in SE 5 yet
 
         //Delete invalid preprocessor_config.json file
         if (settings.WhisperChoice is WhisperChoice.PurfviewFasterWhisperXxl)
@@ -3849,106 +3945,6 @@ public partial class SpeechToTextViewModel : ObservableObject
             return p;
         }
 
-        // Cue-building settings for the helper-script engines, from the Whisper
-        // post-processing dialog. The helpers ignore unknown flags, but only these two
-        // engines understand them, so they are added only in their blocks below.
-        static string GetCueArgs()
-        {
-            var audioToText = Se.Settings.Tools.AudioToText;
-
-            // Vocabulary prompt: Whisper's documented way to bias recognition toward
-            // names and technical terms. Quotes are stripped so the value stays a
-            // single command line argument.
-            var promptPart = string.Empty;
-            var vocabularyPrompt = (audioToText.WhisperVocabularyPrompt ?? string.Empty)
-                .Replace("\"", string.Empty).Trim();
-            if (vocabularyPrompt.Length > 0)
-            {
-                promptPart = $" --initial-prompt \"{vocabularyPrompt}\"";
-            }
-
-            if (audioToText.WhisperBeamSize > 1)
-            {
-                promptPart += $" --beam-size {audioToText.WhisperBeamSize}";
-            }
-
-            if (!audioToText.WhisperCueRebuild)
-            {
-                return promptPart + " --raw-segments";
-            }
-
-            return promptPart +
-                   $" --max-cue-chars {audioToText.WhisperCueMaxChars}" +
-                   $" --max-cue-duration {audioToText.WhisperCueMaxSeconds.ToString(CultureInfo.InvariantCulture)}" +
-                   $" --max-cps {audioToText.WhisperCueMaxCps.ToString(CultureInfo.InvariantCulture)}";
-        }
-
-        if (engine is MlxWhisperMac mlxWhisperMac)
-        {
-            // mlx-whisper is a library, not a CLI, so we run a bundled helper script via python3.
-            // It writes "<audio-basename>.srt" into the audio's folder, which GetResultFromSrt then
-            // picks up. MLX runs Whisper on the Apple GPU / Neural Engine.
-            var python = mlxWhisperMac.GetExecutable();
-            var scriptPath = mlxWhisperMac.GetTranscribeScript();
-            var outputDir = Path.GetDirectoryName(waveFileName) ?? string.Empty;
-
-            var mlxLanguage = language;
-            if (mlxLanguage.Equals("english", StringComparison.OrdinalIgnoreCase))
-            {
-                mlxLanguage = "en";
-            }
-
-            var languagePart = !string.IsNullOrWhiteSpace(mlxLanguage) &&
-                               !mlxLanguage.Equals("auto", StringComparison.OrdinalIgnoreCase)
-                ? $" --language {mlxLanguage}"
-                : string.Empty;
-            var taskPart = translate ? " --task translate" : string.Empty;
-            var mlxExtraArgs = engine.CommandLineParameter;
-            var extraPart = string.IsNullOrWhiteSpace(mlxExtraArgs) ? string.Empty : " " + mlxExtraArgs.Trim();
-
-            var mlxParameters =
-                $"\"{scriptPath}\" --audio \"{waveFileName}\" --model {mlxWhisperMac.GetModelForCmdLine(model)} " +
-                $"--output-format srt --output-dir \"{outputDir}\"{languagePart}{taskPart}{GetCueArgs()}{extraPart}";
-
-            Se.WriteToolsLog($"{python} {mlxParameters}");
-
-            var mlxProcess = new Process
-            {
-                StartInfo = new ProcessStartInfo(python, mlxParameters)
-                {
-                    WindowStyle = ProcessWindowStyle.Hidden,
-                    CreateNoWindow = true,
-                    UseShellExecute = false,
-                }
-            };
-
-            mlxProcess.StartInfo.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
-            mlxProcess.StartInfo.EnvironmentVariables["PYTHONUTF8"] = "1";
-            mlxProcess.StartInfo.EnvironmentVariables["PYTHONUNBUFFERED"] = "1";
-
-            if (dataReceivedHandler != null)
-            {
-                mlxProcess.StartInfo.StandardOutputEncoding = Encoding.UTF8;
-                mlxProcess.StartInfo.StandardErrorEncoding = Encoding.UTF8;
-                mlxProcess.StartInfo.RedirectStandardOutput = true;
-                mlxProcess.StartInfo.RedirectStandardError = true;
-                mlxProcess.OutputDataReceived += dataReceivedHandler;
-                mlxProcess.ErrorDataReceived += dataReceivedHandler;
-            }
-
-#pragma warning disable CA1416
-            mlxProcess.Start();
-#pragma warning restore CA1416
-
-            if (dataReceivedHandler != null)
-            {
-                mlxProcess.BeginOutputReadLine();
-                mlxProcess.BeginErrorReadLine();
-            }
-
-            return mlxProcess;
-        }
-
         var settings = Se.Settings.Tools.AudioToText;
         var args = engine.CommandLineParameter;
         var cppVulkanDevice = string.Empty;
@@ -4199,6 +4195,13 @@ public partial class SpeechToTextViewModel : ObservableObject
         if (string.IsNullOrWhiteSpace(outLine.Data))
         {
             return;
+        }
+
+        // Check before the language guard below - the dynamic loader fails before the engine
+        // prints anything else, and this must be reported even if no language is selected.
+        if (_missingSharedLibrary == null)
+        {
+            _missingSharedLibrary = MissingSharedLibrary.GetName(outLine.Data);
         }
 
         if (SelectedLanguage is not WhisperLanguage language)
@@ -4590,17 +4593,6 @@ public partial class SpeechToTextViewModel : ObservableObject
         // also the answer to issue #11022 (switch backend after the initial install).
         IsEngineSettingsButtonVisible = canDownload && isInstalled && IsSettingsCapable(engine);
 
-        if (engine is MlxWhisperMac && !isInstalled)
-        {
-            // pip-managed engine - Subtitle Edit cannot download it, so show install help instead.
-            // Kept to one line here; the blocking dialog on transcribe explains the pipx/venv
-            // detection caveat in full (#12209).
-            EngineDownloadHint = "mlx-whisper not found - install with \"pip3 install mlx-whisper\", or ensure the \"mlx_whisper\" command is on your PATH";
-            IsEngineDownloadButtonVisible = false;
-            return;
-        }
-
-
         if (!canDownload || isInstalled)
         {
             EngineDownloadHint = string.Empty;
@@ -4610,8 +4602,8 @@ public partial class SpeechToTextViewModel : ObservableObject
 
         var size = engine.DownloadSizeText;
         EngineDownloadHint = string.IsNullOrEmpty(size)
-            ? string.Format(Se.Language.Video.AudioToText.DownloadX, engine.Name)
-            : string.Format(Se.Language.Video.AudioToText.DownloadX, engine.Name) + $" ({size})";
+            ? string.Format(Se.Language.General.DownloadX, engine.Name)
+            : string.Format(Se.Language.General.DownloadX, engine.Name) + $" ({size})";
         IsEngineDownloadButtonVisible = true;
     }
 

@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -11,6 +11,7 @@ using Avalonia.Media;
 using Avalonia.Styling;
 using System.Collections.ObjectModel;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.Engines;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.Voices;
 using Optris.Icons.Avalonia;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
@@ -161,7 +162,7 @@ public class TextToSpeechWindow : Window
 
         Content = grid;
 
-        Activated += delegate { buttonOk.Focus(); }; // hack to make OnKeyDown work
+        Activated += delegate { _comboBoxEngines?.Focus(); }; // initial focus on an input, not an action button - a focused button clicks on bare Space
     }
 
     // Install-status dot for the engine combo: green = ready, amber = a newer build is available,
@@ -189,6 +190,8 @@ public class TextToSpeechWindow : Window
                 return StatusDots.From(engine.IsInstalled(null).Result, F5TtsCrispAsr.GetEngineUpdateStatus());
             case VoxCPM2CrispAsr:
                 return StatusDots.From(engine.IsInstalled(null).Result, VoxCPM2CrispAsr.GetEngineUpdateStatus());
+            case OmniVoiceCrispAsr:
+                return StatusDots.From(engine.IsInstalled(null).Result, OmniVoiceCrispAsr.GetEngineUpdateStatus());
             case MossTtsCrispAsr:
                 return StatusDots.From(engine.IsInstalled(null).Result, MossTtsCrispAsr.GetEngineUpdateStatus());
             case ZonosTtsCrispAsr:
@@ -301,7 +304,7 @@ public class TextToSpeechWindow : Window
                     MinWidth = labelMinWidth,
                 },
                 comboBoxEngines,
-                UiUtil.MakeButton(vm.ShowEngineSettingsCommand, IconNames.Settings)
+                UiUtil.MakeButton(vm.ShowEngineSettingsCommand, IconNames.Settings, $"{Se.Language.General.Engine} - {Se.Language.General.Settings}")
                     .WithMarginLeft(5)
                     .WithBindIsVisible(nameof(vm.IsEngineSettingsVisible)),
             }
@@ -326,6 +329,17 @@ public class TextToSpeechWindow : Window
         // The Qwen3 VoiceDesign model has no speaker encoder - the combo is locked to "Default".
         var comboBoxVoices = UiUtil.MakeComboBox(vm.Voices, vm, nameof(vm.SelectedVoice)).WithWidth(controlMinWidth);
         comboBoxVoices.Bind(ComboBox.IsEnabledProperty, new Binding(nameof(vm.IsVoiceComboEnabled)) { Mode = BindingMode.OneWay });
+        // Show Voice.DisplayName rather than the default ToString(): engines whose list mixes
+        // several kinds of voice label them there (CosyVoice3's "Preset: ..." / "Clone: ...",
+        // #13272). DisplayName falls back to the plain name, so every other engine is unchanged.
+        comboBoxVoices.ItemTemplate = new FuncDataTemplate<Voice>((_, _) =>
+        {
+            // Bound rather than assigned: the template supports recycling, and a recycled
+            // container only gets a new DataContext - a statically-set Text would go stale.
+            var textBlock = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
+            textBlock.Bind(TextBlock.TextProperty, new Binding(nameof(Voice.DisplayName)));
+            return textBlock;
+        }, true);
 
         var panelVoice = new StackPanel
         {
@@ -350,12 +364,16 @@ public class TextToSpeechWindow : Window
                     {
                         FontSize = 11.5,
                         Opacity = 0.8,
-                        [!TextBlock.TextProperty] = new Binding(nameof(vm.VoiceCountInfo)) { Mode = BindingMode.OneWay },
+                        [!TextBlock.TextProperty] = new Binding($"{nameof(vm.Voices)}.{nameof(vm.Voices.Count)}")
+                        {
+                            Mode = BindingMode.OneWay,
+                            StringFormat = Se.Language.Video.TextToSpeech.XVoices,
+                        },
                     },
                     [!Border.IsVisibleProperty] = new Binding(nameof(vm.IsVoiceCountVisible)) { Mode = BindingMode.OneWay },
                 },
                 buttonTestVoice,
-                UiUtil.MakeButton(vm.ShowTestVoiceSettingsCommand, IconNames.Settings),
+                UiUtil.MakeButton(vm.ShowTestVoiceSettingsCommand, IconNames.Settings, $"{Se.Language.Video.TextToSpeech.TestVoice} - {Se.Language.General.Settings}"),
             }
         };
 
@@ -363,10 +381,9 @@ public class TextToSpeechWindow : Window
         comboBoxModels.ItemTemplate = BuildModelItemTemplate(vm);
         _comboBoxModels = comboBoxModels;
 
-        var buttonDownloadModel = UiUtil.MakeButton(vm.DownloadModelCommand, IconNames.Download)
+        var buttonDownloadModel = UiUtil.MakeButton(vm.DownloadModelCommand, IconNames.Download, Se.Language.General.Download)
             .WithMarginLeft(5)
             .WithBindIsVisible(nameof(vm.IsModelDownloadVisible));
-        ToolTip.SetTip(buttonDownloadModel, Se.Language.General.Download);
 
         var panelModel = new StackPanel
         {
@@ -448,7 +465,7 @@ public class TextToSpeechWindow : Window
                     MinWidth = labelMinWidth,
                 },
                 UiUtil.MakeTextBox(325, vm, nameof(vm.KeyFile)).WithMarginRight(4),
-                UiUtil.MakeButtonBrowse(vm.BrowseKeyFileCommand),
+                UiUtil.MakeButtonBrowse(vm.BrowseKeyFileCommand, accessibleName: Se.Language.General.KeyFile),
             },
             [!StackPanel.IsVisibleProperty] = new Binding(nameof(vm.HasKeyFile)) { Mode = BindingMode.OneWay },
         };
@@ -625,7 +642,7 @@ public class TextToSpeechWindow : Window
             Children =
             {
                 checkBoxAddAudioToVideoFile,
-                UiUtil.MakeButton(vm.ShowEncodingSettingsCommand, IconNames.Settings)
+                UiUtil.MakeButton(vm.ShowEncodingSettingsCommand, IconNames.Settings, $"{Se.Language.Video.TextToSpeech.AddAudioToVideoFile} - {Se.Language.General.Settings}")
                       .WithMarginLeft(5).WithMarginTop(0).WithTopAlignment(),
             }
         };

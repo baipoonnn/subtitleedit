@@ -14,7 +14,9 @@ using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Core.Enums;
 using Nikse.SubtitleEdit.Core.SubtitleFormats;
 using Nikse.SubtitleEdit.Features.Assa;
+using Nikse.SubtitleEdit.Features.Help.CheckForUpdates;
 using Nikse.SubtitleEdit.Features.Main;
+using Nikse.SubtitleEdit.Features.Options.DoNotBreakAfterList;
 using Nikse.SubtitleEdit.Features.Options.Settings.SyntaxColorTooWideSettings;
 using Nikse.SubtitleEdit.Features.Tools.BeautifyTimeCodes.Profile;
 using Nikse.SubtitleEdit.Features.Options.Settings.WaveformThemes;
@@ -38,6 +40,7 @@ using System.Text;
 using System.Threading.Tasks;
 using DownloadFfmpegViewModel = Nikse.SubtitleEdit.Features.Shared.DownloadFfmpegViewModel;
 using DownloadLibMpvViewModel = Nikse.SubtitleEdit.Features.Shared.DownloadLibMpvViewModel;
+using Nikse.SubtitleEdit.UiLogic.Common;
 
 namespace Nikse.SubtitleEdit.Features.Options.Settings;
 
@@ -79,6 +82,8 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _autoBreakDashEarly;
     [ObservableProperty] private bool _autoBreakUsePixelWidth;
     [ObservableProperty] private bool _autoBreakPreferBottomHeavy;
+    [ObservableProperty] private int _autoBreakPreferBottomPercent;
+    [ObservableProperty] private bool _useNoLineBreakAfter;
 
     // "Color text if more than N lines" must track the live "Max number of lines"
     // value instead of a hardcoded "2" (#12028), including while typing (nullable/
@@ -174,6 +179,8 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _allowSingleLetterShortcutsInTextbox;
     [ObservableProperty] private bool _goToLineNumberAlsoSetVideoPosition;
     [ObservableProperty] private bool _adjustAllTimesRememberLineSelectionChoice;
+    [ObservableProperty] private bool _mergeKeepEndTime;
+    [ObservableProperty] private bool _mergeKeepEndTimeOnlyAssa;
     [ObservableProperty] private ObservableCollection<string> _splitOddNumberOfLinesActions;
     [ObservableProperty] private string _selectedSplitOddNumberOfLinesAction;
     [ObservableProperty] private bool _ocrUseWordSplitList;
@@ -199,12 +206,16 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _showToolbarSaveAs;
     [ObservableProperty] private bool _showToolbarFind;
     [ObservableProperty] private bool _showToolbarReplace;
+    [ObservableProperty] private bool _showToolbarMultipleReplace;
     [ObservableProperty] private bool _showToolbarSpellCheck;
     [ObservableProperty] private bool _showToolbarFixCommonErrors;
     [ObservableProperty] private bool _showToolbarRemoveTextForHi;
     [ObservableProperty] private bool _showToolbarVisualSync;
+    [ObservableProperty] private bool _showToolbarPointSync;
     [ObservableProperty] private bool _showToolbarBeautifyTimeCodes;
     [ObservableProperty] private bool _showToolbarBurnIn;
+    [ObservableProperty] private bool _showToolbarAutoTranslate;
+    [ObservableProperty] private bool _showToolbarSpeechToText;
     [ObservableProperty] private bool _fixCommonErrorsSkipStep1;
     [ObservableProperty] private bool _showToolbarSettings;
     [ObservableProperty] private bool _showToolbarLayout;
@@ -277,6 +288,10 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _proxyDomain = string.Empty;
     [ObservableProperty] private bool _proxyUseDefaultCredentials;
     [ObservableProperty] private string _proxyBypassList = string.Empty;
+    [ObservableProperty] private bool _checkForUpdatesOnStartup;
+    [ObservableProperty] private ObservableCollection<string> _updateChannels;
+    [ObservableProperty] private string _selectedUpdateChannel;
+    private string _loadedUpdateChannel = string.Empty;
     [ObservableProperty] private int _waveformTextFontSize;
     [ObservableProperty] private bool _waveformTextFontBold;
     [ObservableProperty] private Color _waveformTextColor;
@@ -439,6 +454,13 @@ public partial class SettingsViewModel : ObservableObject
         MpvPreviewSelectedFontAlignment = MpvPreviewFontAlignments[7];
         LibVlcStatus = string.Empty;
 
+        UpdateChannels =
+        [
+            Se.Language.Options.Settings.CheckForUpdatesChannelStable,
+            Se.Language.Options.Settings.CheckForUpdatesChannelStableAndBeta,
+        ];
+        SelectedUpdateChannel = UpdateChannels[0];
+
         Themes = [Se.Language.General.System, Se.Language.General.Light, Se.Language.General.Dark, Se.Language.General.Classic, "Pastel"];
         SelectedTheme = Themes[0];
 
@@ -467,14 +489,14 @@ public partial class SettingsViewModel : ObservableObject
 
         WaveformDrawStyles = new ObservableCollection<string>
         {
-            Se.Language.Waveform.WaveformDrawStyleClassic,
+            Se.Language.General.Classic,
             Se.Language.Waveform.WaveformDrawStyleFancy,
         };
         SelectedWaveformDrawStyle = WaveformDrawStyles[0];
 
         WaveformSpectrogramStyles = new ObservableCollection<string>
         {
-            Se.Language.Waveform.SpectrogramClassic,
+            Se.Language.General.Classic,
             Se.Language.Waveform.SpectrogramClassicViridis,
             Se.Language.Waveform.SpectrogramClassicPlasma,
             Se.Language.Waveform.SpectrogramClassicInferno,
@@ -574,7 +596,11 @@ public partial class SettingsViewModel : ObservableObject
             Se.Language.Options.Settings.GridGoToSubtitleAndPlay,
             Se.Language.Options.Settings.GridGoToSubtitleAndSetVideoPosition,
             Se.Language.Options.Settings.GridGoToSubtitleAndPauseAndFocusTextBox,
-            Se.Language.Options.Settings.GridGoToSubtitleAndPlayAndFocusTextBox
+            Se.Language.Options.Settings.GridGoToSubtitleAndPlayAndFocusTextBox,
+            Se.Language.Options.Settings.SubtitleListActionVideoGoToPositionAndPlayCurrentAndPause,
+            Se.Language.Options.Settings.SubtitleListActionVideoGoToPositionMinus1SecAndPause,
+            Se.Language.Options.Settings.SubtitleListActionVideoGoToPositionMinusHalfSecAndPause,
+            Se.Language.Options.Settings.SubtitleListActionVideoGoToPositionMinus1SecAndPlay
         ];
         SelectedSubtitleDoubleClickActionType = SubtitleDoubleClickActionTypes[0];
 
@@ -602,8 +628,8 @@ public partial class SettingsViewModel : ObservableObject
         [
             Se.Language.General.None,
             Se.Language.Options.Settings.SaveAsAppendLanguageCodeTwoLetter,
-            Se.Language.Options.Settings.SaveAsAppendLanguageCodeThreeLetter,
-            Se.Language.Options.Settings.SaveAsAppendLanguageCodeThreeLetterBibliographic,
+            Se.Language.General.ThreeLetterLanguageCode,
+            Se.Language.General.ThreeLetterLanguageCodeBibliographic,
             Se.Language.Options.Settings.SaveAsAppendLanguageCodeLanguageName,
         ];
         SelectedSaveAsAppendLanguageCode = SaveAsAppendLanguageCode[0];
@@ -713,6 +739,8 @@ public partial class SettingsViewModel : ObservableObject
         AutoBreakDashEarly = Se.Settings.Tools.AutoBreakDashEarly;
         AutoBreakUsePixelWidth = Se.Settings.Tools.AutoBreakUsePixelWidth;
         AutoBreakPreferBottomHeavy = Se.Settings.Tools.AutoBreakPreferBottomHeavy;
+        AutoBreakPreferBottomPercent = (int)Math.Round(Se.Settings.Tools.AutoBreakPreferBottomPercent, MidpointRounding.AwayFromZero);
+        UseNoLineBreakAfter = Se.Settings.Tools.UseNoLineBreakAfter;
         DialogStyle = DialogStyles.FirstOrDefault(p => p.Code == general.DialogStyle) ?? DialogStyles.First();
         ContinuationStyle = ContinuationStyles.FirstOrDefault(p => p.Code == general.ContinuationStyle) ?? ContinuationStyles.First();
         IsEditCustomContinuationStyleVisible = ContinuationStyle?.Code == nameof(Core.Enums.ContinuationStyle.Custom);
@@ -786,6 +814,8 @@ public partial class SettingsViewModel : ObservableObject
         SpellCheckEnglishTreatInApostropheAsIng = Se.Settings.Tools.SpellCheckEnglishTreatInApostropheAsIng;
         GoToLineNumberAlsoSetVideoPosition = Se.Settings.Tools.GoToLineNumberAlsoSetVideoPosition;
         AdjustAllTimesRememberLineSelectionChoice = Se.Settings.Synchronization.AdjustAllTimesRememberLineSelectionChoice;
+        MergeKeepEndTime = Se.Settings.Tools.MergeKeepEndTime;
+        MergeKeepEndTimeOnlyAssa = Se.Settings.Tools.MergeKeepEndTimeOnlyAssa;
         SelectedSplitOddNumberOfLinesAction = MapFromSplitOddActionToLanguageCode(Se.Settings.Tools.SplitOddLinesAction);
         SelectedSpellCheckEngine = MapFromSpellCheckEngine(Se.Settings.SpellCheck.SpellCheckProvider);
         OcrUseWordSplitList = Se.Settings.Ocr.UseWordSplitList;
@@ -818,12 +848,16 @@ public partial class SettingsViewModel : ObservableObject
         ShowToolbarSaveAs = appearance.ToolbarShowSaveAs;
         ShowToolbarFind = appearance.ToolbarShowFind;
         ShowToolbarReplace = appearance.ToolbarShowReplace;
+        ShowToolbarMultipleReplace = appearance.ToolbarShowMultipleReplace;
         ShowToolbarSpellCheck = appearance.ToolbarShowSpellCheck;
         ShowToolbarFixCommonErrors = appearance.ToolbarShowFixCommonErrors;
         ShowToolbarRemoveTextForHi = appearance.ToolbarShowRemoveTextForHi;
         ShowToolbarVisualSync = appearance.ToolbarShowVisualSync;
+        ShowToolbarPointSync = appearance.ToolbarShowPointSync;
         ShowToolbarBeautifyTimeCodes = appearance.ToolbarShowBeautifyTimeCodes;
         ShowToolbarBurnIn = appearance.ToolbarShowBurnIn;
+        ShowToolbarAutoTranslate = appearance.ToolbarShowAutoTranslate;
+        ShowToolbarSpeechToText = appearance.ToolbarShowSpeechToText;
         ShowToolbarSettings = appearance.ToolbarShowSettings;
         ShowToolbarLayout = appearance.ToolbarShowLayout;
         ShowToolbarSourceView = appearance.ToolbarShowSourceView;
@@ -1015,6 +1049,11 @@ public partial class SettingsViewModel : ObservableObject
         ProxyDomain = Se.Settings.General.ProxyDomain ?? string.Empty;
         ProxyUseDefaultCredentials = Se.Settings.General.ProxyUseDefaultCredentials;
         ProxyBypassList = Se.Settings.General.ProxyBypassList ?? string.Empty;
+        CheckForUpdatesOnStartup = Se.Settings.General.CheckForUpdatesOnStartup;
+        SelectedUpdateChannel = UpdateCheckService.IncludePrereleases()
+            ? Se.Language.Options.Settings.CheckForUpdatesChannelStableAndBeta
+            : Se.Language.Options.Settings.CheckForUpdatesChannelStable;
+        _loadedUpdateChannel = SelectedUpdateChannel;
         SetFfmpegStatus();
         SetLibMpvStatus();
         SetLibVlcStatus();
@@ -1279,12 +1318,12 @@ public partial class SettingsViewModel : ObservableObject
 
         if (languageAppendType == nameof(SaveAsLanguageAppendType.ThreeLEtterLanguageCode))
         {
-            return Se.Language.Options.Settings.SaveAsAppendLanguageCodeThreeLetter;
+            return Se.Language.General.ThreeLetterLanguageCode;
         }
 
         if (languageAppendType == nameof(SaveAsLanguageAppendType.ThreeLetterLanguageCodeBibliographic))
         {
-            return Se.Language.Options.Settings.SaveAsAppendLanguageCodeThreeLetterBibliographic;
+            return Se.Language.General.ThreeLetterLanguageCodeBibliographic;
         }
 
         if (languageAppendType == nameof(SaveAsLanguageAppendType.FullLanguageName))
@@ -1466,6 +1505,10 @@ public partial class SettingsViewModel : ObservableObject
         { SubtitleDoubleClickActionType.GoToSubtitleOnly.ToString(), Se.Language.Options.Settings.GridGoToSubtitleAndSetVideoPosition },
         { SubtitleDoubleClickActionType.GoToSubtitleAndPauseAndFocusTextBox.ToString(), Se.Language.Options.Settings.GridGoToSubtitleAndPauseAndFocusTextBox },
         { SubtitleDoubleClickActionType.GoToSubtitleAndPlayAndFocusTextBox.ToString(), Se.Language.Options.Settings.GridGoToSubtitleAndPlayAndFocusTextBox },
+        { SubtitleDoubleClickActionType.GoToSubtitleAndPlayCurrentAndPause.ToString(), Se.Language.Options.Settings.SubtitleListActionVideoGoToPositionAndPlayCurrentAndPause },
+        { SubtitleDoubleClickActionType.GoToSubtitleMinus1SecAndPause.ToString(), Se.Language.Options.Settings.SubtitleListActionVideoGoToPositionMinus1SecAndPause },
+        { SubtitleDoubleClickActionType.GoToSubtitleMinusHalfSecAndPause.ToString(), Se.Language.Options.Settings.SubtitleListActionVideoGoToPositionMinusHalfSecAndPause },
+        { SubtitleDoubleClickActionType.GoToSubtitleMinus1SecAndPlay.ToString(), Se.Language.Options.Settings.SubtitleListActionVideoGoToPositionMinus1SecAndPlay },
     };
 
     // Rebuilds the static language-dependent maps in place so callers keep their reference.
@@ -1554,6 +1597,8 @@ public partial class SettingsViewModel : ObservableObject
         Se.Settings.Tools.AutoBreakDashEarly = AutoBreakDashEarly;
         Se.Settings.Tools.AutoBreakUsePixelWidth = AutoBreakUsePixelWidth;
         Se.Settings.Tools.AutoBreakPreferBottomHeavy = AutoBreakPreferBottomHeavy;
+        Se.Settings.Tools.AutoBreakPreferBottomPercent = AutoBreakPreferBottomPercent;
+        Se.Settings.Tools.UseNoLineBreakAfter = UseNoLineBreakAfter;
         general.DialogStyle = DialogStyle.Code;
         general.ContinuationStyle = ContinuationStyle.Code;
         general.CpsLineLengthStrategy = CpsLineLengthStrategy.Code;
@@ -1601,6 +1646,8 @@ public partial class SettingsViewModel : ObservableObject
         Se.Settings.Tools.SpellCheckEnglishTreatInApostropheAsIng = SpellCheckEnglishTreatInApostropheAsIng;
         Se.Settings.Tools.GoToLineNumberAlsoSetVideoPosition = GoToLineNumberAlsoSetVideoPosition;
         Se.Settings.Synchronization.AdjustAllTimesRememberLineSelectionChoice = AdjustAllTimesRememberLineSelectionChoice;
+        Se.Settings.Tools.MergeKeepEndTime = MergeKeepEndTime;
+        Se.Settings.Tools.MergeKeepEndTimeOnlyAssa = MergeKeepEndTimeOnlyAssa;
         Se.Settings.Tools.SplitOddLinesAction = MapFromSplitOddActionTranslationToCode(SelectedSplitOddNumberOfLinesAction);
         Se.Settings.SpellCheck.SpellCheckProvider = MapFromUISpellCheckEngineToCode(SelectedSpellCheckEngine);
         Se.Settings.Ocr.UseWordSplitList = OcrUseWordSplitList;
@@ -1638,12 +1685,16 @@ public partial class SettingsViewModel : ObservableObject
         appearance.ToolbarShowSaveAs = ShowToolbarSaveAs;
         appearance.ToolbarShowFind = ShowToolbarFind;
         appearance.ToolbarShowReplace = ShowToolbarReplace;
+        appearance.ToolbarShowMultipleReplace = ShowToolbarMultipleReplace;
         appearance.ToolbarShowSpellCheck = ShowToolbarSpellCheck;
         appearance.ToolbarShowFixCommonErrors = ShowToolbarFixCommonErrors;
         appearance.ToolbarShowRemoveTextForHi = ShowToolbarRemoveTextForHi;
         appearance.ToolbarShowVisualSync = ShowToolbarVisualSync;
+        appearance.ToolbarShowPointSync = ShowToolbarPointSync;
         appearance.ToolbarShowBeautifyTimeCodes = ShowToolbarBeautifyTimeCodes;
         appearance.ToolbarShowBurnIn = ShowToolbarBurnIn;
+        appearance.ToolbarShowAutoTranslate = ShowToolbarAutoTranslate;
+        appearance.ToolbarShowSpeechToText = ShowToolbarSpeechToText;
         appearance.ToolbarShowSettings = ShowToolbarSettings;
         appearance.ToolbarShowLayout = ShowToolbarLayout;
         appearance.ToolbarShowSourceView = ShowToolbarSourceView;
@@ -1693,7 +1744,7 @@ public partial class SettingsViewModel : ObservableObject
         Se.Settings.Waveform.CenterVideoPositionAlsoWhenPaused = WaveformCenterVideoPositionAlsoWhenPaused;
         Se.Settings.Waveform.FocusTextBoxAfterInsertNew = WaveformFocusTextboxAfterInsertNew;
 
-        if (SelectedWaveformDrawStyle == Se.Language.Waveform.WaveformDrawStyleClassic)
+        if (SelectedWaveformDrawStyle == Se.Language.General.Classic)
         {
             Se.Settings.Waveform.WaveformDrawStyle = WaveformDrawStyle.Classic.ToString();
         }
@@ -1704,7 +1755,7 @@ public partial class SettingsViewModel : ObservableObject
 
         Se.Settings.Waveform.GenerateSpectrogram = WaveformGenerateSpectrogram;
         Se.Settings.Waveform.WaveformAutoGenerate = WaveformAutoGenerate;
-        if (SelectedWaveformSpectrogramStyle == Se.Language.Waveform.SpectrogramClassic)
+        if (SelectedWaveformSpectrogramStyle == Se.Language.General.Classic)
         {
             Se.Settings.Waveform.SpectrogramStyle = SeSpectrogramStyle.Classic.ToString();
         }
@@ -1812,6 +1863,15 @@ public partial class SettingsViewModel : ObservableObject
         general.ProxyDomain = ProxyDomain;
         general.ProxyUseDefaultCredentials = ProxyUseDefaultCredentials;
         general.ProxyBypassList = ProxyBypassList;
+        general.CheckForUpdatesOnStartup = CheckForUpdatesOnStartup;
+        if (SelectedUpdateChannel != _loadedUpdateChannel)
+        {
+            // Only an actual change is stored, so an untouched dropdown keeps the
+            // "auto" default (beta users follow betas, stable users stable only).
+            general.CheckForUpdatesChannel = SelectedUpdateChannel == Se.Language.Options.Settings.CheckForUpdatesChannelStableAndBeta
+                ? UpdateCheckService.ChannelBeta
+                : UpdateCheckService.ChannelStable;
+        }
 
         general.CurrentProfile = SelectedProfile;
         general.Profiles.Clear();
@@ -1926,12 +1986,12 @@ public partial class SettingsViewModel : ObservableObject
             return nameof(SaveAsLanguageAppendType.TwoLetterLanguageCode);
         }
 
-        if (selectedSaveAsAppendLanguageCode == Se.Language.Options.Settings.SaveAsAppendLanguageCodeThreeLetter)
+        if (selectedSaveAsAppendLanguageCode == Se.Language.General.ThreeLetterLanguageCode)
         {
             return nameof(SaveAsLanguageAppendType.ThreeLEtterLanguageCode);
         }
 
-        if (selectedSaveAsAppendLanguageCode == Se.Language.Options.Settings.SaveAsAppendLanguageCodeThreeLetterBibliographic)
+        if (selectedSaveAsAppendLanguageCode == Se.Language.General.ThreeLetterLanguageCodeBibliographic)
         {
             return nameof(SaveAsLanguageAppendType.ThreeLetterLanguageCodeBibliographic);
         }
@@ -2083,6 +2143,17 @@ public partial class SettingsViewModel : ObservableObject
             ColorTextTooWideFontName = viewModel.SelectedFont;
             ColorTextTooWideFontSize = viewModel.FontSize;
         }
+    }
+
+    [RelayCommand]
+    private async Task EditDoNotBreakAfterList()
+    {
+        if (Window == null)
+        {
+            return;
+        }
+
+        await _windowService.ShowDialogAsync<DoNotBreakAfterListWindow, DoNotBreakAfterListViewModel>(Window);
     }
 
     [RelayCommand]
@@ -2820,6 +2891,13 @@ public partial class SettingsViewModel : ObservableObject
             MinDurationMs = profile.MinDurationMs;
             MaxDurationMs = profile.MaxDurationMs;
             MinGapMs = profile.MinGapMs;
+            // A profile stores the gap in milliseconds only, but the setting is ms-or-frames and
+            // frame mode reads the frame value, so derive it instead of leaving it on the old profile's.
+            if (profile.MinGapMs.HasValue)
+            {
+                MinGapFrames = SubtitleFormat.MillisecondsToFrames(profile.MinGapMs.Value);
+            }
+
             MaxLines = profile.MaxLines;
             UnbreakLinesShorterThan = profile.UnbreakLinesShorterThan;
             DialogStyle = profile.DialogStyle;
@@ -2854,7 +2932,10 @@ public partial class SettingsViewModel : ObservableObject
         profileItem.MaxWordsPerMin = MaxWordsPerMin;
         profileItem.MinDurationMs = MinDurationMs;
         profileItem.MaxDurationMs = MaxDurationMs;
-        profileItem.MinGapMs = MinGapMs;
+        // In frame mode the frames box is the one the user edits, so that is the value to store.
+        profileItem.MinGapMs = UseFrameMode && MinGapFrames.HasValue
+            ? SubtitleFormat.FramesToMilliseconds(MinGapFrames.Value)
+            : MinGapMs;
         profileItem.MaxLines = MaxLines;
         profileItem.UnbreakLinesShorterThan = UnbreakLinesShorterThan;
         profileItem.DialogStyle = DialogStyle;

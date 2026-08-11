@@ -4,6 +4,7 @@ using Avalonia.Markup.Xaml;
 using Avalonia.Styling;
 using Avalonia.VisualTree;
 using Nikse.SubtitleEdit.Controls;
+using Nikse.SubtitleEdit.Logic;
 
 namespace UITests.Controls;
 
@@ -17,17 +18,33 @@ namespace UITests.Controls;
 /// first layout through the real template, so the breakage surfaces as a red test at upgrade
 /// time instead.
 /// </summary>
-public class SyntaxHighlightingTextPresenterCanaryTests
+public class SyntaxHighlightingTextPresenterCanaryTests : IDisposable
 {
-    private static (Window window, SyntaxHighlightingTextBox textBox) ShowTextBox(string text)
+    // Every window opened by a test is closed again in Dispose: if a test stops early, an
+    // unclosed window would outlive the test and race with the headless session teardown.
+    private readonly List<Window> _windows = new();
+
+    public void Dispose()
+    {
+        foreach (var window in _windows)
+        {
+            window.Close();
+        }
+
+        _windows.Clear();
+    }
+
+    private (Window window, SyntaxHighlightingTextBox textBox) ShowTextBox(string text, ISourceSyntaxHighlighter? highlighter = null)
     {
         var styles = (Styles)AvaloniaXamlLoader.Load(new Uri("avares://SubtitleEdit/Styles.axaml"));
         var textBox = new SyntaxHighlightingTextBox
         {
+            SourceHighlighter = highlighter,
             Text = text,
             FontSize = 16,
         };
         var window = new Window { Content = textBox, Width = 400, Height = 120 };
+        _windows.Add(window);
         window.Styles.Add(styles);
         window.Show();
         textBox.ApplyTemplate();
@@ -54,6 +71,23 @@ public class SyntaxHighlightingTextPresenterCanaryTests
         textBox.SelectionEnd = 5;
         presenter.InvalidateSpellCheck(); // public wrapper around InvalidateTextLayout
         Assert.NotNull(presenter.TextLayout);
+    }
+
+    /// <summary>
+    /// The source-format path (media info, format preview) runs the same replicated layout code
+    /// with a multi-line text and bold spans, so it needs the same canary.
+    /// </summary>
+    [AvaloniaFact]
+    public void CreateTextLayoutHandlesSourceHighlighterSpans()
+    {
+        const string srt = "1\r\n00:00:01,000 --> 00:00:02,000\r\nHello <i>world</i>\r\n";
+        var (_, textBox) = ShowTextBox(srt, new SubRipSourceSyntaxHighlighting());
+
+        var presenter = textBox.GetVisualDescendants().OfType<SyntaxHighlightingTextPresenter>().Single();
+
+        var layout = presenter.TextLayout;
+        Assert.NotNull(layout);
+        Assert.Equal(srt.Length, layout.TextLines.Sum(l => l.Length));
     }
 
     [AvaloniaFact]

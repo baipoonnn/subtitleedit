@@ -70,7 +70,7 @@ public class WordListsWindow : Window
 
         Content = grid;
 
-        Activated += delegate { buttonOk.Focus(); }; // hack to make OnKeyDown work
+        Activated += delegate { comboLanguages.Focus(); }; // initial focus on an input, not an action button - a focused button clicks on bare Space
         Closing += (s, e) => _vm.Closing();
         Loaded += (s, e) => vm.Loaded();
 
@@ -92,6 +92,8 @@ public class WordListsWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
         };
         Optris.Icons.Avalonia.Attached.SetIcon(icon, iconName);
+        // Keep the glyph white on the colored square in the dark theme too (#12717).
+        icon.Classes.Add(UiTheme.IconOnAccentClassName);
         var glyph = new Border
         {
             Width = 22,

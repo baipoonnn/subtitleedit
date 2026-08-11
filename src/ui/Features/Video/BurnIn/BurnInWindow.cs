@@ -18,6 +18,7 @@ namespace Nikse.SubtitleEdit.Features.Video.BurnIn;
 public class BurnInWindow : Window
 {
     private readonly BurnInViewModel _vm;
+    private ComboBox? _comboBoxFontName;
 
     public BurnInWindow(BurnInViewModel vm)
     {
@@ -44,8 +45,13 @@ public class BurnInWindow : Window
         var videoInfoView = MakeVideoInfoView(vm);
         var progressView = MakeProgressView(vm);
 
-        // Keep the left column (subtitle + video + target size) together and top-aligned so the
-        // extra vertical space goes to the preview instead of opening a gap between the boxes.
+        // The left column (subtitle + video settings + target size) is taller than the middle
+        // column's cut/preview/audio/video-info rows. Keeping all three boxes in one packed
+        // panel preserves the v5.1.0 look (no gaps), and the preview row's MinHeight below
+        // guarantees the panel fits in rows 0-3 - so it can never overflow into the
+        // progress-bar row (which used to draw the bar through the "File size in MB" field)
+        // - and the preview box never gets shorter than its label + player, so the player
+        // cannot spill over the audio settings box.
         var leftPanel = new StackPanel
         {
             Orientation = Orientation.Vertical,
@@ -99,9 +105,9 @@ public class BurnInWindow : Window
             RowDefinitions =
             {
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }, // cut
-                new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }, // preview + batch list
+                new RowDefinition { Height = new GridLength(1, GridUnitType.Star), MinHeight = 400 }, // preview + batch list (never smaller than the preview box needs)
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }, // audio
-                new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }, // video info
+                new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }, // video info + target file size
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }, // progress bar
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }, // buttons
             },
@@ -116,7 +122,7 @@ public class BurnInWindow : Window
             HorizontalAlignment = HorizontalAlignment.Stretch,
         };
 
-        grid.Add(leftPanel, 0, 0, 4, 1);
+        grid.Add(leftPanel, 0, 0, 4, 1);  // rows 0-3 (cut + preview + audio + video info)
         grid.Add(cutView, 0, 1);
         grid.Add(previewView, 1, 1);
         grid.Add(audioSettingsView, 2, 1);
@@ -167,10 +173,16 @@ public class BurnInWindow : Window
                 UpdateGrowAreas();
                 LockMinimumToContentSize(); // batch mode needs more width; re-fit and re-lock the minimum
             }
+            else if (e.PropertyName == nameof(vm.IsGenerating))
+            {
+                // The progress row only exists while generating; re-lock the minimum so the
+                // window (and the button row) always fit the content with the bar shown.
+                LockMinimumToContentSize(heightOnly: true);
+            }
         };
         UpdateGrowAreas();
 
-        Activated += delegate { buttonOk.Focus(); }; // hack to make OnKeyDown work
+        Activated += delegate { _comboBoxFontName?.Focus(); }; // initial focus on an input, not an action button - a focused button clicks on bare Space
         Loaded += (_, _) => vm.Loaded();
         KeyDown += (_, e) => vm.OnKeyDown(e);
 
@@ -187,25 +199,65 @@ public class BurnInWindow : Window
         };
     }
 
-    private void LockMinimumToContentSize()
+    private void LockMinimumToContentSize(bool heightOnly = false)
     {
         // Re-fit the window to the current mode's content (single mode is narrower; batch mode
         // needs more width for the file list), then lock that size in as the new minimum while
         // still allowing the user to enlarge the window further.
-        MinWidth = 0;
+        //
+        // heightOnly re-fits only the height: the width (and the minimum locked for it) is the
+        // user's, and clearing MinWidth here would leave it at zero - the callback below never
+        // restores it - so the window could be dragged narrower than its content, which is the
+        // clipping this whole method exists to prevent.
+        if (!heightOnly)
+        {
+            MinWidth = 0;
+        }
+
         MinHeight = 0;
-        SizeToContent = SizeToContent.WidthAndHeight;
+        SizeToContent = heightOnly ? SizeToContent.Height : SizeToContent.WidthAndHeight;
         Dispatcher.UIThread.Post(() =>
         {
             var width = ClientSize.Width;
             var height = ClientSize.Height;
+            // Any difference between the window size and the client size (title bar, borders) has
+            // to be added on top of the content, or the minimum sits below it and the bottom row
+            // (buttons) gets clipped. Avalonia measures windows by client area, so this is
+            // normally zero; Width/Height are also NaN until something assigns them, hence the
+            // guard - NaN here would wipe out the minimum entirely.
+            var chromeWidth = Width - width;
+            var chromeHeight = Height - height;
+            if (double.IsNaN(chromeWidth) || chromeWidth < 0)
+            {
+                chromeWidth = 0;
+            }
+
+            if (double.IsNaN(chromeHeight) || chromeHeight < 0)
+            {
+                chromeHeight = 0;
+            }
+
             SizeToContent = SizeToContent.Manual;
             if (width > 0 && height > 0)
             {
-                MinWidth = width;
-                MinHeight = height;
-                Width = width;
-                Height = height;
+                if (heightOnly)
+                {
+                    // Used when generating starts/stops: the progress row only exists while
+                    // generating, so re-lock the minimum for that state. Only enlarge - never
+                    // shrink the window back down automatically.
+                    MinHeight = height + chromeHeight;
+                    if (Height < MinHeight)
+                    {
+                        Height = MinHeight;
+                    }
+                }
+                else
+                {
+                    MinWidth = width + chromeWidth;
+                    MinHeight = height + chromeHeight;
+                    Width = width + chromeWidth;
+                    Height = height + chromeHeight;
+                }
             }
         }, DispatcherPriority.Loaded);
     }
@@ -288,12 +340,13 @@ public class BurnInWindow : Window
         });
     }
 
-    private static Border MakeSubtitlesView(BurnInViewModel vm)
+    private Border MakeSubtitlesView(BurnInViewModel vm)
     {
         var labelFontName = UiUtil.MakeLabel(Se.Language.General.FontName);
         var comboBoxFontName = UiUtil.MakeComboBox(vm.FontNames, vm, nameof(vm.SelectedFontName))
             .WithMinWidth(200);
         comboBoxFontName.SelectionChanged += vm.ComboBoxChanged;
+        _comboBoxFontName = comboBoxFontName;
 
         var labelFontSizeFactor = UiUtil.MakeLabel(Se.Language.Video.BurnIn.FontSizeFactor);
         var numericUpDownFontSizeFactor = UiUtil.MakeNumericUpDownTwoDecimals(0.1m, 1.0m, 150, vm, nameof(vm.FontFactor));
@@ -384,7 +437,7 @@ public class BurnInWindow : Window
 
         var labelEffect = UiUtil.MakeLabel(Se.Language.General.Effect);
         var labelSelectedEffect = UiUtil.MakeLabel(string.Empty).WithBindText(vm, nameof(vm.DisplayEffect)).WithMarginRight(3);
-        var buttonEffect = UiUtil.MakeButtonBrowse(vm.ShowEffectsCommand);
+        var buttonEffect = UiUtil.MakeButtonBrowse(vm.ShowEffectsCommand, accessibleName: Se.Language.General.Effect);
         var panelEffect = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -398,7 +451,7 @@ public class BurnInWindow : Window
         };
 
         var labelLogo = UiUtil.MakeLabel(Se.Language.General.Logo);
-        var buttonLogo = UiUtil.MakeButtonBrowse(vm.ShowLogoCommand);
+        var buttonLogo = UiUtil.MakeButtonBrowse(vm.ShowLogoCommand, accessibleName: Se.Language.General.Logo);
         var labelLogoInfo = UiUtil.MakeLabel(string.Empty).WithBindText(vm, nameof(vm.LogoInfo)).WithMarginRight(3);
         var panelLogo = new StackPanel
         {
@@ -480,10 +533,7 @@ public class BurnInWindow : Window
             {
                 new Label
                 {
-                    Content = "Current ASSA style will be used" + Environment.NewLine +
-                    Environment.NewLine +
-                    "Change subtitle format if"+ Environment.NewLine +
-                    "you want to set styles here",
+                    Content = Se.Language.Video.AssaStyleWillBeUsed,
                     FontWeight = FontWeight.Bold,
                     FontSize = 22,
                     HorizontalAlignment = HorizontalAlignment.Center,
@@ -507,7 +557,7 @@ public class BurnInWindow : Window
         var textBoxWidth = UiUtil.MakeNumericUpDownInt(0, 10_000, 0, 130, vm, nameof(vm.VideoWidth));
         var labelX = UiUtil.MakeLabel("x");
         var textBoxHeight = UiUtil.MakeNumericUpDownInt(0, 10_000, 0, 130, vm, nameof(vm.VideoHeight));
-        var buttonResolution = UiUtil.MakeButtonBrowse(vm.BrowseResolutionCommand);
+        var buttonResolution = UiUtil.MakeButtonBrowse(vm.BrowseResolutionCommand, accessibleName: Se.Language.General.Resolution);
         var panelResolution = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -522,7 +572,7 @@ public class BurnInWindow : Window
         }.WithBindVisible(vm, nameof(vm.UseSourceResolution), new InverseBooleanConverter());
 
         var labelSourceResolution = UiUtil.MakeLabel("Use source resolution").WithBindVisible(vm, nameof(vm.UseSourceResolution));
-        var buttonResolutionSource = UiUtil.MakeButtonBrowse(vm.BrowseResolutionCommand);
+        var buttonResolutionSource = UiUtil.MakeButtonBrowse(vm.BrowseResolutionCommand, accessibleName: Se.Language.General.Resolution);
         var panelResolutionSource = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -610,9 +660,9 @@ public class BurnInWindow : Window
 
     private static Border MakeCutView(BurnInViewModel vm)
     {
-        var checkBoxCut = UiUtil.MakeCheckBox(Se.Language.Video.BurnIn.Cut, vm, nameof(vm.IsCutActive));
+        var checkBoxCut = UiUtil.MakeCheckBox(Se.Language.General.Cut, vm, nameof(vm.IsCutActive));
 
-        var buttonCutFrom = UiUtil.MakeButtonBrowse(vm.BrowseCutFromCommand);
+        var buttonCutFrom = UiUtil.MakeButtonBrowse(vm.BrowseCutFromCommand, accessibleName: Se.Language.Video.BurnIn.FromTime);
         buttonCutFrom.VerticalAlignment = VerticalAlignment.Center;
         var labelFromTime = UiUtil.MakeLabel(Se.Language.Video.BurnIn.FromTime);
         var timeUpDownFrom = new TimeCodeUpDown
@@ -622,7 +672,7 @@ public class BurnInWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
         };
 
-        var buttonCutTo = UiUtil.MakeButtonBrowse(vm.BrowseCutToCommand);
+        var buttonCutTo = UiUtil.MakeButtonBrowse(vm.BrowseCutToCommand, accessibleName: Se.Language.Video.BurnIn.ToTime);
         buttonCutTo.VerticalAlignment = VerticalAlignment.Center;
         var labelToTime = UiUtil.MakeLabel(Se.Language.Video.BurnIn.ToTime);
         var timeUpDownTo = new TimeCodeUpDown
@@ -709,7 +759,7 @@ public class BurnInWindow : Window
         var labelAudioEncoding = UiUtil.MakeLabel(Se.Language.Video.BurnIn.AudioEncoding);
         var comboBoxAudioEncoding = UiUtil.MakeComboBox(vm.AudioEncodings, vm, nameof(vm.SelectedAudioEncoding));
 
-        var checkBoxStereo = UiUtil.MakeCheckBox(Se.Language.Video.BurnIn.Stereo, vm, nameof(vm.AudioIsStereo));
+        var checkBoxStereo = UiUtil.MakeCheckBox(Se.Language.General.Stereo, vm, nameof(vm.AudioIsStereo));
 
         var labelSampleRate = UiUtil.MakeLabel(Se.Language.Video.BurnIn.SampleRate);
         var comboBoxSampleRate = UiUtil.MakeComboBox(vm.AudioSampleRates, vm, nameof(vm.SelectedAudioSampleRate));
@@ -752,51 +802,47 @@ public class BurnInWindow : Window
 
     private static Border MakeBatchView(BurnInViewModel vm)
     {
-        var dataGrid = new DataGrid
+        // No header sorting: the batch queue is processed top-to-bottom (jobs are
+        // selected/scrolled by index while generating), so the list order is meaningful.
+        var dataGrid = TableViewExtras.MakeTableView(multiSelect: false);
+        dataGrid.Width = double.NaN;
+        dataGrid.Height = double.NaN;
+        dataGrid.MinWidth = 550; // the batch column is Auto while measuring; star columns have no intrinsic width
+        dataGrid.DataContext = vm;
+        dataGrid.ItemsSource = vm.JobItems;
+        dataGrid.Columns.Add(new SeTableViewColumn
         {
-            AutoGenerateColumns = false,
-            SelectionMode = DataGridSelectionMode.Single,
-            CanUserResizeColumns = true,
-            CanUserSortColumns = true,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            VerticalAlignment = VerticalAlignment.Stretch,
-            Width = double.NaN,
-            Height = double.NaN,
-            DataContext = vm,
-            ItemsSource = vm.JobItems,
-            Columns =
-            {
-                new DataGridTextColumn
-                {
-                    Header = Se.Language.General.FileName,
-                    CellTheme = UiUtil.DataGridNoBorderNoPaddingCellTheme,
-                    Binding = new Binding(nameof(BurnInJobItem.InputVideoFileNameShort)),
-                    IsReadOnly = true,
-                },
-                new DataGridTextColumn
-                {
-                    Header = Se.Language.General.Size,
-                    CellTheme = UiUtil.DataGridNoBorderNoPaddingCellTheme,
-                    Binding = new Binding(nameof(BurnInJobItem.Resolution)),
-                    IsReadOnly = true,
-                },
-                new DataGridTextColumn
-                {
-                    Header = Se.Language.General.SubtitleFile,
-                    CellTheme = UiUtil.DataGridNoBorderNoPaddingCellTheme,
-                    Binding = new Binding(nameof(BurnInJobItem.SubtitleFileNameShort)),
-                    IsReadOnly = true,
-                },
-                new DataGridTextColumn
-                {
-                    Header = Se.Language.General.Status,
-                    CellTheme = UiUtil.DataGridNoBorderNoPaddingCellTheme,
-                    Binding = new Binding(nameof(BurnInJobItem.Status)),
-                    IsReadOnly = true,
-                },
-            },
-        };
-        dataGrid.Bind(DataGrid.SelectedItemProperty, new Binding(nameof(vm.SelectedJobItem)) { Source = vm });
+            Header = Se.Language.General.FileName,
+            CellTheme = UiUtil.TableViewCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
+            Binding = new Binding(nameof(BurnInJobItem.InputVideoFileNameShort)),
+            Width = new GridLength(1, GridUnitType.Star),
+        });
+        dataGrid.Columns.Add(new SeTableViewColumn
+        {
+            Header = Se.Language.General.Size,
+            CellTheme = UiUtil.TableViewCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
+            Binding = new Binding(nameof(BurnInJobItem.Resolution)),
+            Width = new GridLength(90), // was content-sized (Auto) on the DataGrid
+        });
+        dataGrid.Columns.Add(new SeTableViewColumn
+        {
+            Header = Se.Language.General.SubtitleFile,
+            CellTheme = UiUtil.TableViewCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
+            Binding = new Binding(nameof(BurnInJobItem.SubtitleFileNameShort)),
+            Width = new GridLength(1, GridUnitType.Star),
+        });
+        dataGrid.Columns.Add(new SeTableViewColumn
+        {
+            Header = Se.Language.General.Status,
+            CellTheme = UiUtil.TableViewCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
+            Binding = new Binding(nameof(BurnInJobItem.Status)),
+            Width = new GridLength(110), // was content-sized (Auto) on the DataGrid
+        });
+        dataGrid.Bind(TableView.SelectedItemProperty, new Binding(nameof(vm.SelectedJobItem)) { Source = vm });
         vm.BatchGrid = dataGrid;
 
         var buttonAdd = UiUtil.MakeButton(Se.Language.General.AddDotDotDot, vm.AddCommand);
@@ -823,7 +869,7 @@ public class BurnInWindow : Window
         var labelOutputPropertiesFolder = UiUtil.MakeLink(string.Empty, vm.OpenOutputFolderCommand)
             .WithFilePathText(vm, nameof(vm.OutputFolder))
             .WithBindVisible(vm, nameof(vm.UseOutputFolderVisible));
-        var labelOutputPropertiesUseSourceFolder = UiUtil.MakeLabel(Se.Language.Video.BurnIn.UseSourceFolder)
+        var labelOutputPropertiesUseSourceFolder = UiUtil.MakeLabel(Se.Language.General.UseSourceFolder)
             .WithBindVisible(vm, nameof(vm.UseSourceFolderVisible));
 
         var panelFileControls2 = new StackPanel

@@ -38,6 +38,8 @@ public class ForcedAlignerSetupWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
         };
         Attached.SetIcon(introIcon, IconNames.Waveform);
+        // Keep the glyph white on the colored square in the dark theme too (#12717).
+        introIcon.Classes.Add(UiTheme.IconOnAccentClassName);
 
         var introGlyph = new Border
         {
@@ -56,7 +58,7 @@ public class ForcedAlignerSetupWindow : Window
             Children = { introGlyph, labelIntro },
         };
 
-        var labelEngine = UiUtil.MakeLabel(Se.Language.File.Import.ForcedAlignerEngine);
+        var labelEngine = UiUtil.MakeLabel(Se.Language.General.Engine);
 
         // Same dot vocabulary as everywhere else: green installed, amber update waiting,
         // grey not installed - always paired with text, never colour alone.
@@ -148,7 +150,7 @@ public class ForcedAlignerSetupWindow : Window
 
         Content = grid;
 
-        Activated += delegate { buttonOk.Focus(); }; // hack to make OnKeyDown work
+        Activated += delegate { comboAligner.Focus(); }; // initial focus on an input, not an action button - a focused button clicks on bare Space
         KeyDown += (s, e) => vm.OnKeyDown(e);
     }
 }

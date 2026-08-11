@@ -1,6 +1,6 @@
 {
   "title": "Subtitle Edit",
-  "version": "v5.1.0-rc8",
+  "version": "v5.1.0",
   "translatedBy": "Claude (Anthropic)",
   "cultureName": "el-GR",
   "general": {
@@ -1018,7 +1018,7 @@
     "undoPerformed": "Έγινε αναίρεση",
     "undoPerformedXActionLeft": "Έγινε αναίρεση (ενέργειες που απομένουν: {0})",
     "xLinesCopiedFromOriginal": "{0} γραμμές αντιγράφηκαν από τον αρχικό υπότιτλο",
-    "xLinesMerged": "X γραμμές συγχωνεύτηκαν",
+    "xLinesMerged": "{0} γραμμές συγχωνεύτηκαν",
     "xLinesSelectedOfY": "{0} γραμμές επιλεγμένες από {1}",
     "xLinesSwitched": "{0} γραμμές εναλλάχθηκαν",
     "xShotChangedLoaded": "Φορτώθηκαν {0} αλλαγές πλάνου",

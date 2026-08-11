@@ -731,8 +731,18 @@ namespace Nikse.SubtitleEdit.Controls.VideoPlayer
             Dispatcher.UIThread.Invoke(() => { _iconVolume.Value = isMuted ? "fa-solid fa-volume-xmark" : "fa-solid fa-volume-up"; });
         }
 
-        internal async Task Open(string videoFileName)
+        /// <param name="startPositionSeconds">
+        /// Where the video should already be when it comes up. Callers that restore a position
+        /// (session restore, fullscreen, undock) pass it here instead of seeking afterwards:
+        /// a later seek leaves the player showing 0:00 for a moment and then jumping (#13329).
+        /// </param>
+        internal async Task Open(string videoFileName, double startPositionSeconds = 0)
         {
+            if (IsDisposed)
+            {
+                return;
+            }
+
             // Reset slider state before LoadFile. Otherwise, when the new file's
             // Duration arrives on the next timer tick, the slider's Maximum drops
             // and a stale Value (left over from the previous file) gets clamped to
@@ -740,7 +750,16 @@ namespace Nikse.SubtitleEdit.Controls.VideoPlayer
             SetPositionDisplayOnly(0);
             Duration = 0;
 
-            await _videoPlayerInstance.LoadFile(videoFileName);
+            await _videoPlayerInstance.LoadFile(videoFileName, startPositionSeconds);
+
+            // The control may have been torn down while LoadFile was awaiting (fullscreen
+            // closed mid-open, a second layout rebuild). Starting the position timer then
+            // would poll the disposed player from the dispatcher for the rest of the session.
+            if (IsDisposed)
+            {
+                return;
+            }
+
             _videoPlayerInstance.Volume = Volume;
             _positionTimer?.Stop();
             _slowPollCounter = 4; // force Duration+icon update on the very first tick
@@ -798,11 +817,82 @@ namespace Nikse.SubtitleEdit.Controls.VideoPlayer
             Duration = 0;
         }
 
+        /// <summary>
+        /// Set once <see cref="CloseAndDisposePlayer"/> has started tearing this control down.
+        /// Every async open/restore sequence (Open, WaitForPlayersReadyAsync, the reopen
+        /// continuations in the layout rebuild, fullscreen and Reopen paths) must bail out when
+        /// this is set: a control is disposed from window Closed handlers and layout rebuilds
+        /// while such a sequence may still be awaiting, and without the check the continuation
+        /// keeps polling and seeking the dead player for seconds (issue #13083) - or worse,
+        /// restarts the 50 ms position timer on it, which then P/Invokes the freed core forever.
+        /// </summary>
+        internal bool IsDisposed { get; private set; }
+
+        /// <summary>
+        /// Permanently tears this control down: stops the polling timers, unloads the file,
+        /// detaches the native render host and destroys the underlying player.
+        /// <para>
+        /// Call this - not just <c>VideoPlayer.CloseFile()</c> - whenever a control is thrown
+        /// away (layout rebuild, leaving fullscreen, closing the undocked window). Skipping it
+        /// leaks two things that survive until the app exits: the 50 ms <see cref="_positionTimer"/>,
+        /// which a running <see cref="DispatcherTimer"/> keeps rooted in the dispatcher (so it goes
+        /// on P/Invoking the dead player from the UI thread forever), and the native player core
+        /// itself, whose worker threads and GPU context are only released by its Dispose. Since
+        /// Options/OK rebuilds the layout on any setting change, that used to leak one mpv core
+        /// plus one UI-thread poller per OK, which is what made the waveform playhead stutter
+        /// until restart (issue #13048).
+        /// </para>
+        /// <para>
+        /// Order matters: stop and unload first so the player is idle, then drop the content
+        /// (which destroys the embedded window), and only then destroy the core. mpv's
+        /// <c>mpv_terminate_destroy</c> blocks until every worker has exited - milliseconds when
+        /// idle, but many seconds if a load is stuck on a slow path - so it runs on a worker
+        /// thread rather than freezing the UI (same reasoning as issue #11176).
+        /// </para>
+        /// </summary>
+        internal void CloseAndDisposePlayer()
+        {
+            IsDisposed = true;
+            Close();
+
+            // Mark before the content goes. On the OpenGL host mpv's render context may only be
+            // freed from the GL deinit callback (the GL context has to be current), and dropping
+            // the content is what fires that callback - so it has to already know the player is
+            // being discarded, or it hands back to a Dispose that can no longer free the context.
+            (_videoPlayerInstance as LibMpvDynamicPlayer)?.MarkForDispose();
+
+            Content = null;
+
+            if (_videoPlayerInstance is not IDisposable disposablePlayer)
+            {
+                return;
+            }
+
+            Task.Run(() =>
+            {
+                try
+                {
+                    disposablePlayer.Dispose();
+                }
+                catch (Exception exception)
+                {
+                    Se.LogError(exception, "VideoPlayerControl background player dispose");
+                }
+            });
+        }
+
         internal async Task WaitForPlayersReadyAsync(int timeoutMs = 2500)
         {
             var end = DateTime.UtcNow.AddMilliseconds(timeoutMs);
             while (DateTime.UtcNow < end)
             {
+                // A disposed player reports Duration 0 forever, so without this check the
+                // poll always runs to the full timeout against the dead core (issue #13083).
+                if (IsDisposed)
+                {
+                    return;
+                }
+
                 // Consider player ready when Duration is known (> 0)
                 var ready = VideoPlayer.Duration > 0.001;
 

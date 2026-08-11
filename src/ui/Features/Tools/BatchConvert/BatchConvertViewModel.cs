@@ -6,12 +6,12 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Nikse.SubtitleEdit.Core.AutoTranslate;
+using Nikse.SubtitleEdit.UiLogic.AutoTranslate;
 using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Core.ContainerFormats.Matroska;
 using Nikse.SubtitleEdit.Core.ContainerFormats.Mp4;
 using Nikse.SubtitleEdit.Core.SubtitleFormats;
-using Nikse.SubtitleEdit.Core.Translate;
+using Nikse.SubtitleEdit.UiLogic.Translate;
 using Nikse.SubtitleEdit.Features.Assa;
 using Nikse.SubtitleEdit.Features.Edit.MultipleReplace;
 using Nikse.SubtitleEdit.Features.Files.ExportCustomTextFormat;
@@ -21,6 +21,7 @@ using Nikse.SubtitleEdit.Features.Files.ExportImageBased;
 using Nikse.SubtitleEdit.Features.Main;
 using Nikse.SubtitleEdit.Features.Ocr;
 using Nikse.SubtitleEdit.Features.Ocr.Download;
+using Nikse.SubtitleEdit.Features.Ocr.Engines;
 using Nikse.SubtitleEdit.Features.Shared;
 using Nikse.SubtitleEdit.Features.Shared.ErrorList;
 using Nikse.SubtitleEdit.Features.Shared.PickSubtitleFormat;
@@ -194,6 +195,13 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
     [ObservableProperty] private bool _rtlRemoveUniCode;
     [ObservableProperty] private bool _rtlReverseStartEnd;
 
+    // Beautify time codes
+    [ObservableProperty] private bool _beautifyTimeCodesSnapToShotChanges;
+    [ObservableProperty] private bool _beautifyTimeCodesUseVideoFrameRate;
+    [ObservableProperty] private bool _beautifyTimeCodesUseFixedFrameRate;
+    [ObservableProperty] private ObservableCollection<double> _beautifyTimeCodesFrameRates;
+    [ObservableProperty] private double _selectedBeautifyTimeCodesFrameRate;
+
     // Bride gaps
     [ObservableProperty] private int _bridgeGapsSmallerThanMs;
     [ObservableProperty] private int _bridgeGapsMinGapMs;
@@ -237,7 +245,7 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
     [ObservableProperty] private bool _sortByDescending;
 
     public Window? Window { get; set; }
-    public DataGrid FileGrid { get; set; } = new();
+    public TableView FileGrid { get; set; } = new();
 
     public bool OkPressed { get; private set; }
     public ScrollViewer FunctionContainer { get; internal set; }
@@ -282,6 +290,7 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
         {
             BatchConverter.FormatAyato,
             BatchConverter.FormatBdnXml,
+            BatchConverter.FormatBdnXml8Bit,
             BatchConverter.FormatBluRaySup,
             BatchConverter.FormatCavena890,
             BatchConverter.FormatCustomTextFormat,
@@ -341,6 +350,21 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
             60,
             120,
         };
+        BeautifyTimeCodesFrameRates = new ObservableCollection<double>
+        {
+            23.976,
+            24,
+            25,
+            29.97,
+            30,
+            48,
+            59.94,
+            60,
+            120,
+        };
+        SelectedBeautifyTimeCodesFrameRate = BeautifyTimeCodesFrameRates[0];
+        BeautifyTimeCodesUseVideoFrameRate = true;
+
         AdjustTypes = new ObservableCollection<AdjustDurationDisplay>(AdjustDurationDisplay.ListAll());
         SelectedAdjustType = AdjustTypes.First();
 
@@ -349,8 +373,8 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
 
         SortByOptions = new ObservableCollection<SortByOption>
         {
-            new("Number", Se.Language.Tools.SortBy.SortByNumber),
-            new("StartTime", Se.Language.Tools.SortBy.SortByStartTime),
+            new("Number", Se.Language.General.Number),
+            new("StartTime", Se.Language.General.StartTime),
             new("EndTime", Se.Language.Tools.SortBy.SortByEndTime),
         };
         SelectedSortByOption = SortByOptions[0];
@@ -403,6 +427,7 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
         _targetFormatsWithSettings = new List<string>
         {
             BatchConverter.FormatBdnXml,
+            BatchConverter.FormatBdnXml8Bit,
             BatchConverter.FormatBluRaySup,
             BatchConverter.FormatCustomTextFormat,
             BatchConverter.FormatDostImage,
@@ -468,22 +493,34 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
                 BatchItems.Add(item);
             }
         }
+
+        MakeBatchItemsInfo();
     }
 
     private bool PassesFilter(BatchConvertItem item)
     {
-        if (SelectedFilterItem == Se.Language.Tools.BatchConvert.FileNameContainsDotDotDot && !string.IsNullOrEmpty(FilterText))
+        if (!IsFilterActive)
+        {
+            return true;
+        }
+
+        if (SelectedFilterItem == Se.Language.Tools.BatchConvert.FileNameContainsDotDotDot)
         {
             return item.FileName.Contains(FilterText, StringComparison.InvariantCultureIgnoreCase);
         }
 
-        if (SelectedFilterItem == Se.Language.Tools.BatchConvert.TrackLanguageContainsDotDotDot && !string.IsNullOrEmpty(FilterText))
+        if (SelectedFilterItem == Se.Language.Tools.BatchConvert.TrackLanguageContainsDotDotDot)
         {
             return item.Format.Contains(FilterText, StringComparison.InvariantCultureIgnoreCase);
         }
 
         return true;
     }
+
+    private bool IsFilterActive =>
+        !string.IsNullOrEmpty(FilterText) &&
+        (SelectedFilterItem == Se.Language.Tools.BatchConvert.FileNameContainsDotDotDot ||
+         SelectedFilterItem == Se.Language.Tools.BatchConvert.TrackLanguageContainsDotDotDot);
 
     // Appends just-parsed items to the visible grid (respecting the active filter) so files show
     // up incrementally as they load. Must run on the UI thread.
@@ -627,6 +664,11 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
         Se.Settings.Tools.BatchConvert.SortBy = SelectedSortByOption?.Key ?? "Number";
         Se.Settings.Tools.BatchConvert.SortByDescending = SortByDescending;
 
+        // Beautify time codes
+        Se.Settings.Tools.BatchConvert.BeautifyTimeCodesSnapToShotChanges = BeautifyTimeCodesSnapToShotChanges;
+        Se.Settings.Tools.BatchConvert.BeautifyTimeCodesUseFixedFrameRate = BeautifyTimeCodesUseFixedFrameRate;
+        Se.Settings.Tools.BatchConvert.BeautifyTimeCodesFixedFrameRate = SelectedBeautifyTimeCodesFrameRate;
+
         // Adjust image brightness/alpha/color
         Se.Settings.Tools.BatchConvert.ImageAdjustBrightnessOn = ImageAdjustBrightnessOn;
         Se.Settings.Tools.BatchConvert.ImageAdjustBrightness = ImageAdjustBrightness;
@@ -753,6 +795,15 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
         BridgeGapsSmallerThanMs = Se.Settings.Tools.BridgeGaps.BridgeGapsSmallerThanMs;
         BridgeGapsMinGapMs = Se.Settings.Tools.BridgeGaps.MinGapMs;
         BridgeGapsPercentForLeft = Se.Settings.Tools.BridgeGaps.PercentForLeft;
+
+        BeautifyTimeCodesSnapToShotChanges = Se.Settings.Tools.BatchConvert.BeautifyTimeCodesSnapToShotChanges;
+        BeautifyTimeCodesUseFixedFrameRate = Se.Settings.Tools.BatchConvert.BeautifyTimeCodesUseFixedFrameRate;
+        BeautifyTimeCodesUseVideoFrameRate = !BeautifyTimeCodesUseFixedFrameRate;
+        var beautifyRate = BeautifyTimeCodesFrameRates.FirstOrDefault(p => Math.Abs(p - Se.Settings.Tools.BatchConvert.BeautifyTimeCodesFixedFrameRate) < 0.001);
+        if (beautifyRate > 0)
+        {
+            SelectedBeautifyTimeCodesFrameRate = beautifyRate;
+        }
 
         SplitBreakSingleLineMaxLength = Se.Settings.General.SubtitleLineMaximumLength;
         SplitBreakMaxNumberOfLines = Se.Settings.General.MaxNumberOfLines;
@@ -944,6 +995,11 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
             return;
         }
 
+        if (!await EnsureCrispEmbedAvailable(config))
+        {
+            return;
+        }
+
         if (!await EnsureCrispAsrAvailable(config))
         {
             return;
@@ -960,56 +1016,87 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
         IsProgressVisible = true;
         IsConverting = true;
         AreControlsEnabled = false;
-        ProgressMaxValue = BatchItems.Count;
+        // Snapshot the job list: the loop below runs on a background thread while
+        // BatchItems stays live in the UI, where header-click sorting (and re-filtering)
+        // rebuilds the collection in place - enumerating the live collection there
+        // could throw mid-run. Status updates still reach the grid per item.
+        var itemsToConvert = BatchItems.ToList();
+        ProgressMaxValue = itemsToConvert.Count;
         _ = Task.Run(async () =>
         {
-            var count = 1;
-            foreach (var batchItem in BatchItems)
+            // Nothing in this fire-and-forget task may throw its way out: an unobserved fault
+            // leaves IsConverting/IsProgressVisible/AreControlsEnabled set and the dialog frozen
+            // at "Converting 1/4..." forever with no error shown (#12288). The per-item catch
+            // below keeps one bad file from ending the batch; this try/finally guarantees the
+            // dialog is released even if anything outside the loop fails.
+            try
             {
-                var countDisplay = count;
-                ProgressText = string.Format(Se.Language.General.ConvertingXofYDotDoDot, countDisplay, BatchItems.Count);
-                ProgressValue = countDisplay / (double)BatchItems.Count;
-
-                if (batchItem.Format!.StartsWith("Transport Stream", StringComparison.Ordinal))
+                var count = 1;
+                foreach (var batchItem in itemsToConvert)
                 {
-                    var tsResult = _batchConvertItemSplitter.LoadTransportStream(batchItem, _cancellationToken);
-                    foreach (var bi in tsResult)
+                    var countDisplay = count;
+                    ProgressText = string.Format(Se.Language.General.ConvertingXofYDotDoDot, countDisplay, itemsToConvert.Count);
+                    ProgressValue = countDisplay / (double)itemsToConvert.Count;
+
+                    try
                     {
-                        if (_cancellationToken.IsCancellationRequested)
+                        if (batchItem.Format!.StartsWith("Transport Stream", StringComparison.Ordinal))
                         {
-                            break;
+                            var tsResult = _batchConvertItemSplitter.LoadTransportStream(batchItem, _cancellationToken);
+                            foreach (var bi in tsResult)
+                            {
+                                if (_cancellationToken.IsCancellationRequested)
+                                {
+                                    break;
+                                }
+                                await _batchConverter.Convert(bi, _cancellationToken);
+                            }
                         }
-                        await _batchConverter.Convert(bi, _cancellationToken);
+                        else
+                        {
+                            await _batchConverter.Convert(batchItem, _cancellationToken);
+                        }
+                    }
+                    catch (Exception exception)
+                    {
+                        // A failed item (e.g. auto-translate engine not reachable/not configured) must
+                        // not stall the whole batch: mark it as failed and continue with the next file.
+                        if (!_cancellationToken.IsCancellationRequested)
+                        {
+                            SeLogger.Error(exception, "Batch convert failed for: " + batchItem.FileName);
+                            batchItem.Status = string.Format(Se.Language.General.ErrorX, exception.Message);
+                        }
+                    }
+
+                    count++;
+
+                    if (_cancellationToken.IsCancellationRequested)
+                    {
+                        break;
                     }
                 }
-                else
-                {
-                    await _batchConverter.Convert(batchItem, _cancellationToken);
-                }
 
-                count++;
-
+                var end = DateTime.UtcNow.Ticks;
+                var elapsed = new TimeSpan(end - start).TotalMilliseconds;
+                var message = string.Format(Se.Language.General.XFilesConvertedInY, itemsToConvert.Count, elapsed);
                 if (_cancellationToken.IsCancellationRequested)
                 {
-                    ProgressText = string.Empty;
-                    break;
+                    message += Environment.NewLine + Se.Language.General.ConversionCancelledByUser;
                 }
+
+                await ShowStatus(message);
             }
-
-            IsProgressVisible = false;
-            IsConverting = false;
-            AreControlsEnabled = true;
-            ProgressText = string.Empty;
-
-            var end = DateTime.UtcNow.Ticks;
-            var elapsed = new TimeSpan(end - start).TotalMilliseconds;
-            var message = string.Format(Se.Language.General.XFilesConvertedInY, BatchItems.Count, elapsed);
-            if (_cancellationToken.IsCancellationRequested)
+            catch (Exception exception)
             {
-                message += Environment.NewLine + Se.Language.General.ConversionCancelledByUser;
+                SeLogger.Error(exception, "Batch convert failed");
             }
-
-            await ShowStatus(message);
+            finally
+            {
+                IsProgressVisible = false;
+                IsConverting = false;
+                AreControlsEnabled = true;
+                ProgressText = string.Empty;
+            }
         }, _cancellationToken);
     }
 
@@ -1120,6 +1207,42 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
         }
 
         return true;
+    }
+
+    // Pre-run gate for the CrispEmbed OCR engine: when the run will actually OCR image-based
+    // inputs, make sure the engine binaries and the configured backend's model are on disk
+    // (prompting for downloads if not) - the batch converter itself never prompts.
+    private async Task<bool> EnsureCrispEmbedAvailable(BatchConvertConfig config)
+    {
+        if (Window == null)
+        {
+            return true;
+        }
+
+        if (config.IsTargetFormatImageBased)
+        {
+            return true;
+        }
+
+        if (!Se.Settings.Tools.BatchConvert.OcrEngine.Equals(CrispEmbedEngine.StaticName, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!BatchItems.Any(IsImageBasedInput))
+        {
+            return true;
+        }
+
+        var backend = CrispEmbedEngine.GetBackends().FirstOrDefault(b => b.Name == Se.Settings.Ocr.CrispEmbedBackend);
+        var model = backend?.Models.FirstOrDefault(m => m.Name == Se.Settings.Ocr.CrispEmbedModel)
+                    ?? backend?.Models.FirstOrDefault(m => backend.IsModelInstalled(m));
+        if (backend == null || model == null)
+        {
+            return true; // no matching backend in settings - the converter reports the status per item
+        }
+
+        return await CrispEmbedDownloadHelper.EnsureReadyAsync(Window, _windowService, backend, model);
     }
 
     private async Task<bool> EnsureCrispAsrAvailable(BatchConvertConfig config)
@@ -1264,6 +1387,18 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
         {
             FixCommonErrorsProfile = result.SelectedProfile;
         }
+    }
+
+    [RelayCommand]
+    private async Task ShowBeautifyTimeCodesProfile()
+    {
+        if (Window == null)
+        {
+            return;
+        }
+
+        await _windowService.ShowDialogAsync<BeautifyTimeCodes.Profile.BeautifyTimeCodesProfileWindow, BeautifyTimeCodes.Profile.BeautifyTimeCodesProfileViewModel>(Window!,
+            vm => { vm.Initialize(); });
     }
 
     [RelayCommand]
@@ -1463,6 +1598,10 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
         {
             exportHandler = new ExportHandlerBdnXml();
         }
+        else if (targetFormat == BatchConverter.FormatBdnXml8Bit)
+        {
+            exportHandler = new ExportHandlerBdnXml(true);
+        }
         else if (targetFormat == BatchConverter.FormatBluRaySup)
         {
             exportHandler = new ExportHandlerBluRaySup();
@@ -1544,6 +1683,7 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
                     var added = AddFile(fileName);
                     Dispatcher.UIThread.Post(() =>
                     {
+                        _allBatchItems.AddRange(added);
                         AddFilteredItems(added);
                         AddingFilesProgressValue = current;
                         MakeBatchItemsInfo();
@@ -1613,6 +1753,7 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
             new(BatchConverter.FormatBluRaySup, null),
             new(BatchConverter.FormatVobSub, null),
             new(BatchConverter.FormatBdnXml, null),
+            new(BatchConverter.FormatBdnXml8Bit, null),
             new(BatchConverter.FormatDostImage, null),
             new(BatchConverter.FormatFcpImage, null),
             new(BatchConverter.FormatDCinemaInterop, null),
@@ -1650,9 +1791,10 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
         }
     }
 
-    // Parses a file and appends the resulting item(s) to _allBatchItems only (no UI-bound
-    // collection touched), so it is safe to call from a background thread. Returns the items
-    // added for this file; callers add them to the visible BatchItems on the UI thread.
+    // Parses a file and returns the resulting item(s) without touching any shared collection,
+    // so it is safe to call from a background thread. Callers append the returned items to
+    // _allBatchItems and the visible BatchItems on the UI thread - _allBatchItems is read there
+    // (filtering, the info label), so mutating it from the parse thread would race those reads.
     private List<BatchConvertItem> AddFile(string fileName)
     {
         var added = new List<BatchConvertItem>();
@@ -1718,7 +1860,6 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
                             var matroskaBatchItem = new BatchConvertItem(fileName, fileInfo.Length, format, subtitle);
                             matroskaBatchItem.LanguageCode = track.Language;
                             matroskaBatchItem.TrackNumber = track.TrackNumber.ToString(CultureInfo.InvariantCulture);
-                            _allBatchItems.Add(matroskaBatchItem);
                             added.Add(matroskaBatchItem);
                         }
                     }
@@ -1743,7 +1884,6 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
                 mp4Files.Add(name);
                 var mp4BatchItem = new BatchConvertItem(fileName, fileInfo.Length, name, subtitle);
                 mp4BatchItem.LanguageCode = mp4Parser.VttcLanguage;
-                _allBatchItems.Add(mp4BatchItem);
                 added.Add(mp4BatchItem);
             }
 
@@ -1755,8 +1895,7 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
                     mp4Files.Add(name);
                     var mp4BatchItem = new BatchConvertItem(fileName, fileInfo.Length, name, subtitle);
                     mp4BatchItem.LanguageCode = track.Mdia.Mdhd.Iso639ThreeLetterCode ?? track.Mdia.Mdhd.LanguageString;
-                    _allBatchItems.Add(mp4BatchItem);
-                    added.Add(mp4BatchItem);
+                        added.Add(mp4BatchItem);
                 }
             }
 
@@ -1772,7 +1911,6 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
         {
             format = "Transport Stream";
             var tsBatchItem = new BatchConvertItem(fileName, fileInfo.Length, format, subtitle);
-            _allBatchItems.Add(tsBatchItem);
             added.Add(tsBatchItem);
             return added;
         }
@@ -1811,7 +1949,6 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
         }
 
         var batchItem = new BatchConvertItem(fileName, fileInfo.Length, format, subtitle);
-        _allBatchItems.Add(batchItem);
         added.Add(batchItem);
         return added;
     }
@@ -1823,17 +1960,25 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
 
     private void MakeBatchItemsInfo()
     {
-        if (BatchItems.Count == 0)
+        var total = _allBatchItems.Count;
+        var shown = BatchItems.Count;
+
+        if (total == 0)
         {
             BatchItemsInfo = string.Empty;
         }
-        else if (BatchItems.Count == 1)
+        else if (IsFilterActive)
+        {
+            // With a filter on, only the visible files get converted - show that count next to the total.
+            BatchItemsInfo = string.Format(Se.Language.General.XOfYFiles, shown, total);
+        }
+        else if (total == 1)
         {
             BatchItemsInfo = Se.Language.General.OneFile;
         }
         else
         {
-            BatchItemsInfo = string.Format(Se.Language.General.XFiles, BatchItems.Count);
+            BatchItemsInfo = string.Format(Se.Language.General.XFiles, total);
         }
     }
 
@@ -1859,7 +2004,7 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
             return;
         }
 
-        var selectedItems = FileGrid.SelectedItems.Cast<BatchConvertItem>().ToList();
+        var selectedItems = FileGrid.SelectedItems?.Cast<BatchConvertItem>().ToList() ?? new List<BatchConvertItem>();
         if (selectedItems.Count == 0)
         {
             return;
@@ -2166,6 +2311,11 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
                 TrimUnusedStyles = AssaChangeStyleTrimUnusedStyles,
             },
 
+            AssaEmbedFonts = new BatchConvertConfig.AssaEmbedFontsSettings
+            {
+                IsActive = activeFunctions.Contains(BatchConvertFunctionType.AssaEmbedFonts),
+            },
+
             MergeShortLines = new BatchConvertConfig.MergeShortLinesSettings
             {
                 IsActive = activeFunctions.Contains(BatchConvertFunctionType.MergeShortLines),
@@ -2193,6 +2343,14 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
                 IsActive = activeFunctions.Contains(BatchConvertFunctionType.SortBy),
                 SortBy = SelectedSortByOption?.Key ?? "Number",
                 Descending = SortByDescending,
+            },
+
+            BeautifyTimeCodes = new BatchConvertConfig.BeautifyTimeCodesSettings2
+            {
+                IsActive = activeFunctions.Contains(BatchConvertFunctionType.BeautifyTimeCodes),
+                SnapToShotChanges = BeautifyTimeCodesSnapToShotChanges,
+                UseFixedFrameRate = BeautifyTimeCodesUseFixedFrameRate,
+                FixedFrameRate = SelectedBeautifyTimeCodesFrameRate,
             },
 
             AdjustImageColors = new BatchConvertConfig.AdjustImageColorsSettings
@@ -2638,6 +2796,13 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
     {
         UiUtil.RestoreWindowPosition(Window);
         ComboBoxSubtitleFormatChanged();
+
+        // Show the settings of the function the grid starts on. The functions list is built in
+        // the constructor, so the grid selects row 0 before its selection binding exists and no
+        // SelectionChanged is ever raised - the settings panel stayed blank until a function was
+        // clicked. Done here rather than at bind time because FunctionContainer is only replaced
+        // with the real ScrollViewer later in the window's layout.
+        SelectedFunctionChanged();
     }
 
     internal void OnClosing(object? sender, WindowClosingEventArgs e)
@@ -2678,8 +2843,9 @@ public partial class BatchConvertViewModel : ObservableObject, IClosingCleanup
 
     internal void FileGridContextMenuOpening()
     {
-        IsRemoveVisible = FileGrid.SelectedItems.Count > 0;
-        IsOpenContainingFolderVisible = FileGrid.SelectedItems.Count == 1;
+        var selectedCount = FileGrid.SelectedItems?.Count ?? 0;
+        IsRemoveVisible = selectedCount > 0;
+        IsOpenContainingFolderVisible = selectedCount == 1;
     }
 
     internal void FileGridKeyDown(object? sender, KeyEventArgs e)

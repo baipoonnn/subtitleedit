@@ -13,7 +13,6 @@ public class LanguageSettings
     public string DialogStyleDashBothLinesWithoutSpace { get; set; }
 
     public string ContinuationStyle { get; set; }
-    public string ContinuationStyleNone { get; set; }
     public string ContinuationStyleNoneTrailingDots { get; set; }
     public string ContinuationStyleNoneLeadingTrailingDots { get; set; }
     public string ContinuationStyleNoneTrailingEllipsis { get; set; }
@@ -24,7 +23,6 @@ public class LanguageSettings
     public string ContinuationStyleLeadingTrailingEllipsis { get; set; }
     public string ContinuationStyleLeadingTrailingDash { get; set; }
     public string ContinuationStyleLeadingTrailingDashDots { get; set; }
-    public string ContinuationStyleCustom { get; set; }
 
     public string CpsLineLengthStyle { get; set; }
     public string CpsLineLengthStyleCalcAll { get; set; }
@@ -39,31 +37,7 @@ public class LanguageSettings
     public string CpsLineLengthStyleCalcIgnoreArabicDiacritics { get; set; }
     public string CpsLineLengthStyleCalcIgnoreArabicDiacriticsNoSpace { get; set; }
 
-    public string TimeCodeModeHhMmSsMs { get; set; }
-    public string TimeCodeModeHhMmSsFf { get; set; }
-
-    public string SplitBehaviorPrevious { get; set; }
-    public string SplitBehaviorHalf { get; set; }
-    public string SplitBehaviorNext { get; set; }
-
-    public string SubtitleListActionNothing { get; set; }
-    public string SubtitleListActionVideoGoToPositionAndPause { get; set; }
-    public string SubtitleListActionVideoGoToPositionAndPlay { get; set; }
-    public string SubtitleListActionVideoGoToPositionAndPlayCurrentAndPause { get; set; }
-    public string SubtitleListActionEditText { get; set; }
-    public string SubtitleListActionVideoGoToPositionMinus1SecAndPause { get; set; }
-    public string SubtitleListActionVideoGoToPositionMinusHalfSecAndPause { get; set; }
-    public string SubtitleListActionVideoGoToPositionMinus1SecAndPlay { get; set; }
-    public string SubtitleListActionEditTextAndPause { get; set; }
-
-    public string AutoBackupEveryMinute { get; set; }
-    public string AutoBackupEveryXthMinute { get; set; }
-
-    public string Profiles { get; set; }
-    public string AutoBackupDeleteAfterXMonths { get; set; }
     public string SearchSettingsDotDotDot { get; set; }
-    public string SyntaxColoring { get; set; }
-    public string WaveformSpectrogram { get; set; }
     public string Network { get; set; }
     public string FileTypeAssociations { get; set; }
     public string TextBoxColorTags { get; set; }
@@ -96,8 +70,6 @@ public class LanguageSettings
     public string DarkThemeForegroundColor { get; set; }
     public string DarkThemeBackgroundColor { get; set; }
     public string ShowGridLines { get; set; }
-    public string ResetSettings { get; set; }
-    public string ResetSettingsDetail { get; set; }
     public string ShowHorizontalLineAboveToolbar { get; set; }
     public string BookmarkColor { get; set; }
     public string SingleLineMaxLength { get; set; }
@@ -115,6 +87,8 @@ public class LanguageSettings
     public string AutoBreakDashEarly { get; set; }
     public string AutoBreakUsePixelWidth { get; set; }
     public string AutoBreakPreferBottomHeavy { get; set; }
+    public string AutoBreakPreferBottomPercent { get; set; }
+    public string UseDoNotBreakAfterList { get; set; }
     public string NewEmptyDefaultMs { get; set; }
     public string TimeCodeUpDownStepMs { get; set; }
     public string PromptBeforeDelete { get; set; }
@@ -141,23 +115,11 @@ public class LanguageSettings
     public string ColorGapTooShort { get; set; }
     public string ErrorBackgroundColor { get; set; }
     public string WaveformDrawGridLines { get; set; }
-    public string WaveformCenterVideoPosition { get; set; }
     public string WaveformCenterVideoPositionAlsoWhenPaused { get; set; }
     public string WaveformShowToolbar { get; set; }
     public string WaveformShowToolbarEdit { get; set; }
     public string WaveformShowToolbarEditLabel { get; set; }
     public string WaveformSpectrogramCombinedWaveformHeight { get; set; }
-    public string ShowWaveformToolbarPlay { get; set; }
-    public string ShowWaveformToolbarRepeat { get; set; }
-    public string ShowWaveformToolbarRemoveBlankLines { get; set; }
-    public string ShowWaveformToolbarNew { get; set; }
-    public string ShowWaveformToolbarSetStart { get; set; }
-    public string ShowWaveformToolbarSetEnd { get; set; }
-    public string ShowWaveformToolbarStartAndOffsetTheRest { get; set; }
-    public string ShowWaveformToolbarHorizontalZoom { get; set; }
-    public string ShowWaveformToolbarVerticalZoom { get; set; }
-    public string ShowWaveformToolbarVideoPositionSlider { get; set; }
-    public string ShowWaveformToolbarPlaybackSpeed { get; set; }
     public string WaveformFocusTextboxAfterInsertNew { get; set; }
     public string WaveformInvertMouseWheel { get; set; }
     public string WaveformMouseWheelSetsVideoPosition { get; set; }
@@ -185,12 +147,16 @@ public class LanguageSettings
     public string ShowToolbarSaveAs { get; set; }
     public string ShowToolbarFind { get; set; }
     public string ShowToolbarReplace { get; set; }
+    public string ShowToolbarMultipleReplace { get; set; }
     public string ShowToolbarSpellCheck { get; set; }
     public string ShowToolbarFixCommonErrors { get; set; }
     public string ShowToolbarRemoveTextForHi { get; set; }
     public string ShowToolbarVisualSync { get; set; }
+    public string ShowToolbarPointSync { get; set; }
     public string ShowToolbarBeautifyTimeCodes { get; set; }
     public string ShowToolbarBurnIn { get; set; }
+    public string ShowToolbarAutoTranslate { get; set; }
+    public string ShowToolbarSpeechToText { get; set; }
     public string ShowToolbarSettings { get; set; }
     public string ShowToolbarLayout { get; set; }
     public string ShowToolbarHelp { get; set; }
@@ -200,12 +166,18 @@ public class LanguageSettings
 
     // Network
     public string ProxyAddress { get; set; }
-    public string Username { get; set; }
     public string Password { get; set; }
     public string ProxyDomain { get; set; }
     public string ProxyUseSystemCredentials { get; set; }
     public string ProxyBypassList { get; set; }
     public string ProxyBypassListHint { get; set; }
+
+    // Updates
+    public string Updates { get; set; }
+    public string CheckForUpdatesOnStartup { get; set; }
+    public string CheckForUpdatesChannel { get; set; }
+    public string CheckForUpdatesChannelStable { get; set; }
+    public string CheckForUpdatesChannelStableAndBeta { get; set; }
 
     public string DefaultFormat { get; set; }
     public string DefaultSaveAsFormat { get; set; }
@@ -223,6 +195,8 @@ public class LanguageSettings
     public string SpellCheckEnglishTreatInApostropheAsIng { get; set; }
     public string GoToLineNumberSetsVideoPosition { get; set; }
     public string AdjustAllTimesRememberLineSelectionChoice { get; set; }
+    public string MergeKeepEndTime { get; set; }
+    public string MergeKeepEndTimeOnlyAssa { get; set; }
     public string FilesAndLogs { get; set; }
     public string ShowErrorLogFile { get; set; }
     public string ShowToolsLogFile { get; set; }
@@ -261,7 +235,6 @@ public class LanguageSettings
     public string ResetRules { get; set; }
     public string UseFrameMode { get; set; }
     public string TextBoxLimitNewLines { get; set; }
-    public string MpvVideoOutput { get; set; }
     public string MpvOpenGl { get; set; }
     public string MpvSoftwareRendering { get; set; }
     public string MpvWidRendering { get; set; }
@@ -270,10 +243,7 @@ public class LanguageSettings
     public string WaveformGenerateSpectrogram { get; set; }
     public string WaveformAutoGenerate { get; set; }
     public string WaveformSpectrogramMode { get; set; }
-    public string WaveformCenterOnSingleClick { get; set; }
-    public string WaveformSingleClickSelectsSubtitle { get; set; }
     public string WaveformRightClickSelectsSubtitle { get; set; }
-    public string WaveformPauseOnSingleClick { get; set; }
     public string WaveformDrawStyle { get; set; }
     public string WaveformExtractAudioFormat { get; set; }
     public string WaveformExtractAudioSampleRate { get; set; }
@@ -299,6 +269,10 @@ public class LanguageSettings
     public string GridGoToSubtitleAndPlay { get; set; }
     public string GridGoToSubtitleAndPauseAndFocusTextBox { get; set; }
     public string GridGoToSubtitleAndPlayAndFocusTextBox { get; set; }
+    public string SubtitleListActionVideoGoToPositionAndPlayCurrentAndPause { get; set; }
+    public string SubtitleListActionVideoGoToPositionMinus1SecAndPause { get; set; }
+    public string SubtitleListActionVideoGoToPositionMinusHalfSecAndPause { get; set; }
+    public string SubtitleListActionVideoGoToPositionMinus1SecAndPlay { get; set; }
     public string SubtitleGridFormattingNone { get; set; }
     public string SubtitleGridFormattingShowFormatting { get; set; }
     public string SubtitleGridFormattingShowTags { get; set; }
@@ -311,8 +285,6 @@ public class LanguageSettings
     public string SaveAsBehaviorUseVideoFileName { get; set; }
     public string SaveAsBehaviorUseSubtitleFileName { get; set; }
     public string SaveAsAppendLanguageCodeTwoLetter { get; set; }
-    public string SaveAsAppendLanguageCodeThreeLetter { get; set; }
-    public string SaveAsAppendLanguageCodeThreeLetterBibliographic { get; set; }
     public string SaveAsAppendLanguageCodeLanguageName { get; set; }
     public string SplitOddLineActionWeightTop { get; set; }
     public string SplitOddLineActionWeightBottom { get; set; }
@@ -328,8 +300,6 @@ public class LanguageSettings
     public string UseFocusedButtonBackgroundColor { get; set; }
     public string FocusedButtonBackgroundColor { get; set; }
     public string ForceCrLfOnSave { get; set; }
-    public string ShowWaveformToolbarPlayNext { get; set; }
-    public string ShowWaveformToolbarPlaySelection { get; set; }
     public string TextBoxButtonShowAutoBreak { get; set; }
     public string TextBoxButtonShowUnbreak { get; set; }
     public string TextBoxButtonShowItalic { get; set; }
@@ -362,7 +332,6 @@ public class LanguageSettings
         DialogStyleDashSecondLineWithoutSpace = "Dash second line without space";
 
         ContinuationStyle = "Continuation style";
-        ContinuationStyleNone = "None";
         ContinuationStyleNoneTrailingDots = "None, dots for pauses (trailing only)";
         ContinuationStyleNoneLeadingTrailingDots = "None, dots for pauses";
         ContinuationStyleNoneTrailingEllipsis = "None, ellipsis for pauses (trailing only)";
@@ -373,7 +342,6 @@ public class LanguageSettings
         ContinuationStyleLeadingTrailingEllipsis = "Ellipsis";
         ContinuationStyleLeadingTrailingDash = "Dash";
         ContinuationStyleLeadingTrailingDashDots = "Dash, but dots for pauses";
-        ContinuationStyleCustom = "Custom";
 
         CpsLineLengthStyle = "Cps/line-length";
         CpsLineLengthStyleCalcAll = "Count all characters";
@@ -388,31 +356,7 @@ public class LanguageSettings
         CpsLineLengthStyleCalcIgnoreArabicDiacritics = "Ignore Arabic diacritics";
         CpsLineLengthStyleCalcIgnoreArabicDiacriticsNoSpace = "Ignore Arabic diacritics, no space";
 
-        TimeCodeModeHhMmSsMs = "HH:MM:SS:MS";
-        TimeCodeModeHhMmSsFf = "HH:MM:SS:FF";
-
-        SplitBehaviorPrevious = "Add gap to the left of split point (focus right)";
-        SplitBehaviorHalf = "Add gap in the center of split point (focus left)";
-        SplitBehaviorNext = "Add gap to the right of split point (focus left)";
-
-        SubtitleListActionNothing = "Nothing";
-        SubtitleListActionVideoGoToPositionAndPause = "Go to video position and pause";
-        SubtitleListActionVideoGoToPositionAndPlay = "Go to video position and play";
-        SubtitleListActionVideoGoToPositionAndPlayCurrentAndPause = "Go to video position, play current, and pause";
-        SubtitleListActionEditText = "Go to edit text box";
-        SubtitleListActionVideoGoToPositionMinus1SecAndPause = "Go to video position - 1 s and pause";
-        SubtitleListActionVideoGoToPositionMinusHalfSecAndPause = "Go to video position - 0.5 s and pause";
-        SubtitleListActionVideoGoToPositionMinus1SecAndPlay = "Go to video position - 1 s and play";
-        SubtitleListActionEditTextAndPause = "Go to edit text box, and pause at video position";
-
-        AutoBackupEveryMinute = "Every minute";
-        AutoBackupEveryXthMinute = "Every {0}th minute";
-        AutoBackupDeleteAfterXMonths = "Delete auto-backups after {0} months";
-
-        Profiles = "Profiles";
         SearchSettingsDotDotDot = "Search for settings...";
-        SyntaxColoring = "Syntax coloring";
-        WaveformSpectrogram = "Waveform/spectrogram";
         Network = "Network";
         FileTypeAssociations = "File type associations";
         TextBoxCenterText = "Center text in subtitle text box";
@@ -445,8 +389,6 @@ public class LanguageSettings
         DarkThemeForegroundColor = "Dark theme foreground color";
         DarkThemeBackgroundColor = "Dark theme background color";
         ShowGridLines = "Show grid lines";
-        ResetSettings = "Reset settings?";
-        ResetSettingsDetail = "This will reset all settings to their default values.\n\nContinue?";
         ShowHorizontalLineAboveToolbar = "Show horizontal line above toolbar";
         BookmarkColor = "Bookmark color";
         SingleLineMaxLength = "Single line max length";
@@ -464,6 +406,8 @@ public class LanguageSettings
         AutoBreakDashEarly = "Auto-break early for dash (dialogs)";
         AutoBreakUsePixelWidth = "Auto-break by pixel width";
         AutoBreakPreferBottomHeavy = "Auto-break prefer bottom heavy";
+        AutoBreakPreferBottomPercent = "Auto-break bottom heavy percentage";
+        UseDoNotBreakAfterList = "Use do-not-break-after list";
         NewEmptyDefaultMs = "Default new subtitle duration (ms)";
         TimeCodeUpDownStepMs = "Time up/down increment (ms)";
         PromptBeforeDelete = "Prompt before delete";
@@ -491,23 +435,11 @@ public class LanguageSettings
         ErrorBackgroundColor = "Error background color";
         WaveformDrawGridLines = "Draw grid lines";
         WaveformFocusOnMouseOver = "Focus on mouse over";
-        WaveformCenterVideoPosition = "Center video position";
         WaveformCenterVideoPositionAlsoWhenPaused = "Center video position also while paused";
         WaveformShowToolbar = "Show toolbar";
         WaveformShowToolbarEdit = "Edit toolbar...";
         WaveformShowToolbarEditLabel = "Toolbar items";
         WaveformSpectrogramCombinedWaveformHeight = "Waveform/spectrogram combined, waveform height %";
-        ShowWaveformToolbarPlay = "Toolbar: show play button";
-        ShowWaveformToolbarRepeat = "Toolbar: show repeat button";
-        ShowWaveformToolbarRemoveBlankLines = "Toolbar: show remove blank lines button";
-        ShowWaveformToolbarNew = "Toolbar: show new subtitle button";
-        ShowWaveformToolbarSetStart = "Toolbar: show set start button";
-        ShowWaveformToolbarSetEnd = "Toolbar: show set end button";
-        ShowWaveformToolbarStartAndOffsetTheRest = "Toolbar: show set start and offset the rest button";
-        ShowWaveformToolbarHorizontalZoom = "Toolbar: show horizontal zoom slider";
-        ShowWaveformToolbarVerticalZoom = "Toolbar: show vertical zoom slider";
-        ShowWaveformToolbarVideoPositionSlider = "Toolbar: show video position slider";
-        ShowWaveformToolbarPlaybackSpeed = "Toolbar: show playback speed";
         WaveformFocusTextboxAfterInsertNew = "Focus text box after insert";
         WaveformInvertMouseWheel = "Invert mouse-wheel";
         WaveformMouseWheelSetsVideoPosition = "Mouse-wheel sets video position";
@@ -535,12 +467,16 @@ public class LanguageSettings
         ShowToolbarSaveAs = "Show save as icon";
         ShowToolbarFind = "Show find icon";
         ShowToolbarReplace = "Show replace icon";
+        ShowToolbarMultipleReplace = "Show multiple replace icon";
         ShowToolbarSpellCheck = "Show spell check icon";
         ShowToolbarFixCommonErrors = "Show fix common errors icon";
         ShowToolbarRemoveTextForHi = "Show remove text for hearing impaired icon";
         ShowToolbarVisualSync = "Show visual sync icon";
+        ShowToolbarPointSync = "Show point sync icon";
         ShowToolbarBeautifyTimeCodes = "Show beautify time codes icon";
         ShowToolbarBurnIn = "Show burn-in icon";
+        ShowToolbarAutoTranslate = "Show auto-translate icon";
+        ShowToolbarSpeechToText = "Show speech to text icon";
         ShowToolbarSettings = "Show settings icon";
         ShowToolbarLayout = "Show layout icon";
         ShowToolbarHelp = "Show help icon";
@@ -550,12 +486,18 @@ public class LanguageSettings
 
         // Network
         ProxyAddress = "Proxy address";
-        Username = "Username";
         Password = "Password";
         ProxyDomain = "Domain";
         ProxyUseSystemCredentials = "Use system credentials";
         ProxyBypassList = "Bypass proxy for";
         ProxyBypassListHint = "Semicolon separated host names that connect directly, e.g. \"internal.company.com;example.org\"";
+
+        // Updates
+        Updates = "Updates";
+        CheckForUpdatesOnStartup = "Check for updates when the app starts";
+        CheckForUpdatesChannel = "Notify about";
+        CheckForUpdatesChannelStable = "Stable versions only";
+        CheckForUpdatesChannelStableAndBeta = "Stable and beta versions";
 
         ShowStopButton = "Show stop button";
         ShowFullscreenButton = "Show full-screen button";
@@ -567,6 +509,8 @@ public class LanguageSettings
         SpellCheckEnglishTreatInApostropheAsIng = "Spell check: Treat words ending in 'in'' as 'ing' (English only)";
         GoToLineNumberSetsVideoPosition = "Go-to-line-number also sets video position";
         AdjustAllTimesRememberLineSelectionChoice = "Adjust all times, remember line selection choice";
+        MergeKeepEndTime = "Merge lines: keep end time (allow overlap with next subtitle)";
+        MergeKeepEndTimeOnlyAssa = "Merge lines: keep end time only for \"Advanced Sub Station Alpha\"";
         DefaultFormat = "Default format";
         DefaultSaveAsFormat = "Default \"Save as\" format";
         FavoriteSubtitleFormats = "Favorite subtitle formats";
@@ -609,7 +553,6 @@ public class LanguageSettings
         ResetRules = "Reset rules";
         UseFrameMode = "Use frame mode (hh.mm.ss.ff)";
         TextBoxLimitNewLines = "Limit number of lines in subtitle text box";
-        MpvVideoOutput = "Video output  (mpv)";
         MpvOpenGl = "libmpv - OpenGL";
         MpvWidRendering = "libmpv - Native Window ID rendering";
         MpvSoftwareRendering = "libmpv - Software rendering (slow)";
@@ -619,10 +562,7 @@ public class LanguageSettings
         WaveformGenerateSpectrogram = "Generate spectrogram";
         WaveformAutoGenerate = "Auto-generate waveform when opening a video";
         WaveformSpectrogramMode = "Spectrogram mode";
-        WaveformCenterOnSingleClick = "Center on single click";
-        WaveformSingleClickSelectsSubtitle = "Select subtitle on single click";
         WaveformRightClickSelectsSubtitle = "Select subtitle on right click";
-        WaveformPauseOnSingleClick = "Pause on single click";
         WaveformDrawStyle = "Waveform draw style";
         WaveformExtractAudioFormat = "Extract audio format";
         WaveformExtractAudioSampleRate = "Extract audio sample rate";
@@ -647,6 +587,10 @@ public class LanguageSettings
         GridGoToSubtitleAndPlay = "Go to subtitle and play";
         GridGoToSubtitleAndPauseAndFocusTextBox = "Go to subtitle and pause and focus text box";
         GridGoToSubtitleAndPlayAndFocusTextBox = "Go to subtitle and play and focus text box";
+        SubtitleListActionVideoGoToPositionAndPlayCurrentAndPause = "Go to video position, play current, and pause";
+        SubtitleListActionVideoGoToPositionMinus1SecAndPause = "Go to video position - 1 s and pause";
+        SubtitleListActionVideoGoToPositionMinusHalfSecAndPause = "Go to video position - 0.5 s and pause";
+        SubtitleListActionVideoGoToPositionMinus1SecAndPlay = "Go to video position - 1 s and play";
         SubtitleGridFormattingNone = "No formatting";
         SubtitleGridFormattingShowFormatting = "Show formatting";
         SubtitleGridFormattingShowTags = "Show tags";
@@ -659,8 +603,6 @@ public class LanguageSettings
         SaveAsBehaviorUseVideoFileName = "Use video file name";
         SaveAsBehaviorUseSubtitleFileName = "Use subtitle file name";
         SaveAsAppendLanguageCodeTwoLetter = "Two-letter";
-        SaveAsAppendLanguageCodeThreeLetter = "Three letter (ISO 639-2/T)";
-        SaveAsAppendLanguageCodeThreeLetterBibliographic = "Three letter (ISO 639-2/B)";
         SaveAsAppendLanguageCodeLanguageName = "Language name";
         SplitOddLineActionWeightTop = "Weight top";
         SplitOddLineActionWeightBottom = "Weight bottom";
@@ -676,8 +618,6 @@ public class LanguageSettings
         UseFocusedButtonBackgroundColor = "Use focused button background color";
         FocusedButtonBackgroundColor = "Focused button background color";
         ForceCrLfOnSave = "Force CR+LF on save (text subtitle files)";
-        ShowWaveformToolbarPlayNext = "Toolbar: show play next button";
-        ShowWaveformToolbarPlaySelection = "Toolbar: show play selection button";
         TextBoxButtonShowAutoBreak = "Text box: show auto-break button";
         TextBoxButtonShowUnbreak = "Text box: show unbreak button";
         TextBoxButtonShowItalic = "Text box: show italic button";
@@ -716,8 +656,8 @@ public class LanguageSettings
             Core.Enums.ContinuationStyle.LeadingTrailingEllipsis => ContinuationStyleLeadingTrailingEllipsis,
             Core.Enums.ContinuationStyle.LeadingTrailingDash => ContinuationStyleLeadingTrailingDash,
             Core.Enums.ContinuationStyle.LeadingTrailingDashDots => ContinuationStyleLeadingTrailingDashDots,
-            Core.Enums.ContinuationStyle.Custom => ContinuationStyleCustom,
-            _ => ContinuationStyleNone,
+            Core.Enums.ContinuationStyle.Custom => Se.Language.General.Custom,
+            _ => Se.Language.General.None,
         };
     }
 }

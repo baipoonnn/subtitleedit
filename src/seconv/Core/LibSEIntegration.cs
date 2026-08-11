@@ -708,7 +708,17 @@ internal static class LibSEIntegration
                 break;
 
             case "beautifytimecodes":
-                // TODO: Beautify time codes
+                {
+                    // No video in headless mode, so no shot changes/exact time codes -
+                    // align cues to frames (honors --fps) and apply the profile's
+                    // gap/duration rules, like the UI's batch convert without a video.
+                    var beautifier = new Nikse.SubtitleEdit.Core.Forms.TimeCodesBeautifier(
+                        subtitle,
+                        Configuration.Settings.General.CurrentFrameRate,
+                        new List<double>(),
+                        new List<double>());
+                    beautifier.Beautify();
+                }
                 break;
 
             case "convertcolorstodialog":
@@ -1149,6 +1159,7 @@ internal static class LibSEIntegration
             "bluraysup" or "blurayup" or "sup" => "Blu-ray sup",
             "vobsub" => "VobSub",
             "bdnxml" or "bdn-xml" => "BDN-XML",
+            "bdnxml8bit" or "bdn-xml8bit" or "bdnxml8-bit" or "bdn-xml8-bit" => "BDN-XML 8-bit",
             "dost" or "dostimage" => "DOST/image",
             "fcp" or "fcpimage" => "FCP/image",
             "dcinemainterop" or "dcinema-interop" => "D-Cinema interop/png",

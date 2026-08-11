@@ -22,6 +22,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Timers;
+using Nikse.SubtitleEdit.UiLogic.Media;
 
 namespace Nikse.SubtitleEdit.Features.Video.EmbeddedSubtitlesEdit;
 
@@ -38,7 +39,7 @@ public partial class EmbeddedSubtitlesEditViewModel : ObservableObject
 
     public Window? Window { get; set; }
     public bool OkPressed { get; private set; }
-    public DataGrid TracksGrid { get; internal set; }
+    public TableView TracksGrid { get; internal set; }
 
     private Subtitle _subtitle = new();
     private readonly StringBuilder _log;
@@ -69,7 +70,7 @@ public partial class EmbeddedSubtitlesEditViewModel : ObservableObject
         Tracks = new ObservableCollection<EmbeddedTrack>();
         VideoFileName = string.Empty;
         ProgressText = string.Empty;
-        TracksGrid = new DataGrid();
+        TracksGrid = new TableView();
 
         _log = new StringBuilder();
         _timerGenerate = new();
@@ -543,7 +544,7 @@ public partial class EmbeddedSubtitlesEditViewModel : ObservableObject
         }
 
         var outputVideoFileName = MakeOutputFileName(VideoFileName);
-        outputVideoFileName = await _fileHelper.PickSaveFile(Window!, Path.GetExtension(VideoFileName) ?? ".mkv", outputVideoFileName, Se.Language.Video.SaveVideoAsTitle);
+        outputVideoFileName = await _fileHelper.PickSaveFile(Window!, Path.GetExtension(VideoFileName) ?? ".mkv", outputVideoFileName, Se.Language.General.SaveVideoAsVideoTitle);
         if (string.IsNullOrEmpty(outputVideoFileName))
         {
             return;
@@ -717,7 +718,10 @@ public partial class EmbeddedSubtitlesEditViewModel : ObservableObject
         Dispatcher.UIThread.Post(() =>
         {
             TracksGrid.SelectedIndex = index;
-            TracksGrid.ScrollIntoView(TracksGrid.SelectedItem, null);
+            if (TracksGrid.SelectedItem is { } selectedItem)
+            {
+                TracksGrid.ScrollIntoView(selectedItem);
+            }
         }, DispatcherPriority.Background);
     }
      

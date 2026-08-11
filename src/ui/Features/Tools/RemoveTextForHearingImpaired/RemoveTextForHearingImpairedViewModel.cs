@@ -72,7 +72,6 @@ public partial class RemoveTextForHearingImpairedViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsSettingsMode))]
     private bool _isApplyVisible;
-    [ObservableProperty] private string _linesFoundText;
 
     public Window? Window { get; set; }
 
@@ -97,7 +96,6 @@ public partial class RemoveTextForHearingImpairedViewModel : ObservableObject
         Languages = new ObservableCollection<LanguageItem>(LanguageItem.GetAll());
         Fixes = new ObservableCollection<RemoveItem>();
         FixText = string.Empty;
-        LinesFoundText = string.Format(Se.Language.Tools.RemoveTextForHearingImpaired.LinesFoundX, 0);
         _timer = new Timer(500);
         _timer.Elapsed += TimerElapsed;
         _subtitle = new Subtitle();
@@ -286,7 +284,10 @@ public partial class RemoveTextForHearingImpairedViewModel : ObservableObject
             var p = _subtitle.Paragraphs[index];
             _removeTextForHiLib.WarningIndex = index - 1;
             var newText = _removeTextForHiLib.RemoveTextFromHearImpaired(p.Text, _subtitle, index, twoLetterIsoLanguageName);
-            if (p.Text.RemoveChar(' ') != newText.RemoveChar(' '))
+            // Trim before comparing: RemoveTextFromHearImpaired rebuilds the text and drops
+            // e.g. a trailing empty line, which would otherwise list a "fix" whose before and
+            // after render identically (#13389).
+            if (p.Text.Trim().RemoveChar(' ') != newText.Trim().RemoveChar(' '))
             {
                 var apply = true;
                 var oldItem = Fixes.FirstOrDefault(f => f.Index == index);
@@ -297,8 +298,6 @@ public partial class RemoveTextForHearingImpairedViewModel : ObservableObject
                 newFixes.Add(new RemoveItem(apply, index, p.Text, newText, p));
             }
         }
-
-        LinesFoundText = string.Format(Se.Language.Tools.RemoveTextForHearingImpaired.LinesFoundX, newFixes.Count);
 
         if (newFixes.Count == Fixes.Count)
         {
@@ -353,11 +352,6 @@ public partial class RemoveTextForHearingImpairedViewModel : ObservableObject
             CustomStart = CustomStart,
             CustomEnd = CustomEnd,
         };
-
-        foreach (var item in TextContains.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries))
-        {
-            settings.RemoveIfTextContains.Add(item.Trim());
-        }
 
         return settings;
     }

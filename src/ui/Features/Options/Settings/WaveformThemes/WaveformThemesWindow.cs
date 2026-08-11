@@ -124,7 +124,7 @@ public class WaveformThemesWindow : Window
 
         Content = mainGrid;
 
-        Activated += delegate { buttonOk.Focus(); };
+        Activated += delegate { themeComboBox.Focus(); }; // initial focus on an input, not an action button - a focused button clicks on bare Space
         KeyDown += (_, e) =>
         {
             if (e.Key == Key.Escape)
@@ -172,7 +172,7 @@ public class WaveformThemesWindow : Window
             var pickerVm = new ColorPickerViewModel();
             pickerVm.Initialize(currentColor);
             var pickerWindow = new ColorPickerWindow(pickerVm);
-            await pickerWindow.ShowDialog(window);
+            await WindowService.ShowModalAsync(window, pickerWindow);
 
             if (pickerVm.OkPressed)
             {
