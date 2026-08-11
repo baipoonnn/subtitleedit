@@ -17,7 +17,7 @@ $ErrorActionPreference = "Stop"
 # 1. Extract version string from Se.cs
 #    Matches: public static string Version { get; set; } = "v5.0.0-beta4";
 # ---------------------------------------------------------------------------
-$seContent = Get-Content $SeCsPath -Raw
+$seContent = Get-Content $SeCsPath -Raw -Encoding UTF8
 $match = [regex]::Match($seContent, 'public\s+static\s+string\s+Version\s*\{[^}]+\}\s*=\s*"v([^"]+)"')
 if (-not $match.Success) {
     Write-Error "Could not find version line in $SeCsPath"
@@ -57,7 +57,7 @@ Write-Host "app_ver_full   : $appVerFull"
 # 3. Replace the three version constants in the .iss file.
 #    app_ver_display is a computed ISPP expression and never needs updating.
 # ---------------------------------------------------------------------------
-$iss = Get-Content $IssPath -Raw
+$iss = Get-Content $IssPath -Raw -Encoding UTF8
 
 $iss = $iss -replace '(?m)^#define app_ver\s+.*$',        "#define app_ver         `"$appVer`""
 $iss = $iss -replace '(?m)^#define app_ver_suffix\s+.*$', "#define app_ver_suffix  `"$appVerSuffix`""
