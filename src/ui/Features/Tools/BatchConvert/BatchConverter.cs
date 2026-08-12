@@ -1,4 +1,4 @@
-﻿using Avalonia.Skia;
+using Avalonia.Skia;
 using Nikse.SubtitleEdit.UiLogic.Export;
 using Nikse.SubtitleEdit.Core.BluRaySup;
 using Nikse.SubtitleEdit.Features.Assa.ResolutionResampler;
@@ -1272,7 +1272,7 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
     /// </returns>
     private async Task<bool> RunOllamaOcr(IOcrSubtitle imageSubtitles, BatchConvertItem item, CancellationToken cancellationToken)
     {
-        var ollamaOcr = new OllamaOcr();
+        using var ollamaOcr = new OllamaOcr();
         var url = Se.Settings.Ocr.OllamaUrl;
         var model = Se.Settings.Ocr.OllamaModel;
         var language = Se.Settings.Ocr.OllamaLanguage;
@@ -1333,7 +1333,7 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
             return false;
         }
 
-        var engine = new LlamaCppOcr(Se.Settings.Ocr.LlamaCppOcrTimeoutMinutes);
+        using var engine = new LlamaCppOcr(Se.Settings.Ocr.LlamaCppOcrTimeoutMinutes);
         var url = LlamaCppServerManager.ApiUrl;
         var modelName = Path.GetFileNameWithoutExtension(model.FileName);
         var language = Se.Settings.Ocr.OllamaLanguage;
@@ -1826,6 +1826,11 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
         }
 
         var replaceExpressions = BuildReplaceExpressions();
+
+        // Patterns the match timeout stopped. Retried on the next file - a pattern can be
+        // pathological on one line and harmless on the rest of the batch.
+        var timedOut = new HashSet<string>();
+
         for (var i = 0; i < subtitle.Paragraphs.Count; i++)
         {
             var p = subtitle.Paragraphs[i];
@@ -1845,12 +1850,28 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
                 }
                 else if (item.SearchType == ReplaceExpression.SearchRegEx)
                 {
-                    var r = _compiledRegExList[item.FindWhat];
-                    if (r.IsMatch(newText))
+                    if (timedOut.Contains(item.FindWhat) ||
+                        !_compiledRegExList.TryGetValue(item.FindWhat, out var r))
                     {
-                        hit = true;
-                        ruleInfo = string.IsNullOrEmpty(ruleInfo) ? item.RuleInfo : $"{ruleInfo} + {item.RuleInfo}";
-                        newText = RegexUtils.ReplaceNewLineSafe(r, newText, item.ReplaceWith);
+                        continue; // pattern did not compile, or already gave up - both logged
+                    }
+
+                    try
+                    {
+                        if (r.IsMatch(newText))
+                        {
+                            var replaced = RegexUtils.ReplaceNewLineSafe(r, newText, item.ReplaceWith);
+                            hit = true;
+                            ruleInfo = string.IsNullOrEmpty(ruleInfo) ? item.RuleInfo : $"{ruleInfo} + {item.RuleInfo}";
+                            newText = replaced;
+                        }
+                    }
+                    catch (RegexMatchTimeoutException)
+                    {
+                        // Leave the line alone rather than the whole batch: the timeout already
+                        // cost five seconds here and every remaining line would cost the same.
+                        SeLogger.Error($"Batch convert, multiple replace: {DescribeRule(item)} timed out on line {i + 1} - skipping it for the rest of this file");
+                        timedOut.Add(item.FindWhat);
                     }
                 }
                 else
@@ -1891,16 +1912,46 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
                 var replaceWith = isRegex ? RegexUtils.FixNewLine(rule.ReplaceWith) : rule.ReplaceWith;
 
                 var mpi = new ReplaceExpression(findWhat, replaceWith, rule.Type.ToString(), category.Name + ": " + rule.Description);
-                replaceExpressions.Add(mpi);
                 if (mpi.SearchType == ReplaceExpression.SearchRegEx && !_compiledRegExList.ContainsKey(findWhat))
                 {
-                    _compiledRegExList.Add(findWhat,
-                        new Regex(findWhat, RegexOptions.Compiled | RegexOptions.Multiline));
+                    try
+                    {
+                        // With the match timeout, so a pattern with catastrophic backtracking cannot
+                        // stall the batch - the whole point of running it unattended.
+                        _compiledRegExList.Add(findWhat,
+                            new Regex(findWhat, RegexOptions.Compiled | RegexOptions.Multiline, RegexUtils.UserPatternMatchTimeout));
+                    }
+                    catch (ArgumentException exception)
+                    {
+                        // One saved rule that will not compile used to throw out of here and fail
+                        // every file in the batch with an opaque "parsing ..." status, naming
+                        // neither the rule nor the category. Skip the rule and carry on, the way
+                        // the Multiple replace window does (#13534).
+                        SeLogger.Error(exception, $"Batch convert, multiple replace: skipping rule with invalid regular expression '{findWhat}' in category '{category.Name}'");
+                        continue;
+                    }
                 }
+
+                replaceExpressions.Add(mpi);
             }
         }
 
         return replaceExpressions;
+    }
+
+    /// <summary>
+    /// A rule named so the log pinpoints it. RuleInfo is "category: description" and a description
+    /// is optional - and not unique when it is there - so the pattern is what actually identifies
+    /// the rule in the user's list.
+    /// </summary>
+    internal static string DescribeRule(ReplaceExpression item)
+    {
+        var info = (item.RuleInfo ?? string.Empty).TrimEnd();
+        info = info.TrimEnd(':').TrimEnd();
+
+        return string.IsNullOrEmpty(info)
+            ? $"rule '{item.FindWhat}'"
+            : $"rule '{item.FindWhat}' ({info})";
     }
 
     private Subtitle RemoveFormatting(Subtitle subtitle)
@@ -1910,63 +1961,19 @@ public class BatchConverter : IBatchConverter, IFixCallbacks
             return subtitle;
         }
 
+        var s = _config.RemoveFormatting;
+        var types = RemoveFormattingType.None;
+        if (s.RemoveAll) { types |= RemoveFormattingType.All; }
+        if (s.RemoveItalic) { types |= RemoveFormattingType.Italic; }
+        if (s.RemoveBold) { types |= RemoveFormattingType.Bold; }
+        if (s.RemoveUnderline) { types |= RemoveFormattingType.Underline; }
+        if (s.RemoveColor) { types |= RemoveFormattingType.Color; }
+        if (s.RemoveFontName) { types |= RemoveFormattingType.FontName; }
+        if (s.RemoveAlignment) { types |= RemoveFormattingType.Alignment; }
+
         foreach (var p in subtitle.Paragraphs)
         {
-            if (_config.RemoveFormatting.RemoveAll)
-            {
-                p.Text = HtmlUtil.RemoveHtmlTags(p.Text, true);
-            }
-            else
-            {
-                if (_config.RemoveFormatting.RemoveItalic)
-                {
-                    p.Text = HtmlUtil.RemoveOpenCloseTags(p.Text, HtmlUtil.TagItalic);
-                    p.Text = p.Text
-                        .Replace("{\\i}", string.Empty)
-                        .Replace("{\\i0}", string.Empty)
-                        .Replace("{\\i1}", string.Empty);
-                }
-
-                if (_config.RemoveFormatting.RemoveBold)
-                {
-                    p.Text = HtmlUtil.RemoveOpenCloseTags(p.Text, HtmlUtil.TagBold);
-                    p.Text = p.Text
-                        .Replace("{\\b}", string.Empty)
-                        .Replace("{\\b0}", string.Empty)
-                        .Replace("{\\b1}", string.Empty);
-                }
-
-                if (_config.RemoveFormatting.RemoveUnderline)
-                {
-                    p.Text = HtmlUtil.RemoveOpenCloseTags(p.Text, HtmlUtil.TagUnderline);
-                    p.Text = p.Text
-                        .Replace("{\\u}", string.Empty)
-                        .Replace("{\\u0}", string.Empty)
-                        .Replace("{\\u1}", string.Empty);
-                }
-
-                if (_config.RemoveFormatting.RemoveColor)
-                {
-                    p.Text = HtmlUtil.RemoveColorTags(p.Text);
-                    if (p.Text.Contains("\\c") || p.Text.Contains("\\1c"))
-                    {
-                        p.Text = HtmlUtil.RemoveAssaColor(p.Text);
-                    }
-                }
-
-                if (_config.RemoveFormatting.RemoveFontName)
-                {
-                    p.Text = HtmlUtil.RemoveFontName(p.Text);
-                }
-
-                if (_config.RemoveFormatting.RemoveAlignment)
-                {
-                    if (p.Text.Contains('{'))
-                    {
-                        p.Text = HtmlUtil.RemoveAssAlignmentTags(p.Text);
-                    }
-                }
-            }
+            p.Text = RemoveFormattingUtil.Remove(p.Text, types);
         }
 
         return subtitle;

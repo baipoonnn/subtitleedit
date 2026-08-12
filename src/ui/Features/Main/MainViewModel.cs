@@ -179,7 +179,6 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -721,6 +720,9 @@ public partial class MainViewModel :
         _pluginRunner = pluginRunner;
         _ytDlpDownloadService = ytDlpDownloadService;
         _updateCheckService = updateCheckService;
+
+        // Let dialogs show the current subtitle file name in their title bar - see UiUtil.MakeWindowTitle.
+        UiUtil.CurrentSubtitleFileNameProvider = () => _subtitleFileName;
 
         _loading = true;
         EditText = string.Empty;
@@ -2265,24 +2267,7 @@ public partial class MainViewModel :
             return;
         }
 
-        var json = JsonSerializer.Serialize(Se.Language, new JsonSerializerOptions
-        {
-            WriteIndented = true,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-
-            // English.json is the base every translation is generated from, so it must not depend on
-            // who saved it: WriteIndented defaults to Environment.NewLine, which gives CRLF on Windows
-            // and LF elsewhere, turning a re-save into a whole-file diff with no real change in it.
-            NewLine = "\n",
-        });
-
-        // Same reason, for the line breaks *inside* the strings: several language classes build their
-        // text with Environment.NewLine, so the same class yields "\r\n" on Windows and "\n" elsewhere
-        // and the file flip-flopped with whoever regenerated it last. Normalize to "\n" here rather
-        // than chase every class - this is the one place the file is written. Only escaped CRLF in
-        // string values matches; a literal backslash-r in the text is escaped as "\\r" and is left be.
-        json = json.Replace("\\r\\n", "\\n");
+        var json = SeLanguage.ToJson(Se.Language);
 
         var currentDirectory = Directory.GetCurrentDirectory();
         var fileName = Path.Combine(currentDirectory, "English.json");
@@ -12339,7 +12324,11 @@ public partial class MainViewModel :
             if ((string.IsNullOrEmpty(selectedText) || string.Equals(selectedText, _findService.CurrentTextFound, _findService.CurrentFindMode == FindMode.CaseInsensitive ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
                 && !string.IsNullOrEmpty(_findService.SearchText))
             {
-                selectedText = _findService.SearchText;
+                selectedText = _findService.SearchText; // last search pattern - may have significant edge spaces
+            }
+            else
+            {
+                selectedText = selectedText.Trim();
             }
 
             vm.InitializeFindData(_findService, subs, selectedText, this, origs);
@@ -12791,7 +12780,7 @@ public partial class MainViewModel :
                 // failed and a \n replacement silently did nothing (#12484).
                 var normalizedLine = line.Replace("\r\n", "\n").Replace("\r", "\n");
                 var normalizedIndex = line.Substring(0, matchIndex).Replace("\r\n", "\n").Replace("\r", "\n").Length;
-                var regex = new Regex(RegexUtils.FixNewLine(result.SearchText));
+                var regex = new Regex(RegexUtils.FixNewLine(result.SearchText), RegexOptions.None, RegexUtils.UserPatternMatchTimeout);
                 var match = regex.Match(normalizedLine, normalizedIndex);
 
                 // Bail unless the match starts exactly at the recorded index AND
@@ -12811,7 +12800,7 @@ public partial class MainViewModel :
                 newLine = normalizedLine.Substring(0, normalizedIndex) + replaced + normalizedLine.Substring(normalizedIndex + match.Length);
                 return replaced.Length;
             }
-            catch (ArgumentException)
+            catch (Exception exception) when (exception is ArgumentException or RegexMatchTimeoutException)
             {
                 newLine = line;
                 return null;
@@ -19995,8 +19984,13 @@ public partial class MainViewModel :
             {
                 if (Window != null)
                 {
-                    Window.Activate();
-                    TableViewExtras.FocusRow(SubtitleGrid);
+                    // Only claim focus when the main window still holds it - this runs a
+                    // second after startup, and activating here would pull SE back over
+                    // another application the user switched to while SE was loading.
+                    if (Window.IsActive)
+                    {
+                        TableViewExtras.FocusRow(SubtitleGrid);
+                    }
 
                     SurroundWith1Text = string.Format(Se.Language.Options.Shortcuts.SurroundWithXY, Se.Settings.Surround1Left, Se.Settings.Surround1Right);
                     SurroundWith2Text = string.Format(Se.Language.Options.Shortcuts.SurroundWithXY, Se.Settings.Surround2Left, Se.Settings.Surround2Right);
@@ -24793,17 +24787,22 @@ public partial class MainViewModel :
             }
 
             var settings = OpenAiSttService.GetSettingsFromConfiguration();
-            progressViewModel = new TranscriptionProgressViewModel();
-            progressViewModel.StatusText = Se.Language.Video.AudioToText.Transcribing;
-            progressViewModel.ServerUrl = settings.EndpointUrl;
-            progressViewModel.ModelName = string.IsNullOrEmpty(settings.Model) ? Se.Language.General.TranscriptionProgressModelAuto : settings.Model;
 
             var ownerWindow = Window!;
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                progressWindow = new TranscriptionProgressWindow(progressViewModel);
-                progressWindow.Show(ownerWindow);
-            });
+            progressViewModel = await Dispatcher.UIThread.InvokeAsync(() =>
+                _windowService.ShowWindow<TranscriptionProgressWindow, TranscriptionProgressViewModel>(ownerWindow, (window, vm) =>
+                {
+                    // The configure callback runs before Show(), so the texts are set for the
+                    // first frame and the topmost handling is wired before the window is up.
+                    vm.StatusText = Se.Language.Video.AudioToText.Transcribing;
+                    vm.ServerUrl = settings.EndpointUrl;
+                    vm.ModelName = string.IsNullOrEmpty(settings.Model) ? Se.Language.General.TranscriptionProgressModelAuto : settings.Model;
+
+                    // Above the main window while SE is active, but never above other
+                    // applications the user switches to during the transcription (#11243).
+                    WindowService.KeepTopmostWhileOwnerActive(window, ownerWindow);
+                    progressWindow = window;
+                }));
 
             var service = new OpenAiSttService(settings);
 
