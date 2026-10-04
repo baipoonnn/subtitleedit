@@ -1,4 +1,6 @@
-using System;
+﻿using System;
+using System.Linq;
+using System.Windows.Input;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -32,11 +34,25 @@ public static partial class InitListViewAndEditBox
     // overflows its row and draws over the labels underneath (#10271).
     private const double EditGridMinimumHeight = SubtitleTextBoxMinimumHeight;
     private const double EditGridMargin = 10;
+
+    /// <summary>Name of the up/down column of the edit section, so the height tracker can find it.</summary>
+    internal const string TimeControlsPanelName = "SubtitleTimeControlsPanel";
     // The subtitle grid row is Star, so without a floor the splitter can drag it away to
     // nothing and there is no handle left to drag back (#10271).
     private const double SubtitleGridMinimumHeight = 45;
 
     public static Grid MakeLayoutListViewAndEditBox(MainView mainPage, MainViewModel vm)
+    {
+        return MakeLayoutListViewAndEditBox(mainPage, vm, detachedEditBox: false, out _);
+    }
+
+    /// <summary>
+    /// Builds the subtitle grid and the edit box. With <paramref name="detachedEditBox"/> the
+    /// edit box is returned via <paramref name="editSection"/> instead of being docked below
+    /// the grid, so a layout can place it elsewhere (layout 10 puts it under the waveform,
+    /// like SE4/Aegisub - issue #13940).
+    /// </summary>
+    internal static Grid MakeLayoutListViewAndEditBox(MainView mainPage, MainViewModel vm, bool detachedEditBox, out Grid editSection)
     {
         mainPage.DataContext = vm;
 
@@ -64,16 +80,14 @@ public static partial class InitListViewAndEditBox
 
         vm.SubtitleGridAlternatingRowBrush = null;
 
-        var mainGrid = new Grid
+        var mainGrid = new Grid();
+        mainGrid.RowDefinitions.Add(new RowDefinition(GridLength.Star) { MinHeight = SubtitleGridMinimumHeight });
+        if (!detachedEditBox)
         {
-            RowDefinitions =
-            {
-                new RowDefinition(GridLength.Star) { MinHeight = SubtitleGridMinimumHeight },
-                // GridSplitter constrains the row definition, so include editGrid's outer
-                // margin to preserve the text box's 92 px minimum at the drag limit.
-                new RowDefinition(GridLength.Auto) { MinHeight = EditGridMinimumHeight + EditGridMargin * 2 },
-            },
-        };
+            // GridSplitter constrains the row definition, so include editGrid's outer
+            // margin to preserve the text box's 92 px minimum at the drag limit.
+            mainGrid.RowDefinitions.Add(MakeEditSectionRow(vm));
+        }
 
         // TableView (Avalonia 12.1) pilot #3, after Show history (#12704) and the OCR grid
         // (#13001): the main subtitle grid. TableView rows are ListBoxItems, so keyboard
@@ -108,11 +122,20 @@ public static partial class InitListViewAndEditBox
         vm.SubtitleGrid = subtitleGrid;
         vm.SubtitleGridDragSelect = new TableViewDragSelect(subtitleGrid, vm.ApplyDragSelectRange);
 
+        // Keep the view on the row being edited when a row changes height (#13619). Rows are
+        // one or two text lines, and the virtualizing panel re-estimates its pixel extent from
+        // the average realized row height - so breaking a line into two grew the estimate and
+        // scrolled the grid tens of rows away from the line the user was editing.
+        TableViewScrollAnchor.Attach(subtitleGrid);
+
         // hack to make drag and drop work on the grid - also on empty rows
         var dropHost = new Border
         {
             Background = Brushes.Transparent,
-            Child = vm.SubtitleGrid
+            // Index-mapped scrollbar (#13579): hides the grid's native pixel-mapped vertical
+            // bar and docks a row-index one beside it, so the thumb no longer jitters with
+            // the virtualization panel's extent re-estimates on variable-height rows.
+            Child = new TableViewIndexScrollBar(vm.SubtitleGrid)
         };
         vm.SubtitleGridDropHost = dropHost;
         DragDrop.SetAllowDrop(dropHost, true);
@@ -135,7 +158,7 @@ public static partial class InitListViewAndEditBox
         // the grid is rebuilt when settings are applied, so a changed mode takes effect then.
         var gridTextDisplayMode = SubtitleGridTextDisplayModeDisplay.FromSettings();
         var gapConverter = new DoubleToDisplayShortConverter();
-        var inverseBooleanConverter = new InverseBooleanConverter();
+        var inverseBooleanConverter = InverseBooleanConverter.Instance;
         var textOneLineShortConverter = new TextOneLineShortConverter();
         var booleanToGridLengthConverter = new BooleanToGridLengthConverter();
         var booleanAndConverter = BooleanAndConverter.Instance;
@@ -244,7 +267,7 @@ public static partial class InitListViewAndEditBox
                 var border = new Border
                 {
                     Padding = new Thickness(4, 2),
-                    [!Border.BackgroundProperty] = new Binding(nameof(SubtitleLineViewModel.StartTimeBackgroundBrush)),
+                    [!Border.BackgroundProperty] = MakeErrorCellBackgroundBinding(nameof(SubtitleLineViewModel.StartTimeBackgroundBrush)),
                 };
                 var textBlock = new TextBlock
                 {
@@ -275,7 +298,7 @@ public static partial class InitListViewAndEditBox
                 var border = new Border
                 {
                     Padding = new Thickness(4, 2),
-                    [!Border.BackgroundProperty] = new Binding(nameof(SubtitleLineViewModel.EndTimeBackgroundBrush)),
+                    [!Border.BackgroundProperty] = MakeErrorCellBackgroundBinding(nameof(SubtitleLineViewModel.EndTimeBackgroundBrush)),
                 };
                 var textBlock = new TextBlock
                 {
@@ -308,7 +331,7 @@ public static partial class InitListViewAndEditBox
                 var border = new Border
                 {
                     Padding = new Thickness(4, 2),
-                    [!Border.BackgroundProperty] = new Binding(nameof(SubtitleLineViewModel.DurationBackgroundBrush))
+                    [!Border.BackgroundProperty] = MakeErrorCellBackgroundBinding(nameof(SubtitleLineViewModel.DurationBackgroundBrush))
                 };
 
                 var textBlock = new TextBlock
@@ -328,6 +351,67 @@ public static partial class InitListViewAndEditBox
             Mode = BindingMode.OneWay,
             Source = vm,
         });
+        var teletextColumn = new SeTableViewColumn
+        {
+            Header = "TT",
+            Tag = SubtitleGridColumnKeys.Teletext,
+            Width = new GridLength(70),
+            MinWidth = 60,
+            CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
+            CellTemplate = new FuncDataTemplate<SubtitleLineViewModel>((value, nameScope) => new TextBlock
+            {
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                [!TextBlock.TextProperty] = new Binding(nameof(SubtitleLineViewModel.TeletextDisplay))
+                {
+                    Mode = BindingMode.OneWay,
+                },
+            }),
+        };
+        columnManager.Add(teletextColumn);
+        teletextColumn.Bind(SeTableViewColumn.IsVisibleProperty, new Binding(nameof(vm.IsTeletextColumnVisible))
+        {
+            Mode = BindingMode.OneWay,
+            Source = vm,
+        });
+
+        // Forced narrative: a check mark shown only on marked lines, like the bookmark icon in
+        // the number column - the mark is set with the toggle command, not by clicking the cell
+        // (#14322).
+        var forcedColumn = new SeTableViewColumn
+        {
+            Header = Se.Language.General.Forced,
+            Tag = SubtitleGridColumnKeys.Forced,
+            Width = new GridLength(70),
+            MinWidth = 50,
+            CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
+            CellTemplate = new FuncDataTemplate<SubtitleLineViewModel>((value, nameScope) => new Icon
+            {
+                Value = IconNames.CheckBold,
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                IsHitTestVisible = false,
+                [AutomationProperties.NameProperty] = Se.Language.General.Forced,
+                [!Visual.IsVisibleProperty] = new Binding(nameof(SubtitleLineViewModel.Forced))
+                {
+                    Mode = BindingMode.OneWay,
+                },
+            }),
+        };
+        columnManager.Add(forcedColumn);
+        forcedColumn.Bind(SeTableViewColumn.IsVisibleProperty, new Binding(nameof(vm.ShowColumnForced))
+        {
+            Mode = BindingMode.OneWay,
+            Source = vm,
+        });
+
+        // Read once per grid build, like the grid font: ApplySettings rebuilds the layout, so
+        // toggling the setting takes effect as soon as Settings is closed (#14316).
+        var gridTextAlignment = Se.Settings.Appearance.SubtitleGridCenterText
+            ? TextAlignment.Center
+            : TextAlignment.Start;
 
         columnManager.Add(new SeTableViewColumn
         {
@@ -342,15 +426,27 @@ public static partial class InitListViewAndEditBox
                 var border = new Border
                 {
                     Padding = new Thickness(4, 2),
-                    [!Border.BackgroundProperty] = new Binding(nameof(SubtitleLineViewModel.TextBackgroundBrush))
+                    [!Border.BackgroundProperty] = MakeErrorCellBackgroundBinding(nameof(SubtitleLineViewModel.TextBackgroundBrush))
                 };
 
                 var textBlock = new TextBlock
                 {
                     VerticalAlignment = VerticalAlignment.Center,
-
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    [!TextBlock.TextAlignmentProperty] = new MultiBinding
+                    {
+                        Converter = TeletextAlignmentPreviewConverter.Instance,
+                        // The alignment to use when the teletext preview is not overriding it.
+                        ConverterParameter = gridTextAlignment,
+                        Bindings =
+                        {
+                            new Binding(nameof(vm.IsTeletextPreviewActive)) { Source = vm, Mode = BindingMode.OneWay },
+                            new Binding(nameof(SubtitleLineViewModel.TeletextTextAlignment)) { Mode = BindingMode.OneWay },
+                        },
+                    },
                     // Lets the subtitle grid context menu find the word under the pointer (live spell check)
                     Tag = SubtitleGridColumnKeys.Text,
+                    [!Visual.EffectProperty] = new Binding(nameof(vm.SubtitleTextEffect)) { Source = vm, Mode = BindingMode.OneWay },
                     [!TextBlock.InlinesProperty] = new Binding(nameof(SubtitleLineViewModel.Text)) { Converter = syntaxHighlightingConverter, Mode = BindingMode.OneWay },
                     [!TextBlock.FlowDirectionProperty] = new Binding(nameof(SubtitleLineViewModel.Text)) { Converter = textToFlowDirectionConverter, Mode = BindingMode.OneWay },
                 };
@@ -358,7 +454,7 @@ public static partial class InitListViewAndEditBox
 
                 if (!string.IsNullOrEmpty(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName))
                 {
-                    textBlock.FontFamily = new FontFamily(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName);
+                    textBlock.FontFamily = FontFamilyHelper.Make(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName);
                 }
 
                 border.Child = textBlock;
@@ -384,9 +480,11 @@ public static partial class InitListViewAndEditBox
                 var textBlock = new TextBlock
                 {
                     VerticalAlignment = VerticalAlignment.Center,
+                    TextAlignment = gridTextAlignment,
 
                     // Lets the subtitle grid context menu find the word under the pointer (live spell check)
                     Tag = SubtitleGridColumnKeys.OriginalText,
+                    [!Visual.EffectProperty] = new Binding(nameof(vm.SubtitleTextEffect)) { Source = vm, Mode = BindingMode.OneWay },
                     [!TextBlock.InlinesProperty] = new Binding(nameof(SubtitleLineViewModel.OriginalText)) { Converter = syntaxHighlightingConverter, Mode = BindingMode.OneWay },
                     [!TextBlock.FlowDirectionProperty] = new Binding(nameof(SubtitleLineViewModel.OriginalText)) { Converter = textToFlowDirectionConverter, Mode = BindingMode.OneWay },
                 };
@@ -394,7 +492,7 @@ public static partial class InitListViewAndEditBox
 
                 if (!string.IsNullOrEmpty(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName))
                 {
-                    textBlock.FontFamily = new FontFamily(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName);
+                    textBlock.FontFamily = FontFamilyHelper.Make(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName);
                 }
 
                 border.Child = textBlock;
@@ -464,7 +562,7 @@ public static partial class InitListViewAndEditBox
                 var border = new Border
                 {
                     Padding = new Thickness(4, 2),
-                    [!Border.BackgroundProperty] = new Binding(nameof(SubtitleLineViewModel.GapBackgroundBrush)) { Mode = BindingMode.OneWay },
+                    [!Border.BackgroundProperty] = MakeErrorCellBackgroundBinding(nameof(SubtitleLineViewModel.GapBackgroundBrush)),
                 };
 
                 var textBlock = new TextBlock
@@ -484,6 +582,13 @@ public static partial class InitListViewAndEditBox
             Source = vm,
         });
         columnManager.Add(columnGap);
+
+        // Signed distance from the in/out cue to the nearest shot change (frames in frame mode,
+        // otherwise milliseconds), tinted when Beautify time codes would move the cue.
+        columnManager.Add(MakeShotChangeOffsetColumn(vm, SubtitleGridColumnKeys.ShotIn, Se.Language.General.ShotIn,
+            nameof(SubtitleLineViewModel.ShotInDisplay), nameof(SubtitleLineViewModel.ShotInBackgroundBrush), nameof(vm.ShowColumnShotIn)));
+        columnManager.Add(MakeShotChangeOffsetColumn(vm, SubtitleGridColumnKeys.ShotOut, Se.Language.General.ShotOut,
+            nameof(SubtitleLineViewModel.ShotOutDisplay), nameof(SubtitleLineViewModel.ShotOutBackgroundBrush), nameof(vm.ShowColumnShotOut)));
 
         var actorColumn = new SeTableViewColumn
         {
@@ -539,7 +644,7 @@ public static partial class InitListViewAndEditBox
                 var border = new Border
                 {
                     Padding = new Thickness(4, 2),
-                    [!Border.BackgroundProperty] = new Binding(nameof(SubtitleLineViewModel.CpsBackgroundBrush)) { Mode = BindingMode.OneWay }
+                    [!Border.BackgroundProperty] = MakeErrorCellBackgroundBinding(nameof(SubtitleLineViewModel.CpsBackgroundBrush))
                 };
 
                 var textBlock = new TextBlock
@@ -572,7 +677,7 @@ public static partial class InitListViewAndEditBox
                 var border = new Border
                 {
                     Padding = new Thickness(4, 2),
-                    [!Border.BackgroundProperty] = new Binding(nameof(SubtitleLineViewModel.WpmBackgroundBrush)) { Mode = BindingMode.OneWay }
+                    [!Border.BackgroundProperty] = MakeErrorCellBackgroundBinding(nameof(SubtitleLineViewModel.WpmBackgroundBrush))
                 };
 
                 var textBlock = new TextBlock
@@ -634,6 +739,7 @@ public static partial class InitListViewAndEditBox
             Source = vm,
         });
 
+        columnManager.ApplyOrder(Se.Settings.General.SubtitleGridColumnOrder);
         RestoreSubtitleGridColumnWidths(columnManager);
 
         vm.SubtitleGrid.DataContext = vm.Subtitles;
@@ -647,10 +753,16 @@ public static partial class InitListViewAndEditBox
             Source = vm,
         };
 
-        // Set up two-way binding for SelectedIndex
+        // SelectedIndex flows grid -> view model only. The view model drives the grid through
+        // SelectedItem above and only ever writes SelectedSubtitleIndex alongside it, and a TwoWay
+        // binding here echoed every grid-originated index change straight back: removing a row
+        // above a multi-selection shifts the grid's SelectedIndex, the echo re-assigned that same
+        // index, and SelectionModel.SelectedIndex's setter is Clear()+Select() even for an unchanged
+        // value - the whole selection collapsed to one row (merge selected lines with a reference
+        // row above the selection silently merged nothing).
         vm.SubtitleGrid[!TableView.SelectedIndexProperty] = new Binding(nameof(vm.SelectedSubtitleIndex))
         {
-            Mode = BindingMode.TwoWay,
+            Mode = BindingMode.OneWayToSource,
             Source = vm,
         };
 
@@ -667,7 +779,7 @@ public static partial class InitListViewAndEditBox
             Header = Se.Language.General.Styles,
             DataContext = vm,
         };
-        assaStylesMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.AreAssaContentMenuItemsVisible)) { Mode = BindingMode.TwoWay });
+        assaStylesMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.AreAssaContentMenuItemsVisible)) { Mode = BindingMode.OneWay });
         flyout.Items.Add(assaStylesMenuItem);
         vm.MenuItemStyles = assaStylesMenuItem;
 
@@ -676,7 +788,7 @@ public static partial class InitListViewAndEditBox
             Header = Se.Language.General.Actors,
             DataContext = vm,
         };
-        assaActorsMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.AreAssaContentMenuItemsVisible)) { Mode = BindingMode.TwoWay });
+        assaActorsMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.AreAssaContentMenuItemsVisible)) { Mode = BindingMode.OneWay });
         flyout.Items.Add(assaActorsMenuItem);
         vm.MenuItemActors = assaActorsMenuItem;
 
@@ -691,7 +803,7 @@ public static partial class InitListViewAndEditBox
             DataContext = vm,
             Command = vm.SetWebVttStylesForSelectedLinesCommand,
         };
-        webVttStylesMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.AreWebVttContentMenuItemsVisible)) { Mode = BindingMode.TwoWay });
+        webVttStylesMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.AreWebVttContentMenuItemsVisible)) { Mode = BindingMode.OneWay });
         flyout.Items.Add(webVttStylesMenuItem);
 
         var webVttVoicesMenuItem = new MenuItem
@@ -699,7 +811,7 @@ public static partial class InitListViewAndEditBox
             Header = Se.Language.File.WebVtt.Voices,
             DataContext = vm,
         };
-        webVttVoicesMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.AreWebVttContentMenuItemsVisible)) { Mode = BindingMode.TwoWay });
+        webVttVoicesMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.AreWebVttContentMenuItemsVisible)) { Mode = BindingMode.OneWay });
         flyout.Items.Add(webVttVoicesMenuItem);
         vm.MenuItemWebVttVoices = webVttVoicesMenuItem;
 
@@ -709,7 +821,7 @@ public static partial class InitListViewAndEditBox
             DataContext = vm,
             Command = vm.ShowWebVttBrowserPreviewCommand,
         };
-        webVttBrowserPreviewMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsWebVttBrowserPreviewVisible)) { Mode = BindingMode.TwoWay });
+        webVttBrowserPreviewMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsWebVttBrowserPreviewVisible)) { Mode = BindingMode.OneWay });
         flyout.Items.Add(webVttBrowserPreviewMenuItem);
 
         var sepWebVtt = new Separator { DataContext = vm };
@@ -728,7 +840,7 @@ public static partial class InitListViewAndEditBox
                 [!Visual.IsVisibleProperty] = new Binding(nameof(vm.ShowColumnStartTime)),
             }
         };
-        showStartTimeMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)) { Mode = BindingMode.TwoWay });
+        showStartTimeMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)) { Mode = BindingMode.OneWay });
         flyout.Items.Add(showStartTimeMenuItem);
         
         var showEndTimeMenuItem = new MenuItem
@@ -743,7 +855,7 @@ public static partial class InitListViewAndEditBox
                 [!Visual.IsVisibleProperty] = new Binding(nameof(vm.ShowColumnEndTime)),
             }
         };
-        showEndTimeMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)) { Mode = BindingMode.TwoWay });
+        showEndTimeMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)) { Mode = BindingMode.OneWay });
         flyout.Items.Add(showEndTimeMenuItem);
 
         var showDurationMenuItem = new MenuItem
@@ -758,7 +870,7 @@ public static partial class InitListViewAndEditBox
                 [!Visual.IsVisibleProperty] = new Binding(nameof(vm.ShowColumnDuration)),
             }
         };
-        showDurationMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)) { Mode = BindingMode.TwoWay });
+        showDurationMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)) { Mode = BindingMode.OneWay });
         flyout.Items.Add(showDurationMenuItem);
 
         var showGapMenuItem = new MenuItem
@@ -773,8 +885,38 @@ public static partial class InitListViewAndEditBox
                 [!Visual.IsVisibleProperty] = new Binding(nameof(vm.ShowColumnGap)),
             }
         };
-        showGapMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)) { Mode = BindingMode.TwoWay });
+        showGapMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)) { Mode = BindingMode.OneWay });
         flyout.Items.Add(showGapMenuItem);
+
+        var showShotInMenuItem = new MenuItem
+        {
+            Header = Se.Language.General.ShowShotInColumn,
+            Command = vm.ToggleShowColumnShotInCommand,
+            DataContext = vm,
+            Icon = new Icon
+            {
+                Value = IconNames.CheckBold,
+                VerticalAlignment = VerticalAlignment.Center,
+                [!Visual.IsVisibleProperty] = new Binding(nameof(vm.ShowColumnShotIn)),
+            }
+        };
+        showShotInMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)) { Mode = BindingMode.OneWay });
+        flyout.Items.Add(showShotInMenuItem);
+
+        var showShotOutMenuItem = new MenuItem
+        {
+            Header = Se.Language.General.ShowShotOutColumn,
+            Command = vm.ToggleShowColumnShotOutCommand,
+            DataContext = vm,
+            Icon = new Icon
+            {
+                Value = IconNames.CheckBold,
+                VerticalAlignment = VerticalAlignment.Center,
+                [!Visual.IsVisibleProperty] = new Binding(nameof(vm.ShowColumnShotOut)),
+            }
+        };
+        showShotOutMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)) { Mode = BindingMode.OneWay });
+        flyout.Items.Add(showShotOutMenuItem);
 
         var showStyleMenuItem = new MenuItem
         {
@@ -814,7 +956,7 @@ public static partial class InitListViewAndEditBox
                 [!Visual.IsVisibleProperty] = new Binding(nameof(vm.ShowColumnActor)),
             }
         };
-        showActorMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)) { Mode = BindingMode.TwoWay });
+        showActorMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)) { Mode = BindingMode.OneWay });
         flyout.Items.Add(showActorMenuItem);
 
         var showCpsMenuItem = new MenuItem
@@ -829,7 +971,7 @@ public static partial class InitListViewAndEditBox
                 [!Visual.IsVisibleProperty] = new Binding(nameof(vm.ShowColumnCps)),
             }
         };
-        showCpsMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)) { Mode = BindingMode.TwoWay });
+        showCpsMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)) { Mode = BindingMode.OneWay });
         flyout.Items.Add(showCpsMenuItem);
 
         var showWpmMenuItem = new MenuItem
@@ -844,7 +986,7 @@ public static partial class InitListViewAndEditBox
                 [!Visual.IsVisibleProperty] = new Binding(nameof(vm.ShowColumnWpm)),
             }
         };
-        showWpmMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)) { Mode = BindingMode.TwoWay });
+        showWpmMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)) { Mode = BindingMode.OneWay });
         flyout.Items.Add(showWpmMenuItem);
         
         var showPixelWidthMenuItem = new MenuItem
@@ -859,8 +1001,23 @@ public static partial class InitListViewAndEditBox
                 [!Visual.IsVisibleProperty] = new Binding(nameof(vm.ShowColumnPixelWidth)),
             }
         };
-        showPixelWidthMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)) { Mode = BindingMode.TwoWay });
+        showPixelWidthMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)) { Mode = BindingMode.OneWay });
         flyout.Items.Add(showPixelWidthMenuItem);
+
+        var showForcedMenuItem = new MenuItem
+        {
+            Header = Se.Language.General.ShowForcedColumn,
+            Command = vm.ToggleShowColumnForcedCommand,
+            DataContext = vm,
+            Icon = new Icon
+            {
+                Value = IconNames.CheckBold,
+                VerticalAlignment = VerticalAlignment.Center,
+                [!Visual.IsVisibleProperty] = new Binding(nameof(vm.ShowColumnForced)),
+            }
+        };
+        showForcedMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)) { Mode = BindingMode.OneWay });
+        flyout.Items.Add(showForcedMenuItem);
 
         var showLayerMenuItem = new MenuItem
         {
@@ -874,8 +1031,23 @@ public static partial class InitListViewAndEditBox
                 [!Visual.IsVisibleProperty] = new Binding(nameof(vm.ShowColumnLayer)),
             }
         };
-        showLayerMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.ShowColumnLayerFlyoutMenuItem)) { Source = vm, Mode = BindingMode.TwoWay });
+        showLayerMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.ShowColumnLayerFlyoutMenuItem)) { Source = vm, Mode = BindingMode.OneWay });
         flyout.Items.Add(showLayerMenuItem);
+
+        var columnsSeparator = new Separator { DataContext = vm };
+        columnsSeparator.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)));
+        flyout.Items.Add(columnsSeparator);
+
+        // Show/hide plus reordering in one dialog (#14369) - the toggles above only cover
+        // visibility, and the TableView has no column dragging.
+        var columnsMenuItem = new MenuItem
+        {
+            Header = Se.Language.General.ColumnsDotDotDot,
+            Command = vm.ShowGridColumnsDialogCommand,
+            DataContext = vm,
+        };
+        columnsMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridFlyoutHeaderVisible)));
+        flyout.Items.Add(columnsMenuItem);
 
 
         var deleteMenuItem = new MenuItem { Header = Se.Language.General.Delete, DataContext = vm };
@@ -950,6 +1122,16 @@ public static partial class InitListViewAndEditBox
         splitMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridDataMenuVisible)));
         splitMenuItem.Command = vm.SplitCommand;
         flyout.Items.Add(splitMenuItem);
+
+        var assistedSplitMenuItem = new MenuItem { Header = Se.Language.General.AssistedSplitDotDotDot, DataContext = vm };
+        assistedSplitMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridDataMenuVisible)));
+        assistedSplitMenuItem.Command = vm.AssistedSplitCommand;
+        flyout.Items.Add(assistedSplitMenuItem);
+
+        var assistedMoveMenuItem = new MenuItem { Header = Se.Language.General.AssistedMoveDotDotDot, DataContext = vm };
+        assistedMoveMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridDataMenuVisible)));
+        assistedMoveMenuItem.Command = vm.AssistedMoveCommand;
+        flyout.Items.Add(assistedMoveMenuItem);
 
         var mergePreviousMenuItem = new MenuItem { Header = Se.Language.General.MergeBefore, DataContext = vm };
         mergePreviousMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsMergeWithNextOrPreviousVisible)));
@@ -1061,6 +1243,16 @@ public static partial class InitListViewAndEditBox
         boldMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridDataMenuVisible)));
         flyout.Items.Add(boldMenuItem);
 
+        // EBU STL only (teletext boxing) - hidden for every other format, as in SE4.
+        var boxMenuItem = new MenuItem
+        {
+            Header = Se.Language.General.Box,
+            Command = vm.ToggleLinesBoxCommand,
+            DataContext = vm,
+        };
+        boxMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsBoxMenuItemVisible)));
+        flyout.Items.Add(boxMenuItem);
+
         var colorMenuItem = new MenuItem
         {
             Header = Se.Language.General.ColorDotDotDot,
@@ -1098,6 +1290,15 @@ public static partial class InitListViewAndEditBox
         bookmarkMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridDataMenuVisible)));
         flyout.Items.Add(bookmarkMenuItem);
 
+        var toggleForcedMenuItem = new MenuItem
+        {
+            Header = Se.Language.General.ToggleForced,
+            Command = vm.ToggleForcedSelectedLinesCommand,
+            DataContext = vm,
+        };
+        toggleForcedMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridDataMenuVisible)));
+        flyout.Items.Add(toggleForcedMenuItem);
+
         var menuItemSelectedLines = new MenuItem
         {
             Header = Se.Language.General.SelectedLines,
@@ -1113,7 +1314,7 @@ public static partial class InitListViewAndEditBox
                 new MenuItem
                 {
                     Header = Se.Language.Main.Menu.TextToSpeech,
-                    Command = vm.ShowVideoTextToSpeechCommand,
+                    Command = vm.ShowVideoTextToSpeechSelectedLinesCommand,
                     DataContext = vm,
                 },
                 new MenuItem
@@ -1127,6 +1328,12 @@ public static partial class InitListViewAndEditBox
                 {
                     Header = Se.Language.Main.Menu.ChangeCasing,
                     Command = vm.ChangeCasingSelectedLinesCommand,
+                    DataContext = vm,
+                },
+                new MenuItem
+                {
+                    Header = Se.Language.Main.Menu.ChangeFormatting,
+                    Command = vm.ShowToolsChangeFormattingSelectedLinesCommand,
                     DataContext = vm,
                 },
                 new MenuItem
@@ -1152,6 +1359,18 @@ public static partial class InitListViewAndEditBox
                 {
                     Header = Se.Language.Main.Menu.MultipleReplace,
                     Command = vm.MultipleReplaceSelectedLinesCommand,
+                    DataContext = vm,
+                },
+                new MenuItem
+                {
+                    Header = Se.Language.Main.Menu.AdjustDurations,
+                    Command = vm.ShowToolsAdjustDurationsSelectedLinesCommand,
+                    DataContext = vm,
+                },
+                new MenuItem
+                {
+                    Header = Se.Language.Main.Menu.ApplyDurationLimits,
+                    Command = vm.ShowApplyDurationLimitsSelectedLinesCommand,
                     DataContext = vm,
                 },
                 new MenuItem
@@ -1215,25 +1434,69 @@ public static partial class InitListViewAndEditBox
                 new MenuItem
                 {
                     [!MenuItem.HeaderProperty] = new Binding(nameof(vm.SurroundWith1Text)),
+                    [!Visual.IsVisibleProperty] = new Binding(nameof(vm.IsSurroundWith1Visible)),
                     Command = vm.SurroundWith1Command,
                     DataContext = vm,
                 },
                 new MenuItem
                 {
                     [!MenuItem.HeaderProperty] = new Binding(nameof(vm.SurroundWith2Text)),
+                    [!Visual.IsVisibleProperty] = new Binding(nameof(vm.IsSurroundWith2Visible)),
                     Command = vm.SurroundWith2Command,
                     DataContext = vm,
                 },
                 new MenuItem
                 {
                     [!MenuItem.HeaderProperty] = new Binding(nameof(vm.SurroundWith3Text)),
+                    [!Visual.IsVisibleProperty] = new Binding(nameof(vm.IsSurroundWith3Visible)),
                     Command = vm.SurroundWith3Command,
+                    DataContext = vm,
+                },
+                new MenuItem
+                {
+                    [!MenuItem.HeaderProperty] = new Binding(nameof(vm.SurroundWith4Text)),
+                    [!Visual.IsVisibleProperty] = new Binding(nameof(vm.IsSurroundWith4Visible)),
+                    Command = vm.SurroundWith4Command,
+                    DataContext = vm,
+                },
+                new MenuItem
+                {
+                    [!MenuItem.HeaderProperty] = new Binding(nameof(vm.SurroundWith5Text)),
+                    [!Visual.IsVisibleProperty] = new Binding(nameof(vm.IsSurroundWith5Visible)),
+                    Command = vm.SurroundWith5Command,
+                    DataContext = vm,
+                },
+                new MenuItem
+                {
+                    [!MenuItem.HeaderProperty] = new Binding(nameof(vm.SurroundWith6Text)),
+                    [!Visual.IsVisibleProperty] = new Binding(nameof(vm.IsSurroundWith6Visible)),
+                    Command = vm.SurroundWith6Command,
+                    DataContext = vm,
+                },
+                new MenuItem
+                {
+                    [!MenuItem.HeaderProperty] = new Binding(nameof(vm.SurroundWith7Text)),
+                    [!Visual.IsVisibleProperty] = new Binding(nameof(vm.IsSurroundWith7Visible)),
+                    Command = vm.SurroundWith7Command,
+                    DataContext = vm,
+                },
+                new MenuItem
+                {
+                    [!MenuItem.HeaderProperty] = new Binding(nameof(vm.SurroundWith8Text)),
+                    [!Visual.IsVisibleProperty] = new Binding(nameof(vm.IsSurroundWith8Visible)),
+                    Command = vm.SurroundWith8Command,
                     DataContext = vm,
                 },
                 new MenuItem
                 {
                     Header = Se.Language.Video.CutVideoDotDotDot,
                     Command = vm.CutVideoSelectedLinesCommand,
+                    DataContext = vm,
+                },
+                new MenuItem
+                {
+                    Header = Se.Language.Main.Menu.GenerateBurnIn,
+                    Command = vm.ShowVideoBurnInSelectedLinesCommand,
                     DataContext = vm,
                 },
                 new MenuItem
@@ -1253,6 +1516,15 @@ public static partial class InitListViewAndEditBox
         };
         menuItemSelectedLines.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridDataMenuVisible)));
         flyout.Items.Add(menuItemSelectedLines);
+
+        var saveForcedLinesAsMenuItem = new MenuItem
+        {
+            Header = Se.Language.General.SaveForcedLinesAs,
+            Command = vm.SaveForcedLinesAsCommand,
+            DataContext = vm,
+        };
+        saveForcedLinesAsMenuItem.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsSubtitleGridDataMenuVisible)));
+        flyout.Items.Add(saveForcedLinesAsMenuItem);
 
 
         // Set the ContextFlyout on the drop host so right-clicks on empty space also show the menu
@@ -1279,6 +1551,7 @@ public static partial class InitListViewAndEditBox
         // Left panel for time controls
         var timeControlsPanel = new StackPanel
         {
+            Name = TimeControlsPanelName,
             Spacing = 6,
             Margin = new Thickness(0, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Top,
@@ -1321,6 +1594,7 @@ public static partial class InitListViewAndEditBox
         timeCodeUpDown.Bind(TimeCodeUpDown.IsEnabledProperty, new Binding(nameof(vm.AreTimeCodesEditable)) { Mode = BindingMode.OneWay });
         startTimePanel.Children.Add(timeCodeUpDown);
         timeCodeUpDown.ValueChanged += vm.StartTimeChanged;
+        vm.EditBoxStartTimeUpDown = timeCodeUpDown;
         timeControlsPanel.Children.Add(startTimePanel);
 
 
@@ -1340,6 +1614,9 @@ public static partial class InitListViewAndEditBox
         var endCodeUpDown = new TimeCodeUpDown
         {
             DataContext = vm,
+            // Like the start time above: the row holds a video-relative time, the box shows
+            // (and reads back) "time code + video offset", so it matches the grid's Hide column.
+            UseVideoOffset = true,
             [AutomationProperties.NameProperty] = Se.Language.General.EndTime,
             [!TimeCodeUpDown.ValueProperty] = new Binding($"{nameof(vm.SelectedSubtitle)}.{nameof(SubtitleLineViewModel.EndTime)}")
             {
@@ -1353,6 +1630,7 @@ public static partial class InitListViewAndEditBox
         endCodeUpDown.Bind(TimeCodeUpDown.IsEnabledProperty, new Binding(nameof(vm.AreTimeCodesEditable)) { Mode = BindingMode.OneWay });
         endTimePanel.Children.Add(endCodeUpDown);
         endCodeUpDown.ValueChanged += vm.EndTimeChanged;
+        vm.EditBoxEndTimeUpDown = endCodeUpDown;
         timeControlsPanel.Children.Add(endTimePanel);
 
         // Duration display
@@ -1384,6 +1662,7 @@ public static partial class InitListViewAndEditBox
         }
         durationUpDown.Bind(SecondsUpDown.IsEnabledProperty, new Binding(nameof(vm.AreTimeCodesEditable)) { Mode = BindingMode.OneWay });
         durationUpDown.ValueChanged += (_, _) => vm.DurationChanged();
+        vm.EditBoxDurationUpDown = durationUpDown;
         durationPanel.Children.Add(durationUpDown);
         timeControlsPanel.Children.Add(durationPanel);
 
@@ -1465,7 +1744,8 @@ public static partial class InitListViewAndEditBox
         };
         var bookmarkLabel = new Label
         {
-            FontSize = 10,
+            FontSize = UiUtil.ScaledFontSize(10),
+            [UiUtil.DesignFontSizeProperty] = 10,
             VerticalAlignment = VerticalAlignment.Center,
             DataContext = vm,
             Foreground = new SolidColorBrush(Se.Settings.Appearance.BookmarkColor.FromHexToColor()),
@@ -1512,7 +1792,8 @@ public static partial class InitListViewAndEditBox
         {
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Bottom,
-            FontSize = 12,
+            FontSize = UiUtil.ScaledFontSize(12),
+            [UiUtil.DesignFontSizeProperty] = 12,
             Padding = new Thickness(2, 2, 2, 2),
         };
         textCharsSecLabel.Bind(TextBlock.TextProperty, new Binding(nameof(vm.EditTextCharactersPerSecond))
@@ -1533,7 +1814,8 @@ public static partial class InitListViewAndEditBox
         {
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Top,
-            FontSize = 12,
+            FontSize = UiUtil.ScaledFontSize(12),
+            [UiUtil.DesignFontSizeProperty] = 12,
             Padding = new Thickness(2, 2, 2, 2),
         };
         textTotalLengthLabel.Bind(TextBlock.TextProperty, new Binding(nameof(vm.EditTextTotalLength))
@@ -1622,6 +1904,12 @@ public static partial class InitListViewAndEditBox
         menuItemTextBoxUnderline.Command = vm.TextBoxUnderlineCommand;
         flyoutTextBox.Items.Add(menuItemTextBoxUnderline);
 
+        // EBU STL only (teletext boxing) - hidden for every other format, as in SE4.
+        var menuItemTextBoxBox = new MenuItem { Header = Se.Language.General.Box, DataContext = vm };
+        menuItemTextBoxBox.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsFormatEbu)));
+        menuItemTextBoxBox.Command = vm.TextBoxBoxCommand;
+        flyoutTextBox.Items.Add(menuItemTextBoxBox);
+
         var menuItemTextBoxFontName = new MenuItem { Header = Se.Language.General.FontNameDotDotDot };
         menuItemTextBoxFontName.Command = vm.TextBoxFontNameCommand;
         flyoutTextBox.Items.Add(menuItemTextBoxFontName);
@@ -1680,6 +1968,61 @@ public static partial class InitListViewAndEditBox
 
         flyoutTextBox.Items.Add(new Separator());
 
+        // macOS-only "Look up" (#14277): every macOS text field has it in the system context menu,
+        // and it is the shortest way into the dictionaries/thesauri the user has installed. It sits
+        // above "Google it", where macOS puts it (Look Up, then Search with Google).
+        if (OperatingSystem.IsMacOS())
+        {
+            var menuItemTextBoxLookUp = new MenuItem
+            {
+                [!MenuItem.HeaderProperty] = new Binding(nameof(vm.TextBoxLookUpHeader)),
+                [!Visual.IsVisibleProperty] = new Binding(nameof(vm.IsTextBoxLookUpVisible)),
+                Command = vm.LookUpInDictionaryCommand,
+                Icon = new Icon
+                {
+                    Value = IconNames.BookAlphabet,
+                    VerticalAlignment = VerticalAlignment.Center,
+                },
+            };
+            flyoutTextBox.Items.Add(menuItemTextBoxLookUp);
+        }
+
+        // Shown only with a selection - the command searches the selected text and does nothing
+        // without one. It had no default shortcut and was in no menu, so it was unreachable
+        // unless you imported SE4 shortcuts (same invisibility as casing, #13093).
+        var menuItemTextBoxGoogleIt = new MenuItem
+        {
+            Header = Se.Language.General.GoogleIt,
+            Command = vm.GoogleItCommand,
+            Icon = new Icon
+            {
+                Value = IconNames.Web,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+        menuItemTextBoxGoogleIt.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsTextBoxGoogleItVisible)));
+        flyoutTextBox.Items.Add(menuItemTextBoxGoogleIt);
+
+        // The configurable "search via" slots (name + URL, set in Options > Shortcuts). They live in
+        // a submenu so a handful of search engines do not push the rest of the menu down, and the
+        // whole submenu is hidden while no slot has a URL.
+        var menuItemTextBoxSearchVia = new MenuItem
+        {
+            Header = Se.Language.Options.Shortcuts.SearchVia,
+            Icon = new Icon
+            {
+                Value = IconNames.Find,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+        menuItemTextBoxSearchVia.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.IsCustomSearchVisible)));
+        AddCustomSearchMenuItem(menuItemTextBoxSearchVia, vm, nameof(vm.CustomSearch1Text), nameof(vm.IsCustomSearch1Visible), vm.CustomSearch1Command);
+        AddCustomSearchMenuItem(menuItemTextBoxSearchVia, vm, nameof(vm.CustomSearch2Text), nameof(vm.IsCustomSearch2Visible), vm.CustomSearch2Command);
+        AddCustomSearchMenuItem(menuItemTextBoxSearchVia, vm, nameof(vm.CustomSearch3Text), nameof(vm.IsCustomSearch3Visible), vm.CustomSearch3Command);
+        AddCustomSearchMenuItem(menuItemTextBoxSearchVia, vm, nameof(vm.CustomSearch4Text), nameof(vm.IsCustomSearch4Visible), vm.CustomSearch4Command);
+        AddCustomSearchMenuItem(menuItemTextBoxSearchVia, vm, nameof(vm.CustomSearch5Text), nameof(vm.IsCustomSearch5Visible), vm.CustomSearch5Command);
+        flyoutTextBox.Items.Add(menuItemTextBoxSearchVia);
+
         var menuItemTextBoxAiAssistant = new MenuItem
         {
             Header = Se.Language.Tools.AiAssistant.Title,
@@ -1717,7 +2060,8 @@ public static partial class InitListViewAndEditBox
         {
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Bottom,
-            FontSize = 12,
+            FontSize = UiUtil.ScaledFontSize(12),
+            [UiUtil.DesignFontSizeProperty] = 12,
             Padding = new Thickness(2, 2, 2, 2),
         };
         textCharsSecLabelOriginal.Bind(TextBlock.TextProperty, new Binding(nameof(vm.EditTextCharactersPerSecondOriginal))
@@ -1736,6 +2080,9 @@ public static partial class InitListViewAndEditBox
         });
 
         var textBoxOriginal = MakeTextBoxOriginal(vm);
+        // A small gap between the two text boxes so their borders do not touch (the
+        // margin is flipped when the grid is mirrored for right to left).
+        textBoxOriginal.Margin = new Thickness(2, 0, 0, 0);
         textEditGrid.Add(textBoxOriginal, 1, 1);
         textBoxOriginal.Bind(Visual.IsVisibleProperty, new Binding(nameof(vm.ShowColumnOriginalText))
         {
@@ -1747,7 +2094,8 @@ public static partial class InitListViewAndEditBox
         {
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Top,
-            FontSize = 12,
+            FontSize = UiUtil.ScaledFontSize(12),
+            [UiUtil.DesignFontSizeProperty] = 12,
             Padding = new Thickness(2, 2, 2, 2),
         };
         textTotalLengthLabelOriginal.Bind(TextBlock.TextProperty, new Binding(nameof(vm.EditTextTotalLengthOriginal))
@@ -1831,27 +2179,31 @@ public static partial class InitListViewAndEditBox
         Grid.SetColumn(textEditGrid, 1);
         editGrid.Children.Add(textEditGrid);
 
-        Grid.SetRow(editGrid, 1);
-        mainGrid.Children.Add(editGrid);
-
-        // GridSplitter overlaying the boundary between the subtitle grid (row 0) and the
-        // edit box (row 1) so the text box section can be resized vertically, like SE4
-        // (#10271). The splitter lives in the edit box's own row (no extra row - an extra
-        // row would shrink the grid viewport and break the grid scroll perf tests); with
-        // VerticalAlignment.Top it resizes the row above (grid, Star) and its own row
-        // (edit box, Auto -> becomes Pixel once the user drags). The negative top margin
-        // centers the 4 px strip on the boundary.
-        var editBoxSplitter = new GridSplitter
+        editSection = editGrid;
+        if (!detachedEditBox)
         {
-            Height = UiUtil.SplitterWidthOrHeight,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            VerticalAlignment = VerticalAlignment.Top,
-            Margin = new Thickness(0, -UiUtil.SplitterWidthOrHeight / 2.0, 0, 0)
-        };
-        Grid.SetRow(editBoxSplitter, 1);
-        mainGrid.Children.Add(editBoxSplitter);
+            Grid.SetRow(editGrid, 1);
+            mainGrid.Children.Add(editGrid);
 
-        TrackEditSectionMinimumHeight(mainGrid, textEditGrid);
+            // GridSplitter overlaying the boundary between the subtitle grid (row 0) and the
+            // edit box (row 1) so the text box section can be resized vertically, like SE4
+            // (#10271). The splitter lives in the edit box's own row (no extra row - an extra
+            // row would shrink the grid viewport and break the grid scroll perf tests); with
+            // VerticalAlignment.Top it resizes the row above (grid, Star) and its own row
+            // (edit box, Auto -> becomes Pixel once the user drags). The negative top margin
+            // centers the 4 px strip on the boundary.
+            var editBoxSplitter = new GridSplitter
+            {
+                Height = UiUtil.SplitterWidthOrHeight,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, -UiUtil.SplitterWidthOrHeight / 2.0, 0, 0)
+            };
+            Grid.SetRow(editBoxSplitter, 1);
+            mainGrid.Children.Add(editBoxSplitter);
+
+            TrackEditSectionMinimumHeight(mainGrid, textEditGrid);
+        }
 
 
         textEditGrid.ColumnDefinitions[1].Bind(ColumnDefinition.WidthProperty, new Binding(nameof(vm.ShowColumnOriginalText))
@@ -1864,6 +2216,108 @@ public static partial class InitListViewAndEditBox
         return mainGrid;
     }
 
+    /// <summary>
+    /// Adds the vertical-resize splitter for a detached edit section (layout 10: waveform in
+    /// row 0, edit box in row 1 of <paramref name="hostGrid"/>). Same overlay-splitter and
+    /// minimum-height tracking as the docked layout, so the text box cannot be dragged small
+    /// enough to overpaint its labels (#10271).
+    /// </summary>
+    internal static void AttachDetachedEditBoxSplitter(MainViewModel vm, Grid hostGrid, Grid editSection)
+    {
+        var row = MakeEditSectionRow(null);
+        hostGrid.RowDefinitions[1].Height = KeepUserEditSectionHeight(vm, row.Height, row.MinHeight);
+        hostGrid.RowDefinitions[1].MinHeight = row.MinHeight;
+        vm.EditSectionRow = hostGrid.RowDefinitions[1];
+
+        var editBoxSplitter = new GridSplitter
+        {
+            Height = UiUtil.SplitterWidthOrHeight,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, -UiUtil.SplitterWidthOrHeight / 2.0, 0, 0)
+        };
+        Grid.SetRow(editBoxSplitter, 1);
+        hostGrid.Children.Add(editBoxSplitter);
+
+        var textEditGrid = editSection.Children.OfType<Grid>().First(g => g.Name == "SubtitleTextEditGrid");
+        TrackEditSectionMinimumHeight(hostGrid, textEditGrid);
+    }
+
+    // Background for a grid cell tinted with the error color. The row's IsSelected goes along
+    // so a selected row can show a stronger red - the faint default tint turns gray on top of
+    // the selection color, hiding the error on the very line being fixed.
+    private static MultiBinding MakeErrorCellBackgroundBinding(string brushProperty)
+    {
+        return new MultiBinding
+        {
+            Converter = SelectedRowErrorBrushConverter.Instance,
+            Bindings =
+            {
+                new Binding(brushProperty) { Mode = BindingMode.OneWay },
+                new Binding(nameof(TableViewRow.IsSelected))
+                {
+                    Mode = BindingMode.OneWay,
+                    RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor) { AncestorType = typeof(TableViewRow) },
+                },
+            },
+        };
+    }
+
+    // One entry of the "search via" submenu. The header and the visibility are bound rather than
+    // set, so renaming a slot in Options > Shortcuts shows up without rebuilding the menu.
+    private static SeTableViewColumn MakeShotChangeOffsetColumn(
+        MainViewModel vm,
+        string key,
+        string header,
+        string textProperty,
+        string brushProperty,
+        string visibleProperty)
+    {
+        var column = new SeTableViewColumn
+        {
+            Header = header,
+            Tag = key,
+            Width = new GridLength(70),
+            CellTheme = UiUtil.TableViewNoPaddingCellTheme,
+            HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
+            CellTemplate = new FuncDataTemplate<SubtitleLineViewModel>((value, nameScope) =>
+            {
+                var border = new Border
+                {
+                    Padding = new Thickness(4, 2),
+                    [!Border.BackgroundProperty] = MakeErrorCellBackgroundBinding(brushProperty),
+                };
+
+                border.Child = new TextBlock
+                {
+                    VerticalAlignment = VerticalAlignment.Center,
+                    [!TextBlock.TextProperty] = new Binding(textProperty) { Mode = BindingMode.OneWay },
+                };
+
+                return border;
+            })
+        };
+        column.Bind(SeTableViewColumn.IsVisibleProperty, new Binding(visibleProperty)
+        {
+            Mode = BindingMode.OneWay,
+            Source = vm,
+        });
+
+        return column;
+    }
+
+    private static void AddCustomSearchMenuItem(MenuItem parent, MainViewModel vm, string textProperty, string visibleProperty, ICommand command)
+    {
+        var item = new MenuItem
+        {
+            [!MenuItem.HeaderProperty] = new Binding(textProperty),
+            [!Visual.IsVisibleProperty] = new Binding(visibleProperty),
+            Command = command,
+            DataContext = vm,
+        };
+        parent.Items.Add(item);
+    }
+
     // Stable keys (DataGridColumn.Tag) used to snapshot/restore subtitle grid column
     // widths across restarts. Headers are localized, so they can't be used as keys (#11415).
     internal static class SubtitleGridColumnKeys
@@ -1872,11 +2326,15 @@ public static partial class InitListViewAndEditBox
         public const string Start = "Start";
         public const string End = "End";
         public const string Duration = "Duration";
+        public const string Teletext = "Teletext";
+        public const string Forced = "Forced";
         public const string Text = "Text";
         public const string OriginalText = "OriginalText";
         public const string Style = "Style";
         public const string WebVttStyle = "WebVttStyle";
         public const string Gap = "Gap";
+        public const string ShotIn = "ShotIn";
+        public const string ShotOut = "ShotOut";
         public const string Actor = "Actor";
         public const string WebVttVoice = "WebVttVoice";
         public const string Cps = "Cps";
@@ -1941,9 +2399,15 @@ public static partial class InitListViewAndEditBox
             Mode = BindingMode.TwoWay
         };
         textBox[AutomationProperties.NameProperty] = Se.Language.General.Text;
+        textBox[!Visual.EffectProperty] = new Binding(nameof(vm.SubtitleTextEffect)) { Source = vm, Mode = BindingMode.OneWay };
 
-        // A reference-only row has no translation text to edit - typing would make it a real line.
-        textBox.Bind(TextBox.IsReadOnlyProperty, new Binding(nameof(vm.IsSelectedLineReferenceOnly))
+        // A reference-only row IS editable: typing the missing translation into it is how the line
+        // is adopted from the reference - the first character promotes the row to an ordinary
+        // working line (see MainViewModel.SubtitleTextChanged, #13594).
+        //
+        // In "Edit original" mode, though, the original is the file being worked on, so the
+        // working text box goes read-only to keep the two sides apart.
+        textBox.Bind(TextBox.IsReadOnlyProperty, new Binding(nameof(vm.IsEditOriginalMode))
         {
             Mode = BindingMode.OneWay,
             Source = vm
@@ -1966,6 +2430,53 @@ public static partial class InitListViewAndEditBox
     /// </summary>
 
     /// <summary>
+    /// The row that hosts the edit section. It is a fixed Pixel row, not Auto: an Auto row takes
+    /// the desired height of its content, and the wrapping text box has no height cap, so pasting
+    /// a long text made the whole section grow downward into the subtitle grid (#14834). A Pixel
+    /// row clips the box to the row and it scrolls internally instead, as in SE4. The splitter
+    /// still resizes it (it only ever produced Pixel rows anyway - Auto became Pixel on the first
+    /// drag, which is why the growth stopped after one resize). Seeded with the floor; the first
+    /// layout pass replaces both with the measured value (TrackEditSectionMinimumHeight), which is
+    /// exactly what the Auto row used to settle at, so the default look is unchanged.
+    /// </summary>
+    private static RowDefinition MakeEditSectionRow(MainViewModel? vm)
+    {
+        var floor = EditGridMinimumHeight + EditGridMargin * 2;
+        var row = new RowDefinition(new GridLength(floor, GridUnitType.Pixel)) { MinHeight = floor };
+        if (vm != null)
+        {
+            row.Height = KeepUserEditSectionHeight(vm, row.Height, floor);
+            vm.EditSectionRow = row;
+        }
+
+        return row;
+    }
+
+    /// <summary>
+    /// The height for a freshly built edit section row: the previous row's height when the user
+    /// dragged it taller than its floor, otherwise <paramref name="defaultHeight"/>. Every layout
+    /// rebuild (Settings OK/Apply, layout switch, undock) creates a new row, so without this the
+    /// text box snapped back to its minimum size (#15318). A row still at its floor is the
+    /// untouched seed and is not carried over, so the new row keeps tracking the measured floor.
+    /// </summary>
+    private static GridLength KeepUserEditSectionHeight(MainViewModel vm, GridLength defaultHeight, double floor)
+    {
+        var oldRow = vm.EditSectionRow;
+        if (oldRow == null || !oldRow.Height.IsAbsolute)
+        {
+            return defaultHeight;
+        }
+
+        var oldHeight = oldRow.Height.Value;
+        if (oldHeight <= oldRow.MinHeight + 0.5 || oldHeight <= floor)
+        {
+            return defaultHeight;
+        }
+
+        return new GridLength(oldHeight, GridUnitType.Pixel);
+    }
+
+    /// <summary>
     /// Keeps the edit section's drag floor equal to what the section actually needs: the text
     /// box's own minimum plus the "Text" header and the "Line length / Total chars" panel that
     /// sit above and below it. Those two rows are Auto, so their height follows the UI font -
@@ -1973,9 +2484,21 @@ public static partial class InitListViewAndEditBox
     /// small the text box (which cannot shrink past its MinHeight) overflows its row and draws
     /// over the labels (#10271). Measured rather than stored: this is a derived layout fact,
     /// not something a user should configure.
+    /// <para>
+    /// The up/down column to the left counts too. Since the row became a fixed Pixel row
+    /// (#14834) it no longer grows to the tallest column the way the old Auto row did, so a
+    /// floor derived from the text column alone let three or four stacked up/downs (End time
+    /// switched on, or the ASSA Layer control) run past the row and draw over whatever sits
+    /// below the edit box. The column's own extent is read from its arranged children rather
+    /// than its DesiredSize, which is clamped to the space the row offered.
+    /// </para>
     /// </summary>
     private static void TrackEditSectionMinimumHeight(Grid mainGrid, Grid textEditGrid)
     {
+        var timeControlsPanel = (textEditGrid.Parent as Grid)?.Children
+            .OfType<StackPanel>()
+            .FirstOrDefault(p => p.Name == TimeControlsPanelName);
+
         textEditGrid.LayoutUpdated += (_, _) =>
         {
             if (textEditGrid.RowDefinitions.Count < 3)
@@ -1991,15 +2514,60 @@ public static partial class InitListViewAndEditBox
             }
 
             var needed = SubtitleTextBoxMinimumHeight + labelRows + EditGridMargin * 2;
+            var timeControlsNeeded = GetTimeControlsMinimumHeight(timeControlsPanel);
+            if (timeControlsNeeded > needed)
+            {
+                needed = timeControlsNeeded;
+            }
+
             var row = mainGrid.RowDefinitions[1];
 
             // Only react to a real change - assigning MinHeight re-triggers layout, so an
             // unconditional write here would spin.
             if (Math.Abs(row.MinHeight - needed) > 0.5)
             {
+                // Lift the fixed row along with its floor when it sits at (or below) the old
+                // floor - that is the untouched seed from MakeEditSectionRow, or a row the user
+                // dragged down to the limit before the UI font grew. A row the user dragged
+                // taller than the floor is left alone.
+                if (row.Height.IsAbsolute && row.Height.Value <= row.MinHeight + 0.5 && row.Height.Value < needed)
+                {
+                    row.Height = new GridLength(needed, GridUnitType.Pixel);
+                }
+
                 row.MinHeight = needed;
             }
         };
+    }
+
+    /// <summary>
+    /// Height the edit section needs for the up/down column: the bottom edge of its lowest
+    /// visible child (the column stacks Start/End/Duration/Layer top-down, so that is its
+    /// content extent even when the row it was arranged in is shorter) plus the panel's
+    /// margin and the section margin. Zero when nothing is laid out yet.
+    /// </summary>
+    private static double GetTimeControlsMinimumHeight(StackPanel? timeControlsPanel)
+    {
+        if (timeControlsPanel == null)
+        {
+            return 0;
+        }
+
+        var bottom = 0.0;
+        foreach (var child in timeControlsPanel.Children)
+        {
+            if (child.IsVisible && child.Bounds.Bottom > bottom)
+            {
+                bottom = child.Bounds.Bottom;
+            }
+        }
+
+        if (bottom <= 0)
+        {
+            return 0;
+        }
+
+        return bottom + timeControlsPanel.Margin.Top + timeControlsPanel.Margin.Bottom + EditGridMargin * 2;
     }
 
     private static TextBox MakeSubtitleTextBox()
@@ -2020,6 +2588,19 @@ public static partial class InitListViewAndEditBox
         textBox.IsUndoEnabled = false;
         textBox.ClearSelectionOnLostFocus = false;
 
+        // Give the vertical scrollbar its own column instead of overlaying the text: an
+        // auto-hiding scrollbar is drawn on top of the end of each wrapped line, hiding the
+        // last letters and stealing the clicks meant to select them (#15033).
+        ScrollViewer.SetAllowAutoHide(textBox, false);
+
+        // Pasted text goes straight into the paragraph via the two-way binding, so its line
+        // breaks must be SE's own - see TextBoxPasteNormalizer (#13591).
+        TextBoxPasteNormalizer.NormalizeLineBreaksOnPaste(textBox);
+
+        // Drag a selection out of one edit box and drop it into the other, or move it within
+        // the same box - as SE4's edit boxes allowed (#14534).
+        TextBoxTextDragDrop.Attach(textBox);
+
         if (appearance.SubtitleTextBoxCenterText)
         {
             textBox.TextAlignment = TextAlignment.Center;
@@ -2027,7 +2608,7 @@ public static partial class InitListViewAndEditBox
 
         if (!string.IsNullOrEmpty(appearance.SubtitleTextBoxAndGridFontName))
         {
-            textBox.FontFamily = new FontFamily(appearance.SubtitleTextBoxAndGridFontName);
+            textBox.FontFamily = FontFamilyHelper.Make(appearance.SubtitleTextBoxAndGridFontName);
         }
 
         return textBox;
@@ -2040,6 +2621,7 @@ public static partial class InitListViewAndEditBox
         {
             Mode = BindingMode.TwoWay
         };
+        textBox[!Visual.EffectProperty] = new Binding(nameof(vm.SubtitleTextEffect)) { Source = vm, Mode = BindingMode.OneWay };
 
         // An original opened as a read-only reference must not be typed into (issue #13449).
         textBox.Bind(TextBox.IsReadOnlyProperty, new Binding(nameof(vm.IsOriginalReadOnly))

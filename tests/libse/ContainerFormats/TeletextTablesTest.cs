@@ -1,0 +1,96 @@
+using Nikse.SubtitleEdit.Core.ContainerFormats.TransportStream;
+
+namespace LibSETests.ContainerFormats;
+
+public class TeletextTablesTest
+{
+    // RemapG0Charset patches a national subset into the decoder's own copy of the Latin G0
+    // row, so a later decode of a different file must get an untouched copy, and the shared
+    // G0 table must not change - or the previous file's national characters leak into it.
+    [Fact]
+    public void CreateLatinG0Row_ReturnsIndependentCopyOfTheLatinRow()
+    {
+        var latin = (int)TeletextTables.G0CharsetsT.Latin;
+        var position = TeletextTables.G0LatinNationalSubsetsPositions[0];
+        var original = TeletextTables.G0[latin, position];
+
+        var row = TeletextTables.CreateLatinG0Row();
+        Assert.Equal(original, row[position]);
+
+        row[position] = 0x0141; // Ł - pretend a Polish stream was decoded
+
+        Assert.Equal(original, TeletextTables.G0[latin, position]);
+        Assert.Equal(original, TeletextTables.CreateLatinG0Row()[position]);
+    }
+
+    // The X/28 and M/29 charset designation field is 7 bits wide (0..127), but the subset
+    // map only defines the first 56 ids - the decoder must treat the rest as unmapped
+    // rather than index out of range.
+    [Fact]
+    public void G0LatinNationalSubsetsMap_CoversOnlyDefinedDesignations()
+    {
+        Assert.Equal(56, TeletextTables.G0LatinNationalSubsetsMap.Length);
+    }
+
+    // ETS 300 706, chapter 8.3 - a triplet written by ManzanitaTeletextWriter has to survive
+    // the decoder, including its single bit error correction.
+    [Theory]
+    [InlineData(0x00000)]
+    [InlineData(0x3ffff)]
+    [InlineData(0x05937)] // set active position, row 15 column 11
+    [InlineData(0x2ABC3)] // a G2 character
+    public void Hamming2418_RoundTrips(int value)
+    {
+        var encoded = TeletextHamming.Hamming2418Encode(value);
+
+        Assert.Equal((uint)value, TeletextHamming.UnHamming2418(encoded));
+        for (var bit = 0; bit < 24; bit++)
+        {
+            Assert.Equal((uint)value, TeletextHamming.UnHamming2418(encoded ^ (1 << bit)));
+        }
+    }
+
+    // Teletext is not ASCII: the Latin G0 set keeps "£" at 0x23 and puts "#" at 0x5f, and it has
+    // no code at all for "[", "]" or "{" to "~".
+    [Fact]
+    public void TryGetLatinG0Code_UsesTheTeletextCodes()
+    {
+        Assert.True(TeletextTables.TryGetLatinG0Code('#', out var hash));
+        Assert.Equal(0x5f, hash);
+        Assert.True(TeletextTables.TryGetLatinG0Code('\u00a3', out var pound));
+        Assert.Equal(0x23, pound);
+        Assert.False(TeletextTables.TryGetLatinG0Code('[', out _));
+        Assert.False(TeletextTables.TryGetLatinG0Code('~', out _));
+    }
+
+    [Fact]
+    public void TryGetG2Replacement_FindsG2CharactersAndDiacriticalMarks()
+    {
+        Assert.True(TeletextTables.TryGetG2Replacement('\u266a', out var note));
+        Assert.Equal(TeletextTables.G2Mode, note.Mode);
+        Assert.Equal(0x55, note.Data);
+
+        Assert.True(TeletextTables.TryGetG2Replacement('\u00e4', out var aUmlaut));
+        Assert.Equal(0x18, aUmlaut.Mode);
+        Assert.Equal((byte)'a', aUmlaut.Data);
+
+        // A plain space is in the G2 table three times over, and needs no enhancement.
+        Assert.False(TeletextTables.TryGetG2Replacement(' ', out _));
+    }
+    // ETS 300 706, chapter 12.4, table 30. Entries 0-7 have to keep the exact values the decoder
+    // used before there was a colour map, or every existing teletext subtitle changes colour.
+    [Fact]
+    public void DefaultColorMap_KeepsTheLevel1Colors()
+    {
+        var level1 = new[] { "#000000", "#ff0000", "#00ff00", "#ffff00", "#0000ff", "#ff00ff", "#00ffff", "#ffffff" };
+
+        Assert.Equal(32, TeletextTables.DefaultColorMap.Length);
+        for (var i = 0; i < level1.Length; i++)
+        {
+            Assert.Equal(level1[i], TeletextTables.ColorToHtml(TeletextTables.DefaultColorMap[i]));
+        }
+
+        // CLUT 2 entry 1 is the orange a broadcaster reaches for; ZDF redefines it to #ff8822.
+        Assert.Equal("#ff7700", TeletextTables.ColorToHtml(TeletextTables.DefaultColorMap[17]));
+    }
+}

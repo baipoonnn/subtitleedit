@@ -1,71 +1,80 @@
-﻿using Avalonia.Controls;
+﻿using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Input.Platform;
 using Avalonia.Media.Imaging;
+using Nikse.SubtitleEdit.Logic.Config;
 using System;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Nikse.SubtitleEdit.Logic;
 
-public static class ClipboardHelper
+public static partial class ClipboardHelper
 {
     // Win32 API declarations
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool OpenClipboard(IntPtr hWndNewOwner);
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool OpenClipboard(IntPtr hWndNewOwner);
 
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool CloseClipboard();
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CloseClipboard();
 
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool EmptyClipboard();
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool EmptyClipboard();
 
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr SetClipboardData(uint uFormat, IntPtr hMem);
+    [LibraryImport("user32.dll", SetLastError = true)]
+    private static partial IntPtr SetClipboardData(uint uFormat, IntPtr hMem);
 
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern uint RegisterClipboardFormatW([MarshalAs(UnmanagedType.LPWStr)] string lpszFormat);
+    [LibraryImport("user32.dll", SetLastError = true)]
+    private static partial uint RegisterClipboardFormatW([MarshalAs(UnmanagedType.LPWStr)] string lpszFormat);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr GlobalLock(IntPtr hMem);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial IntPtr GlobalLock(IntPtr hMem);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool GlobalUnlock(IntPtr hMem);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GlobalUnlock(IntPtr hMem);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr GlobalFree(IntPtr hMem);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial IntPtr GlobalFree(IntPtr hMem);
 
-    [DllImport("gdi32.dll")]
-    private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+    [LibraryImport("gdi32.dll")]
+    private static partial IntPtr CreateCompatibleDC(IntPtr hdc);
 
-    [DllImport("gdi32.dll")]
-    private static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFO pbmi, uint usage, out IntPtr ppvBits, IntPtr hSection, uint offset);
+    [LibraryImport("gdi32.dll")]
+    private static partial IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFO pbmi, uint usage, out IntPtr ppvBits, IntPtr hSection, uint offset);
 
-    [DllImport("gdi32.dll")]
-    private static extern IntPtr SelectObject(IntPtr hdc, IntPtr h);
+    [LibraryImport("gdi32.dll")]
+    private static partial IntPtr SelectObject(IntPtr hdc, IntPtr h);
 
-    [DllImport("gdi32.dll")]
-    private static extern bool DeleteObject(IntPtr ho);
+    [LibraryImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool DeleteObject(IntPtr ho);
 
-    [DllImport("gdi32.dll")]
-    private static extern bool DeleteDC(IntPtr hdc);
+    [LibraryImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool DeleteDC(IntPtr hdc);
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetDC(IntPtr hwnd);
+    [LibraryImport("user32.dll")]
+    private static partial IntPtr GetDC(IntPtr hwnd);
 
-    [DllImport("user32.dll")]
-    private static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
+    [LibraryImport("user32.dll")]
+    private static partial int ReleaseDC(IntPtr hwnd, IntPtr hdc);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct BITMAPINFO
     {
         public BITMAPINFOHEADER bmiHeader;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 1)]
-        public RGBQUAD[] bmiColors;
+        public RGBQUAD bmiColors;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -97,9 +106,15 @@ public static class ClipboardHelper
     private const uint GMEM_MOVEABLE = 0x0002;
     private const int BI_RGB = 0;
 
-    public static async Task SetTextAsync(Window window, string text)
+    public static async Task SetTextAsync(Visual visual, string text)
     {
-        var clipboard = TopLevel.GetTopLevel(window)?.Clipboard;
+        if (OperatingSystem.IsLinux() && Se.Settings.General.LinuxClipboardUseExternalTool &&
+            await TrySetTextLinuxExternalToolAsync(text))
+        {
+            return;
+        }
+
+        var clipboard = TopLevel.GetTopLevel(visual)?.Clipboard;
         if (clipboard != null)
         {
             try
@@ -122,7 +137,99 @@ public static class ClipboardHelper
         }
     }
 
-    // GetTextAsync 
+    // Tools found missing (Process.Start threw) - not retried for the rest of the session.
+    private static bool _xclipMissing;
+    private static bool _wlCopyMissing;
+
+    /// <summary>
+    /// Copy text via xclip (X11/XWayland) or wl-copy (Wayland) instead of Avalonia's X11 clipboard.
+    /// Avalonia serves the X11 "STRING" target with Encoding.ASCII (ICCCM says Latin-1), so apps
+    /// that request that target get every non-ASCII character as '?' - "posição" pasted as
+    /// "posi??o" (issue #15488). Returns false when neither tool is available or both fail, so
+    /// the caller can fall back to Avalonia.
+    /// </summary>
+    private static async Task<bool> TrySetTextLinuxExternalToolAsync(string text)
+    {
+        var hasX11 = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DISPLAY"));
+        var hasWayland = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY"));
+
+        // SE is an X11 client (XWayland under a Wayland session), so prefer xclip: it owns the
+        // same selection SE reads back on paste, and wl-copy on GNOME needs a focus-stealing
+        // helper surface because mutter lacks the data-control protocol.
+        if (hasX11 && !_xclipMissing &&
+            await TryRunClipboardToolAsync("xclip", ["-selection", "clipboard", "-i"], text, () => _xclipMissing = true))
+        {
+            return true;
+        }
+
+        if (hasWayland && !_wlCopyMissing &&
+            await TryRunClipboardToolAsync("wl-copy", [], text, () => _wlCopyMissing = true))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static async Task<bool> TryRunClipboardToolAsync(string fileName, string[] arguments, string text, Action markMissing)
+    {
+        // stdout/stderr are deliberately not redirected: xclip and wl-copy fork a background
+        // child that keeps serving the selection, and that child would inherit the pipes.
+        var psi = new ProcessStartInfo
+        {
+            FileName = fileName,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardInput = true,
+        };
+        foreach (var argument in arguments)
+        {
+            psi.ArgumentList.Add(argument);
+        }
+
+        Process? process;
+        try
+        {
+            process = Process.Start(psi);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Clipboard tool {fileName} not available: {ex.Message}");
+            markMissing();
+            return false;
+        }
+
+        if (process == null)
+        {
+            return false;
+        }
+
+        using (process)
+        {
+            try
+            {
+                // Write UTF-8 bytes ourselves: StandardInput's encoding follows the process
+                // locale, which may not be UTF-8 (e.g. LANG=C).
+                using (var stdin = process.StandardInput.BaseStream)
+                {
+                    var bytes = Encoding.UTF8.GetBytes(text);
+                    await stdin.WriteAsync(bytes);
+                }
+
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                await process.WaitForExitAsync(cts.Token);
+                return process.ExitCode == 0;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Clipboard tool {fileName} failed: {ex.Message}");
+                try { process.Kill(); } catch { }
+                return false;
+            }
+        }
+    }
+
+    // GetTextAsync
     public static async Task<string?> GetTextAsync(Window window)
     {
         var clipboard = TopLevel.GetTopLevel(window)?.Clipboard;
@@ -306,16 +413,24 @@ public static class ClipboardHelper
             var tempPath = Path.Combine(Path.GetTempPath(), $"clipboard_{Guid.NewGuid()}.png");
             bitmap.Save(tempPath, PngBitmapEncoderOptions.Default);
 
-            // Try xclip first
+            // Build the argument vector rather than a command line: with UseShellExecute=false
+            // there is no shell, so on Unix .NET only honours " and \ - the single quotes were
+            // passed to xclip as part of the file name, and "<" reached wl-copy as a literal
+            // argument instead of redirecting stdin. Both silently did nothing.
             var psi = new ProcessStartInfo
             {
                 FileName = "xclip",
-                Arguments = $"-selection clipboard -t image/png -i '{tempPath}'",
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             };
+            psi.ArgumentList.Add("-selection");
+            psi.ArgumentList.Add("clipboard");
+            psi.ArgumentList.Add("-t");
+            psi.ArgumentList.Add("image/png");
+            psi.ArgumentList.Add("-i");
+            psi.ArgumentList.Add(tempPath);
 
             try
             {
@@ -332,13 +447,23 @@ public static class ClipboardHelper
             }
             catch
             {
-                // If xclip fails, try wl-copy (Wayland)
+                // If xclip fails, try wl-copy (Wayland). It reads the image from stdin, so feed
+                // the file in ourselves - there is no shell to do the redirect for us.
                 psi.FileName = "wl-copy";
-                psi.Arguments = $"--type image/png < '{tempPath}'";
+                psi.ArgumentList.Clear();
+                psi.ArgumentList.Add("--type");
+                psi.ArgumentList.Add("image/png");
+                psi.RedirectStandardInput = true;
 
                 using var process = Process.Start(psi);
                 if (process != null)
                 {
+                    using (var stdin = process.StandardInput.BaseStream)
+                    using (var pngFile = File.OpenRead(tempPath))
+                    {
+                        await pngFile.CopyToAsync(stdin);
+                    }
+
                     await process.WaitForExitAsync();
 
                     await Task.Delay(500);
@@ -365,12 +490,16 @@ public static class ClipboardHelper
             var psi = new ProcessStartInfo
             {
                 FileName = "osascript",
-                Arguments = $"-e 'set the clipboard to (read (POSIX file \"{tempPath}\") as «class PNGf»)'",
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             };
+
+            // One -e argument, passed whole. As a command line the outer single quotes were
+            // literal and the script was split on spaces, so osascript never compiled it.
+            psi.ArgumentList.Add("-e");
+            psi.ArgumentList.Add($"set the clipboard to (read (POSIX file \"{tempPath}\") as «class PNGf»)");
 
             using var process = Process.Start(psi);
             if (process != null)

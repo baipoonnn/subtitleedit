@@ -31,7 +31,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                         p.EndTime.ToHHMMSSFF(),
                         actor,
                         text,
-                        bool.TryParse(p.Effect, out var s) ? s.ToString().ToUpperInvariant() : "False"));
+                        bool.TryParse(p.Effect, out var s) && s ? "True" : "False"));
             }
 
             return sb.ToString().Trim();
@@ -43,13 +43,30 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             var csvLines = ReadCsvLines(lines, ',');
             foreach (var line in csvLines)
             {
+                if (line.Text == null)
+                {
+                    // No text column at this index: the file is some other csv dialect. Count it
+                    // as an error so IsMine (paragraphs > errors) stops claiming those files and
+                    // importing every cue with blank text.
+                    _errorCount++;
+                    if (_errorCount > 10)
+                    {
+                        return;
+                    }
+
+                    continue;
+                }
+
                 if (ParseTimeCode(line.Start, out var start) &&
                     ParseTimeCode(line.End, out var end))
                 {
-                    var p = new Paragraph(start, end, line.Text)
+                    // A row with fewer columns than this layout expects (any other csv
+                    // dialect) never assigns Text, and a Paragraph with a null Text makes
+                    // everything downstream - the grid, saving, RemoveEmptyLines - throw.
+                    var p = new Paragraph(start, end, line.Text ?? string.Empty)
                     {
                         Actor = line.Character,
-                        Effect = line.Play.ToString().ToUpperInvariant()
+                        Effect = line.Play ? "True" : "False"
                     };
                     subtitle.Paragraphs.Add(p);
                 }
@@ -93,15 +110,17 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             return false;
         }
 
-        private List<UnknownFormatImporterCsv.CsvLine> ReadCsvLines(List<string> lines, char separator)
+        // Lazy: LoadSubtitle stops after 10 bad rows, so a large file that is not this kind of
+        // csv (any text file reaching this format during auto-detect) is no longer split into
+        // csv rows in full first.
+        private static IEnumerable<UnknownFormatImporterCsv.CsvLine> ReadCsvLines(List<string> lines, char separator)
         {
             const int startIndex = 1;
             const int endIndex = 2;
             const int characterIndex = 3;
             const int textIndex = 4;
             const int playIndex = 5;
-            var csvLines = new List<UnknownFormatImporterCsv.CsvLine>();
-            var linesArray = CsvUtil.CsvSplitLines(lines.Where(p => !string.IsNullOrEmpty(p)).ToList(), separator);
+            var linesArray = CsvUtil.CsvSplitLinesLazy(lines.Where(p => !string.IsNullOrEmpty(p)), separator);
 
             foreach (var fields in linesArray)
             {
@@ -126,15 +145,13 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                     csvLine.Text = fields[textIndex];
                 }
 
-                if (playIndex < fields.Count && bool.TryParse(fields[textIndex], out var doPlay))
+                if (playIndex < fields.Count && bool.TryParse(fields[playIndex], out var doPlay))
                 {
                     csvLine.Play = doPlay;
                 }
 
-                csvLines.Add(csvLine);
+                yield return csvLine;
             }
-
-            return csvLines;
         }
     }
 }

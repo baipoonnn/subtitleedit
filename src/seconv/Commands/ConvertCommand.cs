@@ -1,10 +1,12 @@
-using Nikse.SubtitleEdit.Core.Common;
+﻿using Nikse.SubtitleEdit.Core.Common;
+using Nikse.SubtitleEdit.UiLogic.Export;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using SeConv.Core;
+using SeConv.Helpers;
 
 namespace SeConv.Commands;
 
@@ -95,11 +97,11 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
         public bool PlainTextNoBlankLine { get; init; }
 
         [CommandOption("--ocr-engine|--ocrengine")]
-        [Description("OCR engine: tesseract | nocr | binaryocr | ollama | llamacpp | paddle (default: tesseract)")]
+        [Description("OCR engine: tesseract | nocr | binaryocr | ollama | llamacpp | paddle | applevision (default: tesseract)")]
         public string? OcrEngine { get; init; }
 
         [CommandOption("--ocr-language|--ocrlanguage")]
-        [Description("Language for OCR (Tesseract: ISO 639-2 like eng/deu; Paddle: en/de; Ollama/llama.cpp: human name like English)")]
+        [Description("Language for OCR (Tesseract: ISO 639-2 like eng/deu; Paddle: en/de; Ollama/llama.cpp: human name like English; Apple Vision: en-US/de-DE)")]
         public string? OcrLanguage { get; init; }
 
         [CommandOption("--ocr-db|--ocrdb")]
@@ -114,12 +116,16 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
         [Description("llama.cpp OCR: endpoint of an already-running llama-server; skips the local auto-start")]
         public string? OcrUrl { get; init; }
 
+        [CommandOption("--ocr-prompt|--ocrprompt")]
+        [Description("Prompt for --ocr-engine=llamacpp/ollama (or a path to a text file holding it); {language} is replaced with --ocr-language. Default: the same prompt as the OCR window")]
+        public string? OcrPrompt { get; init; }
+
         [CommandOption("--dictionary-folder|--dictionaryfolder")]
         [Description("Folder with Hunspell dictionaries + *_OCRFixReplaceList.xml; enables the 'Fix common OCR errors' pass of --fix-common-errors")]
         public string? DictionaryFolder { get; init; }
 
         [CommandOption("--time-codes-only|--timecodesonly")]
-        [Description("For image-based sources (.sup, VobSub .sub/.idx, MKV PGS/VobSub, MP4 VobSub, TS DVB-sub): output time codes only with empty text; skips OCR (no OCR engine required)")]
+        [Description("For image-based sources (.sup, VobSub .sub/.idx, MKV PGS/VobSub, MP4 VobSub, TS DVB-sub, .avi XSUB): output time codes only with empty text; skips OCR (no OCR engine required)")]
         public bool TimeCodesOnly { get; init; }
 
         [CommandOption("--no-vobsub-isolate-colors|--novobsubisolatecolors")]
@@ -127,8 +133,12 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
         public bool NoVobSubIsolateColors { get; init; }
 
         [CommandOption("--no-pgs-isolate-colors|--nopgsisolatecolors")]
-        [Description("Disable PGS/DVB-sub OCR colour isolation (on by default)")]
+        [Description("Disable PGS/DVB-sub OCR colour isolation (on by default, except for --ocr-engine:applevision, nocr and binaryocr)")]
         public bool NoPgsIsolateColors { get; init; }
+
+        [CommandOption("--ocr-auto-detect-assa-alignment|--ocrautodetectassaalignment")]
+        [Description("OCR: add an ASSA alignment tag ({\\an8} = top centre, ...) from where each image sits in the video frame - same as 'Auto-detect ASSA alignment' in the OCR window. Bottom-centre lines get no tag")]
+        public bool OcrAutoDetectAssaAlignment { get; init; }
 
         [CommandOption("--ollama-url")]
         [Description("Ollama API endpoint (default: http://localhost:11434/api/chat)")]
@@ -139,7 +149,7 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
         public string? OllamaModel { get; init; }
 
         [CommandOption("--translate-to|--translateto")]
-        [Description("Auto-translate to this language (code or English name, e.g. de or German); enables translation")]
+        [Description("Auto-translate to this language (code or English name, e.g. de or German); enables translation. Several comma separated (de,fr,da) give one output per language")]
         public string? TranslateTo { get; init; }
 
         [CommandOption("--translate-from|--translatefrom")]
@@ -158,9 +168,17 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
         [Description("Translate model: ollama/lmstudio model name, or llamacpp .gguf file name/path (default: first downloaded translate model)")]
         public string? TranslateModel { get; init; }
 
+        [CommandOption("--translate-prompt|--translateprompt")]
+        [Description("Prompt for llamacpp/ollama/lmstudio: inline text (\\n = line break) or a path to a text file; {0}=source language, {1}=target language, {2}=the text (completion-format models)")]
+        public string? TranslatePrompt { get; init; }
+
         [CommandOption("--offset")]
         [Description("Offset time (hh:mm:ss:ms)")]
         public string? Offset { get; init; }
+
+        [CommandOption("--output-filename-append|--outputfilenameappend")]
+        [Description("Text appended to the output file name stem, e.g. \"_fixed\" turns movie.ts into movie_fixed.srt (ignored with --output-filename)")]
+        public string? OutputFilenameAppend { get; init; }
 
         [CommandOption("--output-filename|--outputfilename")]
         [Description("Output file name (for single file only)")]
@@ -174,9 +192,21 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
         [Description("Overwrite existing files")]
         public bool Overwrite { get; init; }
 
+        [CommandOption("--no-language-suffix|--nolanguagesuffix")]
+        [Description("Do not insert the language code before the extension (movie.srt instead of movie.en.srt) - with --overwrite and --translate-to the source file is translated in place")]
+        public bool NoLanguageSuffix { get; init; }
+
+        [CommandOption("--keep-timestamp|--keep-timestamps")]
+        [Description("Give output files the source file's modified/created date instead of now")]
+        public bool KeepTimestamp { get; init; }
+
         [CommandOption("--pac-codepage")]
         [Description("PAC code page")]
         public string? PacCodepage { get; init; }
+
+        [CommandOption("--pac-secondary-codepage")]
+        [Description("PAC secondary code page, for lines in another script (e.g. Cyrillic lines in a Hebrew file)")]
+        public string? PacSecondaryCodepage { get; init; }
 
         [CommandOption("--profile")]
         [Description("Profile name")]
@@ -257,7 +287,7 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
         public string? Alignment { get; init; }
 
         [CommandOption("--content-alignment|--contentalignment")]
-        [Description("Image output: multi-line text justification: left | center (default) | right")]
+        [Description("Image output: multi-line text justification: left | center (default) | right | from-alignment")]
         public string? ContentAlignment { get; init; }
 
         [CommandOption("--bottom-top-margin|--bottomtopmargin")]
@@ -267,6 +297,30 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
         [CommandOption("--left-right-margin|--leftrightmargin")]
         [Description("Image output: horizontal screen-edge margin in pixels (default: 5% of width)")]
         public int? LeftRightMargin { get; init; }
+
+        [CommandOption("--override-position|--overrideposition")]
+        [Description("Image → image output (DVB-sub/PGS/VobSub pass-through): ignore the source bitmap position and place it by --alignment and margins: x | y | xy")]
+        public string? OverridePosition { get; init; }
+
+        [CommandOption("--full-frame|--fullframe")]
+        [Description("Image output: draw each subtitle on a frame-sized image (place at 0,0 in an editing timeline). Only fcpimage and bluraysup use it")]
+        public bool FullFrame { get; init; }
+
+        [CommandOption("--full-frame-background-color|--fullframebackgroundcolor")]
+        [Description("Image output: background of the full frame image (default: transparent)")]
+        public string? FullFrameBackgroundColor { get; init; }
+
+        [CommandOption("--mode-3d|--mode3d")]
+        [Description("Image output: draw each subtitle for frame-packed 3D video, once per eye: none | half-side-by-side (sbs) | half-top-bottom (tab). Also for image → image")]
+        public string? Mode3D { get; init; }
+
+        [CommandOption("--depth-3d|--depth3d")]
+        [Description("Image output: 3D depth in pixels, -100 to 100; positive brings the subtitle out of the screen (default: 0). D-Cinema writes it as the Z-position")]
+        public int? Depth3D { get; init; }
+
+        [CommandOption("--plane-3d|--plane3d")]
+        [Description("Image output: 3D Blu-ray 3D-Plane (.ofs) - each subtitle gets the depth of the frames it is shown on; --depth-3d is used where it has none")]
+        public string? Plane3D { get; init; }
 
         [CommandOption("--teletext-only|--teletextonly")]
         [Description("Teletext only")]
@@ -399,25 +453,43 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
             // Validate input
             if (settings.Pattern.Length == 0)
             {
-                AnsiConsole.MarkupLine("[red]Error: Pattern is required[/]");
-                return 1;
+                return Fail(settings, "Pattern is required.");
             }
 
             if (string.IsNullOrWhiteSpace(settings.Format))
             {
-                AnsiConsole.MarkupLine("[red]Error: Format is required. Use --format <name> or pass it as the second positional argument (e.g. seconv *.srt sami)[/]");
-                return 1;
+                return Fail(
+                    settings,
+                    "Format is required. Use --format <name> or pass it as the second positional argument (e.g. seconv *.srt sami). " +
+                    "List the valid names with: seconv formats --json");
             }
 
-            // Validate --ocr-engine: tesseract | nocr | binaryocr | ollama | llamacpp | paddle
-            var supportedEngines = new[] { "tesseract", "nocr", "binaryocr", "binary", "ollama", "llamacpp", "llama.cpp", "llama", "paddle", "paddleocr" };
+            // Validate --ocr-engine: tesseract | nocr | binaryocr | ollama | llamacpp | paddle | applevision
+            var supportedEngines = new[] { "tesseract", "nocr", "binaryocr", "binary", "ollama", "llamacpp", "llama.cpp", "llama", "paddle", "paddleocr", "applevision", "apple-vision" };
             if (!string.IsNullOrWhiteSpace(settings.OcrEngine) &&
                 !supportedEngines.Contains(settings.OcrEngine, StringComparer.OrdinalIgnoreCase))
             {
-                AnsiConsole.MarkupLine(
-                    $"[red]Error: OCR engine '{settings.OcrEngine.EscapeMarkup()}' is not supported (pass via --ocr-engine). " +
-                    "Use one of: tesseract, nocr, binaryocr, ollama, llamacpp, paddle.[/]");
-                return 1;
+                return Fail(
+                    settings,
+                    $"OCR engine '{settings.OcrEngine}' is not supported (pass via --ocr-engine). " +
+                    "Use one of: tesseract, nocr, binaryocr, ollama, llamacpp, paddle, applevision.");
+            }
+
+            // Apple Vision is macOS-only, and returns nothing for a language it does not know.
+            // Check both before the first file: at OCR time a failure only surfaces as a
+            // per-track warning, and a wrong language as a run of empty subtitles.
+            if (!settings.TimeCodesOnly &&
+                !string.IsNullOrWhiteSpace(settings.OcrEngine) &&
+                settings.OcrEngine.Trim().ToLowerInvariant() is "applevision" or "apple-vision")
+            {
+                try
+                {
+                    AppleVisionOcrEngine.Create(settings.OcrLanguage).Dispose();
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Fail(settings, ex.Message);
+                }
             }
 
             // --ocr-model/--ocr-url only apply to the llama.cpp OCR engine - fail fast instead
@@ -426,8 +498,30 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
                                 settings.OcrEngine.Trim().ToLowerInvariant() is "llamacpp" or "llama.cpp" or "llama";
             if ((!string.IsNullOrWhiteSpace(settings.OcrModel) || !string.IsNullOrWhiteSpace(settings.OcrUrl)) && !isLlamaCppOcr)
             {
-                AnsiConsole.MarkupLine("[red]Error: --ocr-model/--ocr-url require --ocr-engine:llamacpp.[/]");
-                return 1;
+                return Fail(settings, "--ocr-model/--ocr-url require --ocr-engine:llamacpp.");
+            }
+
+            // --ocr-prompt only means something to the two prompt-driven OCR engines; tesseract,
+            // nOCR, binary image compare and Paddle have no prompt at all. Fail instead of
+            // silently ignoring it, and read the prompt (it may be a file) up front so a typo'd
+            // path never costs a conversion - same contract as --translate-prompt.
+            if (!string.IsNullOrWhiteSpace(settings.OcrPrompt))
+            {
+                var isOllamaOcr = !string.IsNullOrWhiteSpace(settings.OcrEngine) &&
+                                  settings.OcrEngine.Trim().Equals("ollama", StringComparison.OrdinalIgnoreCase);
+                if (!isLlamaCppOcr && !isOllamaOcr)
+                {
+                    return Fail(settings, "--ocr-prompt requires --ocr-engine:llamacpp or --ocr-engine:ollama.");
+                }
+
+                try
+                {
+                    AutoTranslateRunner.ReadPromptOption(settings.OcrPrompt, "--ocr-prompt", "{language}");
+                }
+                catch (Exception ex)
+                {
+                    return Fail(settings, ex.Message);
+                }
             }
 
             // Validate the translate options: --translate-to is the trigger, the rest refine it.
@@ -435,20 +529,43 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
                 (!string.IsNullOrWhiteSpace(settings.TranslateFrom) ||
                  !string.IsNullOrWhiteSpace(settings.TranslateEngine) ||
                  !string.IsNullOrWhiteSpace(settings.TranslateUrl) ||
-                 !string.IsNullOrWhiteSpace(settings.TranslateModel)))
+                 !string.IsNullOrWhiteSpace(settings.TranslateModel) ||
+                 !string.IsNullOrWhiteSpace(settings.TranslatePrompt)))
             {
-                AnsiConsole.MarkupLine("[red]Error: --translate-from/--translate-engine/--translate-url/--translate-model require --translate-to:<language>.[/]");
-                return 1;
+                return Fail(settings, "--translate-from/--translate-engine/--translate-url/--translate-model/--translate-prompt require --translate-to:<language>.");
             }
 
             if (!string.IsNullOrWhiteSpace(settings.TranslateEngine) &&
                 !AutoTranslateRunner.SupportedEngines.Contains(settings.TranslateEngine.Trim(), StringComparer.OrdinalIgnoreCase) &&
                 !settings.TranslateEngine.Trim().Equals("llama.cpp", StringComparison.OrdinalIgnoreCase))
             {
-                AnsiConsole.MarkupLine(
-                    $"[red]Error: Translate engine '{settings.TranslateEngine.EscapeMarkup()}' is not supported (pass via --translate-engine). " +
-                    $"Use one of: {string.Join(", ", AutoTranslateRunner.SupportedEngines)}.[/]");
-                return 1;
+                return Fail(
+                    settings,
+                    $"Translate engine '{settings.TranslateEngine}' is not supported (pass via --translate-engine). " +
+                    $"Use one of: {string.Join(", ", AutoTranslateRunner.SupportedEngines)}.");
+            }
+
+            // --translate-prompt only means something to the LLM engines; the translation
+            // services have no prompt at all. Fail instead of silently ignoring it, and read
+            // the prompt (it may be a file) up front so a typo'd path never costs a conversion.
+            if (!string.IsNullOrWhiteSpace(settings.TranslatePrompt))
+            {
+                if (!AutoTranslateRunner.SupportsPrompt(settings.TranslateEngine))
+                {
+                    return Fail(
+                        settings,
+                        $"--translate-prompt is not supported by translate engine '{settings.TranslateEngine}'. " +
+                        $"Use one of: {string.Join(", ", AutoTranslateRunner.PromptEngines)}.");
+                }
+
+                try
+                {
+                    AutoTranslateRunner.ReadPromptOption(settings.TranslatePrompt);
+                }
+                catch (Exception ex)
+                {
+                    return Fail(settings, ex.Message);
+                }
             }
 
             // Fail fast on a typo in --encoding so we don't silently substitute UTF-8 and
@@ -458,10 +575,10 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
                 !LibSEIntegration.IsSourceEncodingSentinel(settings.Encoding) &&
                 !LibSEIntegration.TryGetEncoding(settings.Encoding, out _))
             {
-                AnsiConsole.MarkupLine(
-                    $"[red]Error: Unknown encoding '{settings.Encoding.EscapeMarkup()}' for --encoding.[/]");
-                AnsiConsole.MarkupLine("[dim]Use 'seconv list-encodings' to see supported encodings, or 'source' to keep the input file's encoding.[/]");
-                return 1;
+                return Fail(
+                    settings,
+                    $"Unknown encoding '{settings.Encoding}' for --encoding. " +
+                    "List the supported encodings with: seconv list-encodings --json. Use 'source' to keep the input file's encoding.");
             }
 
             // Fail fast on a typo in --input-encoding-fallback so we don't silently substitute
@@ -469,10 +586,10 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
             if (!string.IsNullOrWhiteSpace(settings.InputEncodingFallback) &&
                 !LibSEIntegration.TryGetEncoding(settings.InputEncodingFallback, out _))
             {
-                AnsiConsole.MarkupLine(
-                    $"[red]Error: Unknown encoding '{settings.InputEncodingFallback.EscapeMarkup()}' for --input-encoding-fallback.[/]");
-                AnsiConsole.MarkupLine("[dim]Use 'seconv list-encodings' to see supported encodings.[/]");
-                return 1;
+                return Fail(
+                    settings,
+                    $"Unknown encoding '{settings.InputEncodingFallback}' for --input-encoding-fallback. " +
+                    "List the supported encodings with: seconv list-encodings --json");
             }
 
             // Load --settings:path.json overrides into libse Configuration before any conversion.
@@ -509,14 +626,12 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
                 }
                 catch (Exception ex)
                 {
-                    AnsiConsole.MarkupLineInterpolated($"[red]Error loading --settings file: {ex.Message}[/]");
-                    return 1;
+                    return Fail(settings, $"Loading --settings file: {ex.Message}");
                 }
             }
             else if (!string.IsNullOrWhiteSpace(settings.Profile))
             {
-                AnsiConsole.MarkupLine("[red]Error: --profile requires --settings:<path.json>[/]");
-                return 1;
+                return Fail(settings, "--profile requires --settings:<path.json>");
             }
 
             // Image styling flags override the settings JSON. Unlike the JSON (which only warns
@@ -524,13 +639,12 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
             var imageStyleError = ApplyImageStyleFlags(settings, imageStyle);
             if (imageStyleError != null)
             {
-                AnsiConsole.MarkupLineInterpolated($"[red]Error: {imageStyleError}[/]");
-                return 1;
+                return Fail(settings, imageStyleError);
             }
 
             // Must run after the --settings JSON is applied: a bare --apply-min-gap takes its
             // value from libse's (possibly overridden) MinimumMillisecondsBetweenLines.
-            if (!TryResolveApplyMinGap(settings, silent, out var applyMinGapMs))
+            if (!TryResolveApplyMinGap(settings, out var applyMinGapMs))
             {
                 return 1;
             }
@@ -547,8 +661,7 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
                 }
                 catch (ArgumentException ex)
                 {
-                    AnsiConsole.MarkupLineInterpolated($"[red]Error: {ex.Message}[/]");
-                    return 1;
+                    return Fail(settings, ex.Message);
                 }
 
                 // A supplied --fce-language that can't be resolved falls back to auto-detect;
@@ -576,8 +689,7 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
                 }
                 catch (ArgumentException ex)
                 {
-                    AnsiConsole.MarkupLineInterpolated($"[red]Error: {ex.Message}[/]");
-                    return 1;
+                    return Fail(settings, ex.Message);
                 }
             }
 
@@ -614,8 +726,7 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
             // Validate --change-speed (must be > 0; 100 means no change)
             if (settings.ChangeSpeed.HasValue && settings.ChangeSpeed.Value <= 0)
             {
-                AnsiConsole.MarkupLine($"[red]Error: --change-speed must be greater than 0 (got {settings.ChangeSpeed.Value}).[/]");
-                return 1;
+                return Fail(settings, $"--change-speed must be greater than 0 (got {settings.ChangeSpeed.Value}).");
             }
 
             // Parse offset if supplied
@@ -628,8 +739,7 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
                 }
                 catch (FormatException ex)
                 {
-                    AnsiConsole.MarkupLineInterpolated($"[red]Error: {ex.Message}[/]");
-                    return 1;
+                    return Fail(settings, ex.Message);
                 }
             }
 
@@ -643,8 +753,7 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
                 }
                 catch (FormatException ex)
                 {
-                    AnsiConsole.MarkupLineInterpolated($"[red]Error: {ex.Message}[/]");
-                    return 1;
+                    return Fail(settings, ex.Message);
                 }
             }
 
@@ -658,8 +767,20 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
                 }
                 catch (FormatException ex)
                 {
-                    AnsiConsole.MarkupLineInterpolated($"[red]Error: {ex.Message}[/]");
-                    return 1;
+                    return Fail(settings, ex.Message);
+                }
+            }
+
+            int? pacSecondaryCodePage = null;
+            if (!string.IsNullOrWhiteSpace(settings.PacSecondaryCodepage))
+            {
+                try
+                {
+                    pacSecondaryCodePage = PacCodepageParser.Parse(settings.PacSecondaryCodepage);
+                }
+                catch (FormatException ex)
+                {
+                    return Fail(settings, ex.Message);
                 }
             }
 
@@ -671,11 +792,14 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
                 InputFolder = settings.InputFolder,
                 OutputFolder = settings.OutputFolder,
                 OutputFilename = settings.OutputFilename,
+                OutputFilenameAppend = settings.OutputFilenameAppend,
                 Encoding = settings.Encoding,
                 InputEncodingFallback = settings.InputEncodingFallback,
                 Fps = settings.Fps,
                 TargetFps = settings.TargetFps,
                 Overwrite = settings.Overwrite,
+                NoLanguageSuffix = settings.NoLanguageSuffix,
+                KeepTimestamp = settings.KeepTimestamp,
                 Operations = operations,
                 FixCommonErrorsRules = fceRules,
                 FixCommonErrorsLanguage = settings.FixCommonErrorsLanguage,
@@ -693,6 +817,7 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
                 ImageStyle = imageStyle,
                 AssaStyleFile = settings.AssaStyleFile,
                 PacCodePage = pacCodePage,
+                PacSecondaryCodePage = pacSecondaryCodePage,
                 EbuHeaderFile = settings.EbuHeaderFile,
                 MultipleReplaceFile = settings.MultipleReplace,
                 CustomFormatFile = settings.CustomFormat,
@@ -702,21 +827,35 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
                 TrackNumbers = ParseTrackNumbers(settings.TrackNumber),
                 ForcedOnly = settings.ForcedOnly,
                 OcrEngine = string.IsNullOrWhiteSpace(settings.OcrEngine) ? "tesseract" : settings.OcrEngine,
-                OcrLanguage = settings.OcrLanguage ?? "eng",
+                // No "eng" here: the engines take different code sets (Tesseract "eng", Paddle
+                // "en", Ollama/llama.cpp a human name like "English") and each has its own
+                // default. Forcing Tesseract's on all of them made "--ocr-engine:paddle" run
+                // paddleocr with "--lang eng", which it rejects, failing the whole conversion.
+                OcrLanguage = settings.OcrLanguage,
                 OcrDb = settings.OcrDb,
                 DictionaryFolder = settings.DictionaryFolder,
                 TimeCodesOnly = settings.TimeCodesOnly,
                 VobSubIsolateColors = !settings.NoVobSubIsolateColors,
-                PgsIsolateColors = !settings.NoPgsIsolateColors,
+                // Apple Vision reads the original PGS/DVB-sub images better than binarised ones -
+                // binarising costs it umlauts and trailing punctuation - and the GUI never
+                // binarises for it either, so isolation stays off for that engine.
+                // nOCR and BinaryOCR split letters on the alpha channel of the original image
+                // (like the GUI's nOCR/BinaryOCR loops); the opaque black-on-white isolated
+                // bitmap leaves nothing to split, so every line came out as "*".
+                PgsIsolateColors = !settings.NoPgsIsolateColors &&
+                                   settings.OcrEngine?.Trim().ToLowerInvariant() is not ("applevision" or "apple-vision" or "nocr" or "binaryocr" or "binary"),
+                OcrAutoDetectAssaAlignment = settings.OcrAutoDetectAssaAlignment,
                 OllamaUrl = settings.OllamaUrl,
                 OllamaModel = settings.OllamaModel,
                 OcrUrl = settings.OcrUrl,
                 OcrModel = settings.OcrModel,
+                OcrPrompt = AutoTranslateRunner.ReadPromptOption(settings.OcrPrompt, "--ocr-prompt", "{language}"),
                 TranslateTo = settings.TranslateTo,
                 TranslateFrom = settings.TranslateFrom,
                 TranslateEngine = settings.TranslateEngine,
                 TranslateUrl = settings.TranslateUrl,
                 TranslateModel = settings.TranslateModel,
+                TranslatePrompt = settings.TranslatePrompt,
                 TeletextOnly = settings.TeletextOnly,
                 TeletextOnlyPage = settings.TeletextOnlyPage,
                 Quiet = silent,
@@ -728,52 +867,9 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
             var extension = LibSEIntegration.GetExtensionForFormat(settings.Format);
             var formatDisplay = $"{normalizedFormat} (*{extension})";
 
-            var table = new Table();
-            table.AddColumn("[yellow]Parameter[/]");
-            table.AddColumn("[green]Value[/]");
-            table.AddRow("Pattern", string.Join(", ", settings.Pattern));
-            table.AddRow("Format", formatDisplay);
-
-            if (!string.IsNullOrEmpty(settings.InputFolder))
-                table.AddRow("Input Folder", settings.InputFolder);
-
-            if (!string.IsNullOrEmpty(settings.OutputFolder))
-                table.AddRow("Output Folder", settings.OutputFolder);
-
-            if (settings.Fps.HasValue)
-                table.AddRow("FPS", settings.Fps.Value.ToString());
-
-            if (settings.TargetFps.HasValue)
-                table.AddRow("Target FPS", settings.TargetFps.Value.ToString());
-
-            if (!string.IsNullOrEmpty(settings.Encoding))
-                table.AddRow("Encoding", settings.Encoding);
-
-            if (string.IsNullOrEmpty(settings.Encoding) && !string.IsNullOrEmpty(settings.InputEncodingFallback))
-                table.AddRow("Input encoding fallback", settings.InputEncodingFallback);
-
-            if (operations.Count > 0)
-                table.AddRow("Operations", string.Join(", ", operations));
-
-            if (!string.IsNullOrWhiteSpace(settings.TranslateTo))
-            {
-                var translateEngine = string.IsNullOrWhiteSpace(settings.TranslateEngine) ? "llamacpp" : settings.TranslateEngine.Trim().ToLowerInvariant();
-                var translateFrom = string.IsNullOrWhiteSpace(settings.TranslateFrom) ? "auto" : settings.TranslateFrom;
-                table.AddRow("Translate", $"{translateFrom} -> {settings.TranslateTo} ({translateEngine})");
-            }
-
-            if (settings.DeleteFirst.HasValue)
-                table.AddRow("Delete First", settings.DeleteFirst.Value.ToString());
-
-            if (settings.DeleteLast.HasValue)
-                table.AddRow("Delete Last", settings.DeleteLast.Value.ToString());
-
-            if (!string.IsNullOrEmpty(settings.DeleteContains))
-                table.AddRow("Delete Contains", settings.DeleteContains);
-
             if (!silent)
             {
-                AnsiConsole.Write(table);
+                AnsiConsole.Write(BuildSummaryTable(settings, operations, formatDisplay));
                 AnsiConsole.WriteLine();
             }
 
@@ -850,18 +946,100 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
         {
             if (settings.Json)
             {
-                Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { error = ex.Message }));
+                // The failure envelope goes to stdout like every other --json document: a
+                // caller reading stdout should never have to fall back to stderr to find out
+                // that the run failed.
+                return Fail(settings, ex.InnerException != null
+                    ? $"{ex.Message}: {ex.InnerException.Message}"
+                    : ex.Message);
             }
-            else
+
+            AnsiConsole.MarkupLineInterpolated($"[red]Error: {ex.Message}[/]");
+            if (ex.InnerException != null)
             {
-                AnsiConsole.MarkupLineInterpolated($"[red]Error: {ex.Message}[/]");
-                if (ex.InnerException != null)
-                {
-                    AnsiConsole.MarkupLineInterpolated($"[dim]{ex.InnerException.Message}[/]");
-                }
+                AnsiConsole.MarkupLineInterpolated($"[dim]{ex.InnerException.Message}[/]");
             }
             return 1;
         }
+    }
+
+    /// <summary>
+    /// Builds the "Parameter / Value" table shown before a conversion. Every user-supplied
+    /// value is escaped: Spectre parses table cells as markup, so an unescaped path such as
+    /// "input [test].json" threw "Could not find color or style 'test'" (issue #14692).
+    /// </summary>
+    internal static Table BuildSummaryTable(Settings settings, IReadOnlyList<string> operations, string formatDisplay)
+    {
+        var table = new Table();
+        table.AddColumn("[yellow]Parameter[/]");
+        table.AddColumn("[green]Value[/]");
+        AddRow(table, "Pattern", string.Join(", ", settings.Pattern));
+        AddRow(table, "Format", formatDisplay);
+
+        if (!string.IsNullOrEmpty(settings.InputFolder))
+            AddRow(table, "Input Folder", settings.InputFolder);
+
+        if (!string.IsNullOrEmpty(settings.OutputFolder))
+            AddRow(table, "Output Folder", settings.OutputFolder);
+
+        if (settings.Fps.HasValue)
+            AddRow(table, "FPS", settings.Fps.Value.ToString());
+
+        if (settings.TargetFps.HasValue)
+            AddRow(table, "Target FPS", settings.TargetFps.Value.ToString());
+
+        if (!string.IsNullOrEmpty(settings.Encoding))
+            AddRow(table, "Encoding", settings.Encoding);
+
+        if (string.IsNullOrEmpty(settings.Encoding) && !string.IsNullOrEmpty(settings.InputEncodingFallback))
+            AddRow(table, "Input encoding fallback", settings.InputEncodingFallback);
+
+        if (operations.Count > 0)
+            AddRow(table, "Operations", string.Join(", ", operations));
+
+        if (!string.IsNullOrWhiteSpace(settings.TranslateTo))
+        {
+            var translateEngine = string.IsNullOrWhiteSpace(settings.TranslateEngine) ? "llamacpp" : settings.TranslateEngine.Trim().ToLowerInvariant();
+            var translateFrom = string.IsNullOrWhiteSpace(settings.TranslateFrom) ? "auto" : settings.TranslateFrom;
+            var customPrompt = string.IsNullOrWhiteSpace(settings.TranslatePrompt) ? string.Empty : ", custom prompt";
+            AddRow(table, "Translate", $"{translateFrom} -> {settings.TranslateTo} ({translateEngine}{customPrompt})");
+        }
+
+        if (settings.DeleteFirst.HasValue)
+            AddRow(table, "Delete First", settings.DeleteFirst.Value.ToString());
+
+        if (settings.DeleteLast.HasValue)
+            AddRow(table, "Delete Last", settings.DeleteLast.Value.ToString());
+
+        if (!string.IsNullOrEmpty(settings.DeleteContains))
+            AddRow(table, "Delete Contains", settings.DeleteContains);
+
+        return table;
+    }
+
+    private static void AddRow(Table table, string name, string value)
+    {
+        table.AddRow(new Text(name), new Text(value));
+    }
+
+    /// <summary>
+    /// Reports a validation failure and returns exit code 1. Under <c>--json</c> the message
+    /// goes out in the same envelope a failed conversion uses, so a caller parsing stdout gets
+    /// one document shape on every path instead of JSON on success and plain text on a bad
+    /// option value.
+    /// </summary>
+    private static int Fail(Settings settings, string message)
+    {
+        if (settings.Json)
+        {
+            Console.Out.WriteLine(JsonOut.UsageError(message));
+        }
+        else
+        {
+            AnsiConsole.MarkupLineInterpolated($"[red]Error: {message}[/]");
+        }
+
+        return 1;
     }
 
     private static void PrintWarnings(ConversionResult result)
@@ -914,8 +1092,9 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
     /// A bare --apply-min-gap uses libse's MinimumMillisecondsBetweenLines, so it follows the
     /// --settings JSON. Returns false when the value is unusable, after printing the error.
     /// </summary>
-    private static bool TryResolveApplyMinGap(Settings settings, bool silent, out int? gapMs)
+    private static bool TryResolveApplyMinGap(Settings settings, out int? gapMs)
     {
+        var silent = settings.Quiet || settings.Json;
         gapMs = null;
         if (settings.ApplyMinGap?.IsSet != true)
         {
@@ -932,8 +1111,7 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
 
         if (!int.TryParse(raw.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var ms))
         {
-            AnsiConsole.MarkupLineInterpolated(
-                $"[red]Error: --apply-min-gap expects a value in milliseconds, got '{raw}'.[/]");
+            Fail(settings, $"--apply-min-gap expects a value in milliseconds, got '{raw}'.");
             return false;
         }
 
@@ -1090,7 +1268,7 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
         {
             if (!ImageExportStyle.TryParseContentAlignment(settings.ContentAlignment, out var contentAlignment))
             {
-                return $"Unknown content alignment '{settings.ContentAlignment}' for --content-alignment. Use: left, center, or right.";
+                return $"Unknown content alignment '{settings.ContentAlignment}' for --content-alignment. Use: left, center, right, or from-alignment.";
             }
             style.ContentAlignment = contentAlignment;
         }
@@ -1103,6 +1281,76 @@ internal sealed class ConvertCommand : AsyncCommand<ConvertCommand.Settings>
         if (settings.LeftRightMargin.HasValue)
         {
             style.LeftRightMargin = settings.LeftRightMargin.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(settings.OverridePosition))
+        {
+            switch (settings.OverridePosition.Trim().ToLowerInvariant())
+            {
+                case "x":
+                    style.OverridePositionX = true;
+                    break;
+                case "y":
+                    style.OverridePositionY = true;
+                    break;
+                case "xy":
+                case "yx":
+                case "both":
+                    style.OverridePositionX = true;
+                    style.OverridePositionY = true;
+                    break;
+                default:
+                    return $"Unknown value '{settings.OverridePosition}' for --override-position. Use: x, y, or xy.";
+            }
+        }
+
+        if (settings.FullFrame)
+        {
+            style.IsFullFrame = true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(settings.FullFrameBackgroundColor))
+        {
+            if (!ImageExportStyle.TryParseColor(settings.FullFrameBackgroundColor, out var fullFrameBackgroundColor))
+            {
+                return $"Unknown colour '{settings.FullFrameBackgroundColor}' for --full-frame-background-color.";
+            }
+            style.FullFrameBackgroundColor = fullFrameBackgroundColor;
+        }
+
+        if (!string.IsNullOrWhiteSpace(settings.Mode3D))
+        {
+            if (!ImageExportStyle.TryParseMode3D(settings.Mode3D, out var mode3D))
+            {
+                return $"Unknown value '{settings.Mode3D}' for --mode-3d. Use: none, half-side-by-side, or half-top-bottom.";
+            }
+            style.Mode3D = mode3D;
+        }
+
+        if (settings.Depth3D.HasValue)
+        {
+            if (!ImageExportStyle.IsValidDepth3D(settings.Depth3D.Value))
+            {
+                return $"--depth-3d must be between -100 and 100, got {settings.Depth3D.Value}.";
+            }
+            style.Depth3D = settings.Depth3D.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(settings.Plane3D))
+        {
+            if (!File.Exists(settings.Plane3D))
+            {
+                return $"3D-Plane file not found: {settings.Plane3D}";
+            }
+
+            try
+            {
+                style.Plane3D = Stereo3DPlane.Load(settings.Plane3D);
+            }
+            catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
+            {
+                return $"Unable to read 3D-Plane '{settings.Plane3D}': {exception.Message}";
+            }
         }
 
         return null;

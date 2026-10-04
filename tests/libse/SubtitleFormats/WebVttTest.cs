@@ -45,6 +45,20 @@ public class WebVttTest
     }
 
     [Fact]
+    public void LoadSubtitleDropsDuplicateCueWithIdenticalTimeCodesAndText()
+    {
+        // A file made of two concatenated WebVTT segments repeats the same cue (same number, same
+        // times, same text) - that is a duplicate, not a second line, so it must not be stacked.
+        var vtt = "WEBVTT\r\nX-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000\r\n\r\nSTYLE\r\n::cue(.styledotebebeb) { color:#ebebeb }\r\n\r\n" +
+                  "14\r\n00:12:58.333 --> 00:13:00.125 align:middle line:85%,start position:50%,middle\r\n<c.styledotebebeb>Do not translate this.</c>\r\n\r\n" +
+                  "WEBVTT\r\nX-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000\r\n\r\nSTYLE\r\n::cue(.styledotebebeb) { color:#ebebeb }\r\n\r\n" +
+                  "14\r\n00:12:58.333 --> 00:13:00.125 align:middle line:85%,start position:50%,middle\r\n<c.styledotebebeb>Do not translate this.</c>";
+        var subtitle = LoadWebVttSubtitle(vtt);
+        Assert.Single(subtitle.Paragraphs);
+        Assert.Equal("<c.styledotebebeb>Do not translate this.</c>", subtitle.Paragraphs[0].Text);
+    }
+
+    [Fact]
     public void LoadSubtitleSupportsHourlessEndTimestamp()
     {
         // WebVTT allows each timestamp independently to omit the hour part
@@ -75,6 +89,79 @@ public class WebVttTest
         Assert.Equal(2, subtitle.Paragraphs.Count);
         Assert.Equal("Hello", subtitle.Paragraphs[0].Text);
         Assert.Equal("World", subtitle.Paragraphs[1].Text);
+    }
+
+    // A cue split horizontally into two halves of the same line (#10444) sits on one row -
+    // different position%, near-identical line% - and must still be merged.
+    [Fact]
+    public void LoadSubtitleMergesCuesSplitHorizontallyOnTheSameRow()
+    {
+        var vtt = "WEBVTT\r\n\r\n" +
+                  "00:00:41.166 --> 00:00:44.461 position:36.67%,start align:start size:36.67% line:79.29%\r\nSo you've come\r\n\r\n" +
+                  "00:00:41.166 --> 00:00:44.461 position:23.33%,start align:start size:61.43% line:84.62%\r\nto the master for guidance?";
+        var subtitle = LoadWebVttSubtitle(vtt);
+
+        // The second half keeps the {\an1} its own position% earns - pre-existing, not what this covers.
+        Assert.Single(subtitle.Paragraphs);
+        Assert.Equal("So you've come" + Environment.NewLine + "{\\an1}to the master for guidance?", subtitle.Paragraphs[0].Text);
+    }
+
+    // A caption pinned to the top of the screen over the dialogue below it shares the time codes but not
+    // the placement - merging them leaves a single alignment for both, so one of the two lands in the
+    // wrong half of the screen.
+    [Fact]
+    public void LoadSubtitleDoesNotMergeCuesPlacedFarApartVertically()
+    {
+        var vtt = "WEBVTT\r\n\r\n" +
+                  "00:09:48.666 --> 00:09:50.600 position:50.00%,middle align:middle size:80.00% line:79.33%\r\nLook at Lori's Snapmatic.\r\n\r\n" +
+                  "00:09:48.666 --> 00:09:50.600 position:50.00%,middle align:middle size:80.00% line:10.00%\r\n[INTERACTION PROMPT: HOLD HANDS]";
+        var subtitle = LoadWebVttSubtitle(vtt);
+
+        Assert.Equal(2, subtitle.Paragraphs.Count);
+        Assert.Equal("Look at Lori's Snapmatic.", subtitle.Paragraphs[0].Text);
+        Assert.Equal("{\\an8}[INTERACTION PROMPT: HOLD HANDS]", subtitle.Paragraphs[1].Text);
+    }
+
+    // A three-row caption reaches the top row of the pair one comparison at a time, so every row of it
+    // still ends up in one paragraph even though the first and the last are more than a row apart.
+    [Fact]
+    public void LoadSubtitleMergesAllRowsOfACaptionSpanningThreeRows()
+    {
+        var vtt = "WEBVTT\r\n\r\n" +
+                  "00:00:01.000 --> 00:00:04.000 line:74.00%\r\nRow one\r\n\r\n" +
+                  "00:00:01.000 --> 00:00:04.000 line:79.33%\r\nRow two\r\n\r\n" +
+                  "00:00:01.000 --> 00:00:04.000 line:84.67%\r\nRow three";
+        var subtitle = LoadWebVttSubtitle(vtt);
+
+        // The top row carries the {\an5} its own line% earns from GetPositionInfo's 75% band -
+        // pre-existing, and unchanged by the merge check.
+        Assert.Single(subtitle.Paragraphs);
+        Assert.Equal("{\\an5}Row one" + Environment.NewLine + "Row two" + Environment.NewLine + "Row three", subtitle.Paragraphs[0].Text);
+    }
+
+    [Theory]
+    [InlineData("line:10.00%", "line:20.00%", 1)]   // consecutive rows near the top
+    [InlineData("line:79.33%", "line:84.67%", 1)]   // consecutive rows at the bottom
+    [InlineData("line:74.00%", "line:79.33%", 1)]   // consecutive rows either side of the middle of the screen
+    [InlineData("", "", 1)]                         // no cue settings at all - neither says where it sits
+    [InlineData("line:79.33%", "", 1)]              // only one of the two says where it sits
+    [InlineData("line:auto", "line:10.00%", 1)]     // "auto" says nothing we can compare
+    [InlineData("line:-2", "line:-1", 1)]           // consecutive rows counted from the bottom
+    [InlineData("line:10.00%", "line:84.67%", 2)]   // top of the screen vs bottom
+    [InlineData("line:10.00%", "line:50.00%", 2)]   // top vs the middle
+    [InlineData("line:50.00%", "line:84.67%", 2)]   // middle vs the bottom
+    [InlineData("line:0", "line:16", 2)]            // line numbers instead of percentages
+    [InlineData("line:-16", "line:79.33%", 2)]      // a negative line number counts from the bottom: -16 is the top
+    [InlineData("line:-2,start", "line:-1,start", 1)] // the spec's alignment suffix rides along on line numbers too
+    [InlineData("line:0,start", "line:-1,end", 2)]  // top vs bottom, both spelled with an alignment suffix
+    public void LoadSubtitleMergesOnlyCuesPlacedCloseTogetherVertically(string firstCueSettings, string secondCueSettings, int expectedCount)
+    {
+        var vtt = "WEBVTT\r\n\r\n" +
+                  "00:00:01.000 --> 00:00:04.000 " + firstCueSettings + "\r\nHello\r\n\r\n" +
+                  "00:00:01.000 --> 00:00:04.000 " + secondCueSettings + "\r\nWorld";
+        var subtitle = LoadWebVttSubtitle(vtt);
+
+        Assert.Equal(expectedCount, subtitle.Paragraphs.Count);
     }
 
     // Regression coverage for https://github.com/SubtitleEdit/subtitleedit/issues/10676
@@ -190,6 +277,63 @@ public class WebVttTest
         Assert.DoesNotContain("<c.", converted);
         Assert.Contains("<font color=\"#008000\">", converted);
         Assert.Contains("</font>", converted);
+    }
+
+    // #15125: streaming services put one class with the player's near-white text color on every
+    // cue. That is not formatting worth keeping, so the SubRip text must come out clean.
+    [Fact]
+    public void RemoveNativeFormatting_OnlyNearWhiteRgbaColor_AddsNoFontTags()
+    {
+        const string c = "<c.background-color_transparent.color_EBEBEB.font-family_default.font-style_normal.font-weight_normal.text-shadow_#101010-1px>";
+        var vtt = "WEBVTT\r\n\r\nSTYLE\r\n" +
+                  "::cue(.background-color_transparent) {\r\n  background-color: rgba(255,255,255,0.0);\r\n}\r\n" +
+                  "::cue(.color_EBEBEB) {\r\n  color: rgba(235,235,235,1.000000);\r\n}\r\n" +
+                  "::cue(.font-style_normal) {\r\n  font-style: normal;\r\n}\r\n" +
+                  "::cue(.text-shadow_#101010-1px) {\r\n  text-shadow: #101010 1px;\r\n}\r\n" +
+                  "::cue(.font-style_italic) {\r\n  font-style: italic;\r\n}\r\n\r\n" +
+                  "00:00:06.975 --> 00:00:10.975 line:81.11% align:center\r\n" + c + "First line,\r\nsecond line.</c>\r\n\r\n" +
+                  "00:00:22.558 --> 00:00:23.600 line:85.56% align:center\r\n" + c + "<c.font-style_italic>Italic line.</c></c>\r\n";
+        var subtitle = LoadWebVttSubtitle(vtt);
+
+        new WebVTT().RemoveNativeFormatting(subtitle, new SubRip());
+
+        Assert.Equal("First line," + Environment.NewLine + "second line.", subtitle.Paragraphs[0].Text);
+        Assert.Equal("<i>Italic line.</i>", subtitle.Paragraphs[1].Text);
+    }
+
+    [Fact]
+    public void RemoveNativeFormatting_OnlyNearWhiteNamedColor_AddsNoFontTags()
+    {
+        var vtt = "WEBVTT\r\n\r\nSTYLE\r\n::cue(.gainsboro) { color:gainsboro; }\r\n\r\n" +
+                  "00:00:06.590 --> 00:00:08.592 position:50%\r\n<c.gainsboro>Line one</c>\r\n<c.gainsboro>Line two</c>\r\n\r\n" +
+                  "00:00:08.675 --> 00:00:10.052 position:50%\r\n<c.gainsboro>Line three</c>\r\n";
+        var subtitle = LoadWebVttSubtitle(vtt);
+
+        new WebVTT().RemoveNativeFormatting(subtitle, new SubRip());
+
+        Assert.Equal("Line one" + Environment.NewLine + "Line two", subtitle.Paragraphs[0].Text);
+        Assert.Equal("Line three", subtitle.Paragraphs[1].Text);
+    }
+
+    // A near-white color next to other colors tells speakers apart, so it stays - and a CSS rgba()
+    // value becomes "#RRGGBB", which is what players understand in a font tag.
+    [Fact]
+    public void RemoveNativeFormatting_NearWhiteAmongOtherColors_KeepsFontTagsAsHex()
+    {
+        var vtt = "WEBVTT\r\n\r\nSTYLE\r\n" +
+                  "::cue(.one) { color: rgba(235,235,235,1.000000); }\r\n" +
+                  "::cue(.two) { color: rgb(255, 255, 0); }\r\n" +
+                  "::cue(.hidden) { color: rgba(255,0,0,0.0); }\r\n\r\n" +
+                  "00:00:01.000 --> 00:00:02.000\r\n<c.one>First speaker</c>\r\n\r\n" +
+                  "00:00:03.000 --> 00:00:04.000\r\n<c.two>Second speaker</c>\r\n\r\n" +
+                  "00:00:05.000 --> 00:00:06.000\r\n<c.hidden>Transparent</c>\r\n";
+        var subtitle = LoadWebVttSubtitle(vtt);
+
+        new WebVTT().RemoveNativeFormatting(subtitle, new SubRip());
+
+        Assert.Equal("<font color=\"#EBEBEB\">First speaker</font>", subtitle.Paragraphs[0].Text);
+        Assert.Equal("<font color=\"#FFFF00\">Second speaker</font>", subtitle.Paragraphs[1].Text);
+        Assert.Equal("Transparent", subtitle.Paragraphs[2].Text);
     }
 
     // yt-dlp "--write-auto-subs" output for a YouTube video: roll-up captions where each spoken

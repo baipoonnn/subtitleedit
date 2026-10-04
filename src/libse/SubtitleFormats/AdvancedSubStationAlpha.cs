@@ -82,11 +82,15 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
         public override bool IsMine(List<string> lines, string fileName)
         {
+            if (!SubStationAlpha.HasEvents(lines))
+            {
+                Errors = null;
+                return false; // no event line, no paragraph
+            }
+
             var subtitle = new Subtitle();
 
-            var sb = new StringBuilder();
-            lines.ForEach(line => sb.AppendLine(line));
-            var all = sb.ToString();
+            var all = JoinLines(lines);
             if (!string.IsNullOrEmpty(fileName) && fileName.EndsWith(".ass", StringComparison.OrdinalIgnoreCase) && !all.Contains("[V4 Styles]"))
             {
             }
@@ -107,7 +111,36 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 return true;
             }
 
-            return false;
+            // Styles but no lines yet - a style template, an episode not subtitled yet. It is an
+            // ASSA file; opening it keeps the styles instead of "unknown format".
+            return subtitle.Paragraphs.Count == 0 && _errorCount == 0 && IsStylesOnlyScript(lines);
+        }
+
+        private static bool IsStylesOnlyScript(List<string> lines)
+        {
+            var section = string.Empty;
+            var hasScriptInfo = false;
+            var hasStyle = false;
+            var hasEventsFormat = false;
+            foreach (var line in lines)
+            {
+                var s = line.Trim();
+                if (s.StartsWith('[') && s.EndsWith(']'))
+                {
+                    section = s.ToLowerInvariant();
+                    hasScriptInfo |= section == "[script info]";
+                }
+                else if (section == "[v4+ styles]" && s.StartsWith("Style:", StringComparison.OrdinalIgnoreCase))
+                {
+                    hasStyle = true;
+                }
+                else if (section == "[events]" && s.StartsWith("Format:", StringComparison.OrdinalIgnoreCase))
+                {
+                    hasEventsFormat = true;
+                }
+            }
+
+            return hasScriptInfo && hasStyle && hasEventsFormat;
         }
 
         public static string HeaderNoStyles = @"[Script Info]
@@ -288,7 +321,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
                 // Appending directly skips AppendFormat's per-call format parsing, the object[10]
                 // and the boxed layer, plus the two intermediate time-code strings.
                 sb.Append(p.IsComment ? "Comment: " : "Dialogue: ");
-                sb.Append(p.Layer).Append(',');
+                // InvariantCulture: StringBuilder.Append(int) uses the current culture, and
+                // sv-SE/nb-NO/fi-FI/lt-LT render the negative sign as U+2212, which libass and
+                // VSFilter parse as layer 0 - breaking SE's own Layer = -1000 background boxes
+                // and Layer = -1 progress bars. Every other number on the line is already invariant.
+                sb.Append(p.Layer.ToString(CultureInfo.InvariantCulture)).Append(',');
                 AppendTimeCode(sb, p.StartTime).Append(',');
                 AppendTimeCode(sb, p.EndTime).Append(',');
                 sb.Append(style).Append(',');
@@ -323,7 +360,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
 
             // Trim inside the builder instead of "sb.ToString().Trim() + newline", which
             // allocated the whole multi-megabyte output twice more.
-            TrimBuilder(sb);
+            sb.Trim();
             return sb.Append(Environment.NewLine).ToString();
         }
 
@@ -340,13 +377,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
                 fragment = 0;
             }
 
-            AppendNumber(sb, ts.Days * 24 + ts.Hours, 1);
+            sb.AppendNumber(ts.Days * 24 + ts.Hours, 1);
             sb.Append(':');
-            AppendNumber(sb, ts.Minutes, 2);
+            sb.AppendNumber(ts.Minutes, 2);
             sb.Append(':');
-            AppendNumber(sb, ts.Seconds, 2);
+            sb.AppendNumber(ts.Seconds, 2);
             sb.Append('.');
-            AppendNumber(sb, fragment, 2);
+            sb.AppendNumber(fragment, 2);
             return sb;
         }
 
@@ -366,24 +403,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
             }
 
             sb.Append(span);
-        }
-
-        // Matches "{0:00}"-style formatting: sign first, then the absolute value padded with
-        // leading zeros to minDigits.
-        private static void AppendNumber(StringBuilder sb, int value, int minDigits)
-        {
-            if (value < 0)
-            {
-                sb.Append('-');
-                value = -value;
-            }
-
-            if (minDigits >= 2 && value < 10)
-            {
-                sb.Append('0');
-            }
-
-            sb.Append(value);
         }
 
         public static string GetHeaderAndStylesFromSubStationAlpha(string header)
@@ -457,55 +476,22 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
 
         public static string GetHeaderAndStylesFromAdvancedSubStationAlpha(string header, List<SsaStyle> styles)
         {
-            var scriptInfo = string.Empty;
-            header = FixScriptType(header);
-
-            if (header != null &&
-                header.Contains("[Script Info]") &&
-                header.Contains("ScriptType: v4.00+"))
+            if (styles == null || styles.Count == 0)
             {
-                var sb = new StringBuilder();
-                var scriptInfoOn = false;
-                foreach (var line in header.SplitToLines())
-                {
-                    if (line.RemoveChar(' ').Contains("Styles]", StringComparison.OrdinalIgnoreCase))
-                    {
-                        break;
-                    }
+                return DefaultHeader;
+            }
 
-                    if (line.Equals("[Script Info]", StringComparison.OrdinalIgnoreCase))
-                    {
-                        scriptInfoOn = true;
-                    }
-
-                    if (scriptInfoOn)
-                    {
-                        if (line.StartsWith("ScriptType:", StringComparison.OrdinalIgnoreCase))
-                        {
-                            sb.AppendLine("ScriptType: v4.00+");
-                        }
-                        else if (line.Equals("; This is a Sub Station Alpha v4 script.", StringComparison.OrdinalIgnoreCase))
-                        {
-                            sb.AppendLine("; This is an Advanced Sub Station Alpha v4+ script.");
-                        }
-                        else
-                        {
-                            sb.AppendLine(line);
-                        }
-                    }
-                }
-                scriptInfo = sb.ToString();
+            var scriptInfo = GetScriptInfoForAssHeader(FixScriptType(header));
+            if (string.IsNullOrEmpty(scriptInfo))
+            {
+                // No [Script Info] block to carry over - keep the caller's styles under a stock one.
+                scriptInfo = GetScriptInfoForAssHeader(DefaultHeader);
             }
 
             var style = new StringBuilder();
             foreach (var ssaStyle in styles)
             {
                 style.AppendLine(ssaStyle.ToRawAss());
-            }
-
-            if (string.IsNullOrEmpty(scriptInfo) || style.Length == 0)
-            {
-                return DefaultHeader;
             }
 
             return scriptInfo.Trim() + Environment.NewLine +
@@ -515,6 +501,85 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
                    style.ToString().Trim() + Environment.NewLine +
                    Environment.NewLine +
                    "[Events]";
+        }
+
+        /// <summary>
+        /// The [Script Info] block of <paramref name="header"/> as an ASS header wants it: the
+        /// section name and ScriptType line normalised to "ScriptType: v4.00+", and that line added
+        /// when the file has none. Empty when the header has no [Script Info] section.
+        ///
+        /// Tolerant on purpose: this feeds the styles dialog's OK/Apply, and a header that did
+        /// not spell "[Script Info]" and "ScriptType: v4.00+" exactly used to be thrown away
+        /// wholesale for the stock header, taking every style in the file with it - after which
+        /// every line fell back to "Default" (#15126).
+        /// </summary>
+        private static string GetScriptInfoForAssHeader(string header)
+        {
+            if (string.IsNullOrEmpty(header))
+            {
+                return string.Empty;
+            }
+
+            var sb = new StringBuilder();
+            var scriptInfoOn = false;
+            var hasScriptType = false;
+            foreach (var line in header.SplitToLines())
+            {
+                var trimmed = line.Trim();
+                if (trimmed.RemoveChar(' ').Contains("Styles]", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.Equals("[Events]", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.Equals("[Fonts]", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.Equals("[Graphics]", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (scriptInfoOn)
+                    {
+                        break;
+                    }
+
+                    continue;
+                }
+
+                if (trimmed.Equals("[Script Info]", StringComparison.OrdinalIgnoreCase))
+                {
+                    scriptInfoOn = true;
+                    sb.AppendLine("[Script Info]");
+                    continue;
+                }
+
+                if (!scriptInfoOn)
+                {
+                    continue;
+                }
+
+                if (trimmed.StartsWith("ScriptType:", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!hasScriptType)
+                    {
+                        sb.AppendLine("ScriptType: v4.00+");
+                        hasScriptType = true;
+                    }
+                }
+                else if (trimmed.Equals("; This is a Sub Station Alpha v4 script.", StringComparison.OrdinalIgnoreCase))
+                {
+                    sb.AppendLine("; This is an Advanced Sub Station Alpha v4+ script.");
+                }
+                else
+                {
+                    sb.AppendLine(line);
+                }
+            }
+
+            if (!scriptInfoOn)
+            {
+                return string.Empty;
+            }
+
+            if (!hasScriptType)
+            {
+                sb.AppendLine("ScriptType: v4.00+");
+            }
+
+            return sb.ToString();
         }
 
         private static string FixScriptType(string header)
@@ -584,34 +649,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
                     var spacing = ssaStyle.Spacing.ToString(CultureInfo.InvariantCulture);
                     var angle = ssaStyle.Angle.ToString(CultureInfo.InvariantCulture);
 
-                    var newAlignment = "2";
-                    switch (ssaStyle.Alignment)
-                    {
-                        case "1":
-                            newAlignment = "1";
-                            break;
-                        case "3":
-                            newAlignment = "3";
-                            break;
-                        case "9":
-                            newAlignment = "4";
-                            break;
-                        case "10":
-                            newAlignment = "5";
-                            break;
-                        case "11":
-                            newAlignment = "6";
-                            break;
-                        case "5":
-                            newAlignment = "7";
-                            break;
-                        case "6":
-                            newAlignment = "8";
-                            break;
-                        case "7":
-                            newAlignment = "9";
-                            break;
-                    }
+                    // GetSsaStyle already normalized the [V4 Styles] numbering to "an1"-"an9".
+                    var newAlignment = ssaStyle.Alignment;
 
                     ttStyles.Append("Style: ").Append(ssaStyle.Name).Append(',').Append(ssaStyle.FontName).Append(',').Append(ssaStyle.FontSize.ToString("0.#", CultureInfo.InvariantCulture)).Append(',').Append(GetSsaColorString(ssaStyle.Primary)).Append(',').Append(GetSsaColorString(ssaStyle.Secondary)).Append(',').Append(GetSsaColorString(ssaStyle.Outline)).Append(',').Append(GetSsaColorString(ssaStyle.Background)).Append(',').Append(bold).Append(',').Append(italic).Append(',').Append(underline).Append(",0,").Append(scaleX).Append(',').Append(scaleY).Append(',').Append(spacing).Append(',').Append(angle).Append(',').Append(ssaStyle.BorderStyle).Append(',').Append(ssaStyle.OutlineWidth.ToString(CultureInfo.InvariantCulture)).Append(',').Append(ssaStyle.ShadowWidth.ToString(CultureInfo.InvariantCulture)).Append(',').Append(newAlignment).Append(',').Append(ssaStyle.MarginLeft).Append(',').Append(ssaStyle.MarginRight).Append(',').Append(ssaStyle.MarginVertical).AppendLine(",1");
                 }
@@ -1664,6 +1703,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
             var indexMarginV = 7;
             var indexEffect = 8;
             var indexText = 9;
+
+            // True when the text field is the last field in the "Format:" line, i.e. every
+            // field after it is appended to the text verbatim. That is the case for every real
+            // ASSA/SSA file, and it lets an event line be parsed by walking commas over the
+            // line itself instead of allocating a string[] plus one string per field (and a
+            // second one per Trim) and then re-joining the text field's own commas.
+            var textIsTrailing = true;
             var errors = new StringBuilder();
             var lineNumber = 0;
 
@@ -1808,6 +1854,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
                                     break;
                             }
                         }
+
+                        textIsTrailing = indexText >= 0 &&
+                                         indexText > indexLayer && indexText > indexStart && indexText > indexEnd &&
+                                         indexText > indexStyle && indexText > indexActor && indexText > indexName &&
+                                         indexText > indexMarginL && indexText > indexMarginR && indexText > indexMarginV &&
+                                         indexText > indexEffect;
                     }
                     else if (trimmedLine.Length > 0)
                     {
@@ -1822,75 +1874,107 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
                         var effect = string.Empty;
                         var layer = 0;
 
-                        string[] splitLine;
+                        // Walk the fields over the line itself. Split(',') allocated a string[]
+                        // plus one string per field on every event line, Trim() allocated a
+                        // second one for each field that was kept, and the text field - by far
+                        // the longest - was split apart and re-joined comma by comma. Only the
+                        // fields this format actually uses are materialized now.
+                        ReadOnlySpan<char> fields;
                         if (trimmedLine.StartsWith("dialog:", StringComparison.OrdinalIgnoreCase))
                         {
-                            splitLine = line.Remove(0, 7).Split(',');
+                            fields = line.AsSpan(7);
                         }
                         else if (trimmedLine.StartsWith("dialogue:", StringComparison.OrdinalIgnoreCase))
                         {
-                            splitLine = line.Remove(0, 9).Split(',');
+                            fields = line.AsSpan(9);
                         }
                         else
                         {
-                            splitLine = line.Split(',');
+                            fields = line.AsSpan();
                         }
 
-                        for (var i = 0; i < splitLine.Length; i++)
+                        string text = null;
+                        var fieldStart = 0;
+                        for (var i = 0; ; i++)
                         {
+                            var comma = fields.Slice(fieldStart).IndexOf(',');
+                            var fieldEnd = comma < 0 ? fields.Length : fieldStart + comma;
+
+                            if (textIsTrailing && i == indexText)
+                            {
+                                // Everything from here on is the text, commas included.
+                                text = fields.Slice(fieldStart).ToString();
+                                break;
+                            }
+
+                            var field = fields.Slice(fieldStart, fieldEnd - fieldStart);
                             if (i == indexStart)
                             {
-                                start = splitLine[i].Trim();
+                                start = field.Trim().ToString();
                             }
                             else if (i == indexEnd)
                             {
-                                end = splitLine[i].Trim();
+                                end = field.Trim().ToString();
                             }
                             else if (i == indexStyle)
                             {
-                                style = splitLine[i].Trim();
+                                style = field.Trim().ToString();
                             }
                             else if (i == indexActor && indexName == -1)
                             {
-                                actor = splitLine[i].Trim();
+                                actor = field.Trim().ToString();
                             }
                             else if (i == indexName)
                             {
-                                actor = splitLine[i].Trim();
+                                actor = field.Trim().ToString();
                             }
                             else if (i == indexMarginL)
                             {
-                                marginL = splitLine[i].Trim();
+                                marginL = field.Trim().ToString();
                             }
                             else if (i == indexMarginR)
                             {
-                                marginR = splitLine[i].Trim();
+                                marginR = field.Trim().ToString();
                             }
                             else if (i == indexMarginV)
                             {
-                                marginV = splitLine[i].Trim();
+                                marginV = field.Trim().ToString();
                             }
                             else if (i == indexEffect)
                             {
-                                effect = splitLine[i].Trim();
+                                effect = field.Trim().ToString();
                             }
                             else if (i == indexLayer)
                             {
-                                int.TryParse(splitLine[i].Replace("Comment:", string.Empty).Trim(), out layer);
+                                if (field.IndexOf("Comment:".AsSpan(), StringComparison.Ordinal) >= 0)
+                                {
+                                    int.TryParse(field.ToString().Replace("Comment:", string.Empty).Trim(), out layer);
+                                }
+                                else
+                                {
+                                    int.TryParse(field.Trim(), NumberStyles.Integer, CultureInfo.CurrentCulture, out layer);
+                                }
                             }
                             else if (i == indexText)
                             {
-                                textBuilder.Append(splitLine[i]);
+                                textBuilder.Append(field);
                             }
                             else if (i > indexText)
                             {
                                 // The text field may itself contain commas; rebuild via the
                                 // pooled builder instead of O(commas^2) string concatenation.
-                                textBuilder.Append(',').Append(splitLine[i]);
+                                textBuilder.Append(',').Append(field);
                             }
+
+                            if (comma < 0)
+                            {
+                                break;
+                            }
+
+                            fieldStart = fieldEnd + 1;
                         }
 
-                        var text = textBuilder.ToString();
+                        text ??= textBuilder.ToString();
 
                         try
                         {
@@ -2148,6 +2232,46 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
             }
         }
 
+        /// <summary>
+        /// Removes the comments from ASSA text, keeping the override tags: renderers never draw a
+        /// {...} block, so fansubbers use {comment} for notes, which must not end up in an export
+        /// to a format where a brace is real text (#15584). "{note}" is removed, "{note\i1}"
+        /// becomes "{\i1}" (the tags of a block are applied whatever precedes them) and an
+        /// unclosed '{' is drawn as text, so it is kept.
+        /// </summary>
+        public static string RemoveCommentBlocks(string text)
+        {
+            if (string.IsNullOrEmpty(text) || text.IndexOf('{') < 0)
+            {
+                return text;
+            }
+
+            var sb = new StringBuilder(text.Length);
+            var i = 0;
+            while (i < text.Length)
+            {
+                var start = text.IndexOf('{', i);
+                var end = start < 0 ? -1 : text.IndexOf('}', start + 1);
+                if (end < 0)
+                {
+                    sb.Append(text, i, text.Length - i);
+                    break;
+                }
+
+                sb.Append(text, i, start - i);
+                var backslash = text.IndexOf('\\', start + 1, end - start - 1);
+                if (backslash >= 0)
+                {
+                    sb.Append('{');
+                    sb.Append(text, backslash, end - backslash + 1);
+                }
+
+                i = end + 1;
+            }
+
+            return sb.ToString();
+        }
+
         public static string RemoveDrawingTag(string input)
         {
             var s = input;
@@ -2161,7 +2285,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
                 }
             }
 
-            var p0Index = s.IndexOf("{\\p0}", StringComparison.Ordinal);
+            // The drawing can be closed by "\p0" inside a multi-tag block ("{\p0\fs20}"), not
+            // just by the literal "{\p0}" - searching only for the literal left p0Index at -1
+            // and the else branch below then truncated the whole rest of the line.
+            var p0Match = Regex.Match(s, @"\{[^}]*\\p0(?![0-9])[^}]*\}");
+            var p0Index = p0Match.Success ? p0Match.Index : -1;
+            var p0Length = p0Match.Success ? p0Match.Length : 0;
             if (p1Index > 0 && (p0Index > p1Index || p0Index == -1))
             {
                 var startTagIndex = s.Substring(0, p1Index).LastIndexOf('{');
@@ -2169,7 +2298,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
                 {
                     if (p0Index > p1Index)
                     {
-                        s = s.Remove(startTagIndex, p0Index - startTagIndex + "{\\p0}".Length);
+                        s = s.Remove(startTagIndex, p0Index - startTagIndex + p0Length);
                     }
                     else
                     {
@@ -2186,12 +2315,20 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
             int indexOfTag = s.IndexOf(@"\" + tag, StringComparison.Ordinal);
             if (indexOfTag > 0)
             {
-                var endIndex1 = s.IndexOf('\\', indexOfTag + 1);
-                var endIndex2 = s.IndexOf('}', indexOfTag + 1);
-                endIndex1 = Math.Min(endIndex1, endIndex2);
-                if (endIndex1 > 0)
+                // The tag ends at whichever comes first: the next tag in the block or the
+                // closing brace. -1 is IndexOf's "not found" sentinel, not a position, so
+                // Math.Min would pick it and the tag was never removed - which is the common
+                // case of a tag that is the only/last one in its block ("{\pos(1,2)}").
+                var nextTagIndex = s.IndexOf('\\', indexOfTag + 1);
+                var closingBraceIndex = s.IndexOf('}', indexOfTag + 1);
+                var endIndex = nextTagIndex < 0
+                    ? closingBraceIndex
+                    : closingBraceIndex < 0
+                        ? nextTagIndex
+                        : Math.Min(nextTagIndex, closingBraceIndex);
+                if (endIndex > 0)
                 {
-                    return s.Remove(indexOfTag, endIndex1 - indexOfTag);
+                    return s.Remove(indexOfTag, endIndex - indexOfTag);
                 }
             }
             return s;
@@ -2259,6 +2396,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
             if (int.TryParse(f, out var number))
             {
                 var temp = ColorUtils.FromArgb(number);
+                return ColorUtils.FromArgb(255, temp.Blue, temp.Green, temp.Red);
+            }
+
+            // Values above int.MaxValue are the same 32-bit "&HAABBGGRR" word written unsigned
+            // (e.g. 4294967040); without this they fell through to the default color.
+            if (uint.TryParse(f, NumberStyles.Integer, CultureInfo.InvariantCulture, out var unsignedNumber))
+            {
+                var temp = ColorUtils.FromArgb(unchecked((int)unsignedNumber));
                 return ColorUtils.FromArgb(255, temp.Blue, temp.Green, temp.Red);
             }
 
@@ -2336,9 +2481,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
                 string s = line.Trim().ToLowerInvariant();
                 if (s.StartsWith("format:", StringComparison.Ordinal))
                 {
-                    if (line.Length > 10)
+                    if (s.Length > 10)
                     {
-                        var format = line.Substring(8).ToLowerInvariant().Split(',');
+                        // cut the trimmed line - leading whitespace shifted every field name
+                        var format = s.Substring(8).Split(',');
                         styleCount = format.Length;
                         for (int i = 0; i < format.Length; i++)
                         {
@@ -2439,7 +2585,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
                     if (line.Length > 10)
                     {
                         string rawLine = line;
-                        var format = line.Substring(6).Split(',');
+                        var format = line.Trim().Substring(6).Split(',');
 
                         if (format.Length != styleCount)
                         {
@@ -2690,6 +2836,72 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
             return sb.ToString();
         }
 
+        /// <summary>
+        /// Same test as the old <c>line.Trim().ToLowerInvariant().RemoveChar(' ').StartsWith("style:")</c>,
+        /// done in place so no lower-cased and no space-stripped copy of the line is allocated.
+        /// </summary>
+        private static bool StartsWithStyleColonIgnoringSpaces(ReadOnlySpan<char> trimmedLine)
+        {
+            const string prefix = "style:";
+            var matched = 0;
+            for (var i = 0; i < trimmedLine.Length && matched < prefix.Length; i++)
+            {
+                var ch = trimmedLine[i];
+                if (ch == ' ')
+                {
+                    continue;
+                }
+
+                if (char.ToLowerInvariant(ch) != prefix[matched])
+                {
+                    return false;
+                }
+
+                matched++;
+            }
+
+            return matched == prefix.Length;
+        }
+
+        /// <summary>
+        /// Maps a Sub Station Alpha v4 alignment (1-3 bottom, 5-7 top, 9-11 middle) to the
+        /// "an1"-"an9" numbering used by Advanced Sub Station Alpha and by SsaStyle.Alignment.
+        /// </summary>
+        public static string SsaV4AlignmentToAssAlignment(string alignment)
+        {
+            switch (alignment)
+            {
+                case "1": return "1"; // bottom left
+                case "3": return "3"; // bottom right
+                case "5": return "7"; // top left
+                case "6": return "8"; // top center
+                case "7": return "9"; // top right
+                case "9": return "4"; // middle left
+                case "10": return "5"; // middle center
+                case "11": return "6"; // middle right
+                default: return "2"; // bottom center
+            }
+        }
+
+        /// <summary>
+        /// The inverse of <see cref="SsaV4AlignmentToAssAlignment"/>.
+        /// </summary>
+        public static string AssAlignmentToSsaV4Alignment(string alignment)
+        {
+            switch (alignment)
+            {
+                case "1": return "1"; // bottom left
+                case "3": return "3"; // bottom right
+                case "4": return "9"; // middle left
+                case "5": return "10"; // middle center
+                case "6": return "11"; // middle right
+                case "7": return "5"; // top left
+                case "8": return "6"; // top center
+                case "9": return "7"; // top right
+                default: return "2"; // bottom center
+            }
+        }
+
         public static SsaStyle GetSsaStyle(string styleName, string header)
         {
             var style = new SsaStyle { Name = styleName };
@@ -2717,19 +2929,30 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
             var spacingIndex = -1;
             var angleIndex = -1;
             var borderStyleIndex = -1;
+            var isSsaV4Format = false;
+            var sawV4PlusSection = false;
 
             if (header == null)
             {
                 header = DefaultHeader;
             }
 
-            foreach (var line in header.SplitToLines())
+            // Called once per style name, and callers loop over every style in the header, so this
+            // used to be a quadratic walk that allocated a line list plus a trimmed, a lower-cased
+            // and a space-stripped copy of every header line on each pass. Dispatch on spans
+            // instead and only materialize the lines that actually are "Format:"/"Style:".
+            foreach (var lineSpan in header.EnumerateSpanLines())
             {
-                var s = line.Trim().ToLowerInvariant();
-                if (s.StartsWith("format:", StringComparison.Ordinal))
+                var trimmed = lineSpan.Trim();
+                if (trimmed.Equals("[v4+ styles]".AsSpan(), StringComparison.OrdinalIgnoreCase))
                 {
-                    if (line.Length > 10)
+                    sawV4PlusSection = true;
+                }
+                else if (trimmed.StartsWith("format:".AsSpan(), StringComparison.OrdinalIgnoreCase))
+                {
+                    if (lineSpan.Length > 10)
                     {
+                        var line = lineSpan.ToString();
                         var format = line.ToLowerInvariant().Substring(8).Split(',');
                         for (var i = 0; i < format.Length; i++)
                         {
@@ -2827,12 +3050,18 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
                                 borderStyleIndex = i;
                             }
                         }
+
+                        // "TertiaryColour" without an "OutlineColour" marks a Sub Station Alpha v4
+                        // "[V4 Styles]" format line - unless a "[V4+ Styles]" section said otherwise,
+                        // which a few files in the wild do while still naming the field Tertiary.
+                        isSsaV4Format = tertiaryColourIndex >= 0 && outlineColourIndex < 0 && !sawV4PlusSection;
                     }
                 }
-                else if (s.RemoveChar(' ').StartsWith("style:", StringComparison.Ordinal))
+                else if (StartsWithStyleColonIgnoringSpaces(trimmed))
                 {
-                    if (line.Length > 10)
+                    if (lineSpan.Length > 10)
                     {
+                        var line = lineSpan.ToString();
                         style.RawLine = line;
                         var format = line.Substring(6).Split(',');
                         for (var i = 0; i < format.Length; i++)
@@ -2864,6 +3093,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
                             else if (i == tertiaryColourIndex)
                             {
                                 style.Tertiary = GetSsaColor(f, SKColors.Yellow);
+
+                                // Sub Station Alpha v4's TertiaryColour is what [V4+ Styles] calls
+                                // OutlineColour - keep Outline in sync, or an .ssa file's outline
+                                // color is dropped on every read (nothing else fills Outline). #13734
+                                style.Outline = GetSsaColor(f, SKColors.Black);
                             }
                             else if (i == outlineColourIndex)
                             {
@@ -2905,7 +3139,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
                             }
                             else if (i == alignmentIndex)
                             {
-                                style.Alignment = f;
+                                // Sub Station Alpha v4 numbers alignment differently from [V4+ Styles]
+                                // (5-7 = top, 9-11 = middle). SsaStyle.Alignment is "an1"-"an9"
+                                // everywhere else, so normalize here instead of leaving every caller
+                                // to guess which dialect the header spoke. #13734
+                                style.Alignment = isSsaV4Format ? SsaV4AlignmentToAssAlignment(f) : f;
                             }
                             else if (i == marginLIndex)
                             {

@@ -1,3 +1,4 @@
+﻿using System.Globalization;
 using SkiaSharp;
 using SkiaSharp.HarfBuzz;
 using Nikse.SubtitleEdit.Core.BluRaySup;
@@ -60,6 +61,28 @@ public static class ImageRenderer
 
     public static SKBitmap GenerateBitmap(ImageParameter ip)
     {
+        var bitmap = RenderBitmap(ip);
+        if (ip.AlphaPercent >= 100)
+        {
+            return bitmap;
+        }
+
+        // "{\alpha&H80&}" - one blend over the finished subtitle, so text, outline, shadow and
+        // box all end up at the asked for alpha instead of showing through each other.
+        var alpha = (byte)(Math.Clamp(ip.AlphaPercent, 0, 100) * 255 / 100);
+        var faded = new SKBitmap(bitmap.Width, bitmap.Height, bitmap.ColorType, bitmap.AlphaType);
+        using (var canvas = new SKCanvas(faded))
+        using (var paint = new SKPaint { Color = SKColors.White.WithAlpha(alpha) })
+        {
+            canvas.Clear(SKColors.Transparent);
+            canvas.DrawBitmap(bitmap, 0, 0, paint);
+        }
+
+        return Replace(bitmap, faded);
+    }
+
+    private static SKBitmap RenderBitmap(ImageParameter ip)
+    {
         var fontName = ip.FontName;
         var fontSize = ip.FontSize;
         var fontColor = ip.FontColor;
@@ -78,27 +101,10 @@ public static class ImageRenderer
         // Create fonts. The font name is a face name from FontFaces (e.g. "Segoe UI
         // Semibold", "Arial Black"), so resolution goes through the face map - bold and
         // italic are applied relative to the face's own weight/slant (issue #12537).
-        // Falls back to the default typeface so we never hand a null typeface to
-        // SKFont / SKShaper.
-        using var regularTypeface = ResolveTypeface(fontName, bold: false, italic: false);
-        using var boldTypeface = ResolveTypeface(fontName, bold: true, italic: false);
-        using var italicTypeface = ResolveTypeface(fontName, bold: false, italic: true);
-        using var boldItalicTypeface = ResolveTypeface(fontName, bold: true, italic: true);
-
-        using var regularFont = new SKFont(ip.IsBold ? boldTypeface : regularTypeface, fontSize);
-        using var boldFont = new SKFont(boldTypeface, fontSize);
-        using var italicFont = new SKFont(ip.IsBold ? boldItalicTypeface : italicTypeface, fontSize);
-        using var boldItalicFont = new SKFont(boldItalicTypeface, fontSize);
-
-        // Hinting snaps glyph edges to the pixel grid, which breaks the registration
-        // between the fill and the outline stroked from the raw glyph path - thin
-        // outlines then vanish on horizontal edges (issue #12206). Export renders at
-        // video resolution, so hinting is not needed.
-        foreach (var font in new[] { regularFont, boldFont, italicFont, boldItalicFont })
-        {
-            font.Hinting = SKFontHinting.None;
-            font.Subpixel = true;
-        }
+        // A segment inside a "<font face=.. size=..>" tag gets its own font, so the fonts are
+        // made on demand and cached for this render (discussion #14476).
+        using var fonts = new FontSet(fontName, fontSize, ip.IsBold, ip.TagFontSizeScale);
+        var regularFont = fonts.Default;
 
         // Split segments into lines
         var lines = SplitIntoSegments(segments);
@@ -120,6 +126,11 @@ public static class ImageRenderer
         var baseLineHeight = Math.Abs(fontMetrics.Ascent) + Math.Abs(fontMetrics.Descent);
         var lineSpacing = (float)(baseLineHeight * ip.LineSpacingPercent / 100.0);
 
+        // Each line's box comes from the tallest tagged font on it, so a "<font size=..>"
+        // segment makes only its own line taller; untagged lines keep the dialog font's box.
+        var lineMetrics = MeasureLines(lines, fonts);
+        var baselines = GetBaselineOffsets(lineMetrics, lineSpacing);
+
         // Create oversized temporary bitmap for rendering (with fixed margin for effects)
         var tempWidth = Math.Max(4000, ip.ScreenWidth);
         var tempHeight = Math.Max(2000, ip.ScreenHeight);
@@ -131,10 +142,19 @@ public static class ImageRenderer
         // textStartY must be at least as large as the ascent + effects so the top of
         // the first line is never above y=0 in the temp bitmap.
         var margin = 10;
-        var textStartX = (int)(Math.Abs(shadowWidth) + Math.Abs(outlineWidth) + margin);
-        var textStartY = (int)(Math.Abs(fontMetrics.Ascent) + Math.Abs(shadowWidth) + Math.Abs(outlineWidth) + margin);
-        RenderTextToCanvas(tempCanvas, lines, ip, regularFont, boldFont, italicFont, boldItalicFont,
-            textStartX, textStartY, baseLineHeight, lineSpacing,
+        // Advanced effects (blurred shadows, glow, extrude) draw further out than the classic
+        // outline+shadow, so pad the scratch canvas with their own safety margin too.
+        var effectMargin = ip.TextEffects?.GetSafetyMargin() ?? 0f;
+        if (ip.TextEffects is { ArcBendPercent: not 0 } arcEffects)
+        {
+            // Arc rise is width-dependent (~ w * bend / 400); the line width is not known yet,
+            // so pad conservatively from the target frame width.
+            var arcWidth = Math.Max(ip.ScreenWidth, 1000);
+            effectMargin += Math.Abs(arcEffects.ArcBendPercent) / 400f * arcWidth;
+        }
+        var textStartX = (int)(Math.Abs(shadowWidth) + Math.Abs(outlineWidth) + margin + effectMargin);
+        var textStartY = (int)(lineMetrics[0].Ascent + Math.Abs(shadowWidth) + Math.Abs(outlineWidth) + margin + effectMargin);
+        RenderTextToCanvas(tempCanvas, lines, ip, fonts, textStartX, textStartY, baselines,
             outlineColor, shadowColor, outlineWidth, shadowWidth);
 
         //System.IO.File.WriteAllBytes(@"C:\temp\debug_raw.png", tempBitmap.ToPngArray());
@@ -166,18 +186,27 @@ public static class ImageRenderer
         }
 
         var firstBaseline = textStartY;
-        var lastBaseline = textStartY + (lines.Count - 1) * (baseLineHeight + lineSpacing);
+        var lastBaseline = textStartY + baselines[^1];
         // Floor/ceiling, not (int) truncation - truncation rounds toward zero, which
         // would wobble the padding by 0-1 px depending on the fractional font metrics.
-        var lineBoxTop = (int)Math.Floor(firstBaseline - Math.Abs(fontMetrics.Ascent) - Math.Abs(outlineWidth));
-        var lineBoxBottom = (int)Math.Ceiling(lastBaseline + Math.Abs(fontMetrics.Descent) + Math.Abs(outlineWidth) + Math.Abs(shadowWidth));
+        var lineBoxTop = (int)Math.Floor(firstBaseline - lineMetrics[0].Ascent - Math.Abs(outlineWidth));
+        var lineBoxBottom = (int)Math.Ceiling(lastBaseline + lineMetrics[^1].Descent + Math.Abs(outlineWidth) + Math.Abs(shadowWidth));
 
         // The line box can only fall outside the scratch canvas for text taller than the
         // canvas, which is already clipped; keep the transparent rows for it anyway so the
         // exported height stays a function of the line count alone.
-        var cropTop = Math.Max(0, Math.Min(drawnBounds.Top, lineBoxTop));
+        var bitmapTop = Math.Min(drawnBounds.Top, lineBoxTop);
+
+        // Row of the first line's ascent top inside the finished bitmap. The crop deliberately
+        // keeps outlineWidth rows above it (and outline + shadow below the last descender), so a
+        // box drawn from row 0 sits that much too high: the bottom padding came out as
+        // padBottom - 2 * outlineWidth, i.e. negative at the shipped defaults, and the outline
+        // under g/p/y was drawn outside the box.
+        var firstLineTopInBitmap = firstBaseline - lineMetrics[0].Ascent - bitmapTop;
+
+        var cropTop = Math.Max(0, bitmapTop);
         var cropBottom = Math.Min(tempBitmap.Height - 1, Math.Max(drawnBounds.Bottom, lineBoxBottom));
-        var overflowTop = cropTop - Math.Min(drawnBounds.Top, lineBoxTop);
+        var overflowTop = cropTop - bitmapTop;
         var overflowBottom = Math.Max(drawnBounds.Bottom, lineBoxBottom) - cropBottom;
 
         var textBitmap = tempBitmap.CropTo(drawnBounds.Left, cropTop, drawnBounds.Right, cropBottom);
@@ -188,7 +217,7 @@ public static class ImageRenderer
 
         if (ip.BoxType != ExportBoxType.None)
         {
-            textBitmap = Replace(textBitmap, DrawBoxBehindText(textBitmap, lines, ip, regularFont, boldFont, italicFont, boldItalicFont, baseLineHeight, lineSpacing));
+            textBitmap = Replace(textBitmap, DrawBoxBehindText(textBitmap, lines, ip, fonts, lineMetrics, lineSpacing, firstLineTopInBitmap));
         }
 
         if (ip.PaddingTopBottom == 0 && ip.PaddingLeftRight == 0)
@@ -228,16 +257,147 @@ public static class ImageRenderer
             ?? SKTypeface.Default;
     }
 
+    /// <summary>
+    /// The fonts of one render. The dialog font is the default; a segment inside a
+    /// "&lt;font face=.. size=..&gt;" tag gets its own font, made on first use and shared by
+    /// every segment with the same face, size and style. Bold from the dialog applies to every
+    /// font, the way the old fixed regular/bold/italic/bold-italic set did.
+    /// </summary>
+    private sealed class FontSet : IDisposable
+    {
+        private readonly Dictionary<(string Face, float Size, bool Bold, bool Italic), SKFont> _fonts = new();
+        private readonly List<SKTypeface> _typefaces = new();
+        private readonly string _defaultFace;
+        private readonly float _defaultSize;
+        private readonly bool _bold;
+        private readonly float _tagSizeScale;
+
+        public FontSet(string defaultFace, float defaultSize, bool bold, float tagSizeScale)
+        {
+            _defaultFace = defaultFace;
+            _defaultSize = defaultSize;
+            _bold = bold;
+            _tagSizeScale = tagSizeScale > 0 ? tagSizeScale : 1f;
+            Default = Get(defaultFace, defaultSize, bold, italic: false);
+        }
+
+        /// <summary>The dialog font: regular, or bold when the dialog says bold.</summary>
+        public SKFont Default { get; }
+
+        public SKFont Get(TextSegment segment)
+        {
+            var face = string.IsNullOrWhiteSpace(segment.FontName) ? _defaultFace : segment.FontName;
+            var size = segment.FontSize is { } tagSize && tagSize > 0 ? tagSize * _tagSizeScale : _defaultSize;
+            return Get(face, size, _bold || segment.IsBold, segment.IsItalic);
+        }
+
+        /// <summary>True when the segment asks for a face or size other than the dialog's.</summary>
+        public bool IsTagged(TextSegment segment) =>
+            !string.IsNullOrWhiteSpace(segment.FontName) || segment.FontSize is > 0;
+
+        private SKFont Get(string face, float size, bool bold, bool italic)
+        {
+            var key = (face, size, bold, italic);
+            if (_fonts.TryGetValue(key, out var font))
+            {
+                return font;
+            }
+
+            var typeface = ResolveTypeface(face, bold, italic);
+            _typefaces.Add(typeface);
+
+            // Hinting snaps glyph edges to the pixel grid, which breaks the registration
+            // between the fill and the outline stroked from the raw glyph path - thin
+            // outlines then vanish on horizontal edges (issue #12206). Export renders at
+            // video resolution, so hinting is not needed.
+            font = new SKFont(typeface, size)
+            {
+                Hinting = SKFontHinting.None,
+                Subpixel = true,
+            };
+            _fonts[key] = font;
+            return font;
+        }
+
+        public void Dispose()
+        {
+            foreach (var font in _fonts.Values)
+            {
+                font.Dispose();
+            }
+
+            foreach (var typeface in _typefaces)
+            {
+                // The shared default typeface is Skia's own; disposing it would break later renders.
+                if (!ReferenceEquals(typeface, SKTypeface.Default))
+                {
+                    typeface.Dispose();
+                }
+            }
+        }
+    }
+
+    /// <summary>Ascent and descent (both positive) of one rendered line.</summary>
+    private readonly record struct LineMetrics(float Ascent, float Descent);
+
+    /// <summary>
+    /// The line box of every line. Untagged segments do not count - bold and italic variants
+    /// of the dialog font have slightly different metrics, and letting those in would move the
+    /// baselines of a subtitle with an "&lt;i&gt;" against one without (issue #13202). Only a
+    /// tagged face/size can grow a line, never shrink it below the dialog font's box.
+    /// </summary>
+    private static LineMetrics[] MeasureLines(List<List<TextSegment>> lines, FontSet fonts)
+    {
+        var defaultMetrics = fonts.Default.Metrics;
+        var defaultAscent = Math.Abs(defaultMetrics.Ascent);
+        var defaultDescent = Math.Abs(defaultMetrics.Descent);
+
+        var result = new LineMetrics[lines.Count];
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var ascent = defaultAscent;
+            var descent = defaultDescent;
+            foreach (var segment in lines[i])
+            {
+                if (!fonts.IsTagged(segment))
+                {
+                    continue;
+                }
+
+                var metrics = fonts.Get(segment).Metrics;
+                ascent = Math.Max(ascent, Math.Abs(metrics.Ascent));
+                descent = Math.Max(descent, Math.Abs(metrics.Descent));
+            }
+
+            result[i] = new LineMetrics(ascent, descent);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Baseline of every line relative to the first line's baseline: the previous line's
+    /// descent, the line spacing, then this line's ascent.
+    /// </summary>
+    private static float[] GetBaselineOffsets(LineMetrics[] lineMetrics, float lineSpacing)
+    {
+        var offsets = new float[lineMetrics.Length];
+        for (var i = 1; i < lineMetrics.Length; i++)
+        {
+            offsets[i] = offsets[i - 1] + lineMetrics[i - 1].Descent + lineSpacing + lineMetrics[i].Ascent;
+        }
+
+        return offsets;
+    }
+
     private static SKBitmap DrawBoxBehindText(
         SKBitmap textBitmap,
         List<List<TextSegment>> lines,
         ImageParameter ip,
-        SKFont regularFont,
-        SKFont boldFont,
-        SKFont italicFont,
-        SKFont boldItalicFont,
-        float baseLineHeight,
-        float lineSpacing)
+        FontSet fonts,
+        LineMetrics[] lineMetrics,
+        float lineSpacing,
+        float firstLineTopInBitmap)
     {
         var padLeft = ip.BoxPaddingLeft;
         var padRight = ip.BoxPaddingRight;
@@ -274,32 +434,33 @@ public static class ImageRenderer
                 for (var j = 0; j < line.Count; j++)
                 {
                     var seg = line[j];
-                    var font = GetFont(seg, regularFont, boldFont, italicFont, boldItalicFont);
+                    var font = fonts.Get(seg);
                     lineWidths[li] += MeasureTextWithShaping(seg.Text, font);
                     if ((seg.IsItalic || seg.IsBold) && j < line.Count - 1)
-                        lineWidths[li] += regularFont.Size * 0.17f;
+                        lineWidths[li] += font.Size * 0.17f;
                 }
             }
             var maxLineWidth = lineWidths.Length > 0 ? lineWidths.Max() : 0f;
 
             // Draw one box per line, aligned the same way as text rendering
-            var currentY = (float)padTop;
+            var currentY = padTop + firstLineTopInBitmap;
             for (var li = 0; li < lines.Count; li++)
             {
                 var lineWidth = lineWidths[li];
+                var lineHeight = lineMetrics[li].Ascent + lineMetrics[li].Descent;
                 float textX;
-                if (ip.ContentAlignment == ExportContentAlignment.Center)
+                if (ip.ResolvedContentAlignment == ExportContentAlignment.Center)
                     textX = padLeft + (maxLineWidth - lineWidth) / 2;
-                else if (ip.ContentAlignment == ExportContentAlignment.Right)
+                else if (ip.ResolvedContentAlignment == ExportContentAlignment.Right)
                     textX = padLeft + maxLineWidth - lineWidth;
                 else
                     textX = padLeft;
 
                 canvas.DrawRoundRect(
-                    new SKRoundRect(new SKRect(textX - padLeft, currentY - padTop, textX + lineWidth + padRight, currentY + baseLineHeight + padBottom), radius, radius),
+                    new SKRoundRect(new SKRect(textX - padLeft, currentY - padTop, textX + lineWidth + padRight, currentY + lineHeight + padBottom), radius, radius),
                     boxPaint);
 
-                currentY += baseLineHeight + lineSpacing;
+                currentY += lineHeight + lineSpacing;
             }
         }
 
@@ -312,37 +473,43 @@ public static class ImageRenderer
         SKCanvas canvas,
         List<List<TextSegment>> lines,
         ImageParameter ip,
-        SKFont regularFont,
-        SKFont boldFont,
-        SKFont italicFont,
-        SKFont boldItalicFont,
+        FontSet fonts,
         float textStartX,
         float textStartY,
-        float baseLineHeight,
-        float lineSpacing,
+        float[] baselines,
         SKColor outlineColor,
         SKColor shadowColor,
         double outlineWidth,
         double shadowWidth)
     {
+        if (ip.TextEffects != null)
+        {
+            RenderTextWithEffects(canvas, lines, ip, fonts, textStartX, textStartY, baselines);
+            return;
+        }
+
         // Pre-calculate all line widths so alignment is relative to the widest line,
         // not the canvas width (which would push text far right or off-canvas).
         var lineWidths = new float[lines.Count];
         for (var li = 0; li < lines.Count; li++)
         {
-            var line = lines[li];
+            // Measure in the SAME order the line is drawn in. Reversing for RTL changes which
+            // segment is last, and the 0.17em styled-segment padding is only added to "not the
+            // last one" - so an RTL line was measured with that padding on a different segment
+            // than it was rendered with, shifting centered/right-aligned text and, through
+            // maxLineWidth, every other line of the same subtitle.
+            var line = ip.IsRightToLeft ? lines[li].AsEnumerable().Reverse().ToList() : lines[li];
             for (var j = 0; j < line.Count; j++)
             {
                 var seg = line[j];
-                var font = GetFont(seg, regularFont, boldFont, italicFont, boldItalicFont);
+                var font = fonts.Get(seg);
                 lineWidths[li] += MeasureTextWithShaping(seg.Text, font);
                 if ((seg.IsItalic || seg.IsBold) && j < line.Count - 1)
-                    lineWidths[li] += regularFont.Size * 0.17f;
+                    lineWidths[li] += font.Size * 0.17f;
             }
         }
         var maxLineWidth = lineWidths.Length > 0 ? lineWidths.Max() : 0f;
 
-        var currentY = 0f;
         var lineIndex = 0;
 
         foreach (var line in lines)
@@ -350,47 +517,24 @@ public static class ImageRenderer
             // Reverse segments for RTL languages
             var segmentsToRender = ip.IsRightToLeft ? line.AsEnumerable().Reverse().ToList() : line;
 
-            var lineWidth = lineWidths[lineIndex++];
+            var lineWidth = lineWidths[lineIndex];
+            var currentY = baselines[lineIndex];
+            lineIndex++;
 
             float currentX;
 
             // Calculate X position based on content alignment, relative to the widest line.
             // This keeps all lines within [textStartX, textStartX + maxLineWidth].
-            if (ip.IsRightToLeft)
-            {
-                if (ip.ContentAlignment == ExportContentAlignment.Center)
-                {
-                    currentX = textStartX + (maxLineWidth - lineWidth) / 2;
-                }
-                else if (ip.ContentAlignment == ExportContentAlignment.Left)
-                {
-                    currentX = textStartX + maxLineWidth - lineWidth;
-                }
-                else // Right (natural/default for RTL)
-                {
-                    currentX = textStartX;
-                }
-            }
-            else
-            {
-                if (ip.ContentAlignment == ExportContentAlignment.Center)
-                {
-                    currentX = textStartX + (maxLineWidth - lineWidth) / 2;
-                }
-                else if (ip.ContentAlignment == ExportContentAlignment.Right)
-                {
-                    currentX = textStartX + maxLineWidth - lineWidth;
-                }
-                else // Left (default)
-                {
-                    currentX = textStartX;
-                }
-            }
+            // "Right" is the visual right edge for right-to-left text too: DrawShapedText
+            // always draws from x rightwards, so the RTL flag changes the segment order
+            // but not which edge the lines share - and the box behind the text already
+            // used the visual edge (issue #14696).
+            currentX = GetLineStartX(ip.ResolvedContentAlignment, textStartX, maxLineWidth, lineWidth);
 
             for (var i = 0; i < segmentsToRender.Count; i++)
             {
                 var segment = segmentsToRender[i];
-                var currentFont = GetFont(segment, regularFont, boldFont, italicFont, boldItalicFont);
+                var currentFont = fonts.Get(segment);
 
                 // Outlines are stroked on the raw glyph path with doubled width: the fill
                 // drawn on top covers the inner half, so the visible outline matches the
@@ -465,34 +609,750 @@ public static class ImageRenderer
                 // Add small spacing after styled segments to prevent crowding
                 if ((segment.IsItalic || segment.IsBold) && i < segmentsToRender.Count - 1)
                 {
-                    currentX += regularFont.Size * 0.17f;
+                    currentX += currentFont.Size * 0.17f;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// A text segment laid out for the effects pipeline: where DrawShapedText will draw it,
+    /// with which font, and its classic per-segment color (used when the effects have no fill).
+    /// </summary>
+    private sealed record EffectSegmentDraw(string Text, float X, float Y, SKFont Font, SKColor Color);
+
+    /// <summary>
+    /// The advanced-formatting counterpart of <see cref="RenderTextToCanvas"/>: same layout
+    /// (widest-line-relative alignment, RTL segment order, styled-segment spacing), but painting
+    /// goes through <see cref="ImageParameter.TextEffects"/> layers. The classic outline/shadow
+    /// widths are not used here - the effects describe the whole look.
+    /// </summary>
+    private static void RenderTextWithEffects(
+        SKCanvas canvas,
+        List<List<TextSegment>> lines,
+        ImageParameter ip,
+        FontSet fonts,
+        float textStartX,
+        float textStartY,
+        float[] baselines)
+    {
+        var effects = ip.TextEffects!;
+
+        if (effects.HasGlyphGeometry)
+        {
+            RenderTextWithGlyphGeometry(canvas, lines, ip, fonts, textStartX, textStartY, baselines);
+            return;
+        }
+
+        var lineWidths = new float[lines.Count];
+        for (var li = 0; li < lines.Count; li++)
+        {
+            // Measure in the SAME order the line is drawn in. Reversing for RTL changes which
+            // segment is last, and the 0.17em styled-segment padding is only added to "not the
+            // last one" - so an RTL line was measured with that padding on a different segment
+            // than it was rendered with, shifting centered/right-aligned text and, through
+            // maxLineWidth, every other line of the same subtitle.
+            var line = ip.IsRightToLeft ? lines[li].AsEnumerable().Reverse().ToList() : lines[li];
+            for (var j = 0; j < line.Count; j++)
+            {
+                var seg = line[j];
+                var font = fonts.Get(seg);
+                lineWidths[li] += MeasureTextWithShaping(seg.Text, font);
+                if ((seg.IsItalic || seg.IsBold) && j < line.Count - 1)
+                {
+                    lineWidths[li] += font.Size * 0.17f;
+                }
+            }
+        }
+
+        var maxLineWidth = lineWidths.Length > 0 ? lineWidths.Max() : 0f;
+
+        // Collect the glyph outline path of the whole subtitle plus per-segment draw records.
+        // Edge-tracing effects (strokes, glow, extrude, bevel) work on the combined path; fills
+        // go through DrawShapedText so glyph rasterization matches the classic path (and glyphs
+        // without an outline, like color emoji, still render).
+        using var combinedPath = new SKPath();
+        var segmentDraws = new List<EffectSegmentDraw>();
+
+        for (var li = 0; li < lines.Count; li++)
+        {
+            var line = lines[li];
+            var segmentsToRender = ip.IsRightToLeft ? line.AsEnumerable().Reverse().ToList() : line;
+            var lineWidth = lineWidths[li];
+            var currentY = baselines[li];
+
+            var currentX = GetLineStartX(ip.ResolvedContentAlignment, textStartX, maxLineWidth, lineWidth);
+
+            for (var i = 0; i < segmentsToRender.Count; i++)
+            {
+                var segment = segmentsToRender[i];
+                var font = fonts.Get(segment);
+                var y = textStartY + currentY;
+
+                using (var segmentPath = GetShapedTextPath(segment.Text, currentX, y, font))
+                {
+                    combinedPath.AddPath(segmentPath);
+                }
+
+                segmentDraws.Add(new EffectSegmentDraw(segment.Text, currentX, y, font, segment.Color));
+
+                currentX += MeasureTextWithShaping(segment.Text, font);
+                if ((segment.IsItalic || segment.IsBold) && i < segmentsToRender.Count - 1)
+                {
+                    currentX += font.Size * 0.17f;
+                }
+            }
+        }
+
+        PaintEffectLayers(canvas, combinedPath, segmentDraws, null, effects);
+    }
+
+    private sealed record GeometryGlyph(SKPath? Path, float X, float Advance, SKColor Color);
+
+    /// <summary>
+    /// The per-glyph geometry variant: letter spacing, arc bend and baseline wave need each
+    /// glyph as its own positioned path, so fills draw from paths here instead of
+    /// DrawShapedText (glyphs with no outline, like color emoji, are skipped).
+    /// </summary>
+    private static void RenderTextWithGlyphGeometry(
+        SKCanvas canvas,
+        List<List<TextSegment>> lines,
+        ImageParameter ip,
+        FontSet fonts,
+        float textStartX,
+        float textStartY,
+        float[] baselines)
+    {
+        var effects = ip.TextEffects!;
+        var spacing = effects.LetterSpacing;
+
+        // 1) Shape every line into glyphs at line-relative positions, letter spacing applied.
+        var lineGlyphs = new List<List<GeometryGlyph>>();
+        var lineWidths = new List<float>();
+        foreach (var line in lines)
+        {
+            var segmentsToRender = ip.IsRightToLeft ? line.AsEnumerable().Reverse().ToList() : line;
+            var glyphs = new List<GeometryGlyph>();
+            var x = 0f;
+
+            for (var i = 0; i < segmentsToRender.Count; i++)
+            {
+                var segment = segmentsToRender[i];
+                var font = fonts.Get(segment);
+                ForEachFontRun(segment.Text, font, (runText, runFont) =>
+                {
+                    using var shaper = new SKShaper(runFont.Typeface);
+                    var result = shaper.Shape(runText, runFont);
+
+                    for (var g = 0; g < result.Codepoints.Length; g++)
+                    {
+                        var glyphPath = runFont.GetGlyphPath((ushort)result.Codepoints[g]);
+                        var gx = x + result.Points[g].X + g * spacing;
+                        var next = g + 1 < result.Points.Length ? result.Points[g + 1].X : result.Width;
+                        glyphs.Add(new GeometryGlyph(
+                            glyphPath is { IsEmpty: false } ? glyphPath : null,
+                            gx,
+                            next - result.Points[g].X,
+                            segment.Color));
+                    }
+
+                    x += result.Width + result.Codepoints.Length * spacing;
+                });
+
+                if ((segment.IsItalic || segment.IsBold) && i < segmentsToRender.Count - 1)
+                {
+                    x += font.Size * 0.17f;
                 }
             }
 
-            // Move to next line
-            currentY += baseLineHeight + lineSpacing;
+            lineGlyphs.Add(glyphs);
+            lineWidths.Add(glyphs.Count > 0 ? Math.Max(0, x - spacing) : 0);
         }
+
+        var maxLineWidth = lineWidths.Count > 0 ? lineWidths.Max() : 0f;
+
+        // Arc: bend maps to a circle radius derived from the widest line, so the same value
+        // gives the same visual bend regardless of text length or resolution.
+        var radius = 0f;
+        if (effects.ArcBendPercent != 0 && maxLineWidth > 0)
+        {
+            var totalAngle = Math.Clamp(effects.ArcBendPercent, -100, 100) / 100f * 2.0f; // radians
+            radius = maxLineWidth / totalAngle;
+        }
+
+        var waveLength = effects.WaveLength > 0 ? effects.WaveLength : fonts.Default.Size * 4.5f;
+        var blockCenterX = textStartX + maxLineWidth / 2f;
+
+        // 2) Assemble the combined path plus per-color groups (for classic per-segment colors).
+        using var combinedPath = new SKPath();
+        var groupsByColor = new Dictionary<SKColor, SKPath>();
+
+        for (var li = 0; li < lineGlyphs.Count; li++)
+        {
+            var lineWidth = lineWidths[li];
+            var lineLeft = GetLineStartX(ip.ResolvedContentAlignment, textStartX, maxLineWidth, lineWidth);
+
+            var baseline = textStartY + baselines[li];
+
+            foreach (var glyph in lineGlyphs[li])
+            {
+                if (glyph.Path == null)
+                {
+                    continue;
+                }
+
+                var mid = lineLeft + glyph.X + glyph.Advance / 2f;
+                var m = SKMatrix.CreateTranslation(lineLeft + glyph.X, baseline);
+
+                if (effects.WaveAmplitude > 0)
+                {
+                    var dy = effects.WaveAmplitude * MathF.Sin(mid * 2f * MathF.PI / waveLength);
+                    m = SKMatrix.Concat(SKMatrix.CreateTranslation(0, dy), m);
+                }
+
+                if (radius != 0)
+                {
+                    // Place the glyph on the circle through (blockCenterX, baseline) and rotate
+                    // it to the local tangent.
+                    var theta = (mid - blockCenterX) / radius;
+                    var px = blockCenterX + radius * MathF.Sin(theta);
+                    var py = baseline + radius - radius * MathF.Cos(theta);
+
+                    var arc = SKMatrix.CreateTranslation(-mid, -baseline);
+                    arc = SKMatrix.Concat(SKMatrix.CreateRotation(theta), arc);
+                    arc = SKMatrix.Concat(SKMatrix.CreateTranslation(px, py), arc);
+                    m = SKMatrix.Concat(arc, m);
+                }
+
+                combinedPath.AddPath(glyph.Path, in m);
+
+                if (!groupsByColor.TryGetValue(glyph.Color, out var groupPath))
+                {
+                    groupPath = new SKPath();
+                    groupsByColor[glyph.Color] = groupPath;
+                }
+
+                groupPath.AddPath(glyph.Path, in m);
+                glyph.Path.Dispose();
+            }
+        }
+
+        var colorGroups = groupsByColor.Select(kv => (kv.Value, kv.Key)).ToList();
+        try
+        {
+            PaintEffectLayers(canvas, combinedPath, null, colorGroups, effects);
+        }
+        finally
+        {
+            foreach (var (groupPath, _) in colorGroups)
+            {
+                groupPath.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Paints the effect layers back to front: extrude, shadows, glow, outline rings, fill,
+    /// bevel. Outline rings use the doubled-stroke-width trick from the classic path (issue
+    /// #12206), generalized to multiple rings: outermost first, each inner ring covers the
+    /// inner half of the one below it, and the fill covers the innermost half.
+    /// </summary>
+    private static void PaintEffectLayers(
+        SKCanvas canvas,
+        SKPath path,
+        List<EffectSegmentDraw>? segments,
+        List<(SKPath Path, SKColor Color)>? pathGroups,
+        TextEffects effects)
+    {
+        var bounds = path.TightBounds;
+        var totalStrokeWidth = 0f;
+        foreach (var stroke in effects.Strokes)
+        {
+            totalStrokeWidth += stroke.Width;
+        }
+
+        if (effects.Extrude is { } extrude)
+        {
+            using var paint = new SKPaint { IsAntialias = true };
+            for (var i = extrude.Depth; i >= 1; i--)
+            {
+                paint.Color = LerpColor(extrude.NearColor, extrude.FarColor, (float)i / extrude.Depth);
+                using var offsetPath = new SKPath(path);
+                offsetPath.Offset(extrude.Dx * i, extrude.Dy * i);
+                paint.Style = SKPaintStyle.Fill;
+                canvas.DrawPath(offsetPath, paint);
+
+                // Stroke each step too, so the extrusion is solid instead of showing seams
+                // between the stepped copies.
+                paint.Style = SKPaintStyle.Stroke;
+                paint.StrokeWidth = Math.Max(1.5f, MathF.Sqrt(extrude.Dx * extrude.Dx + extrude.Dy * extrude.Dy));
+                canvas.DrawPath(offsetPath, paint);
+            }
+        }
+
+        foreach (var shadow in effects.Shadows)
+        {
+            using var paint = new SKPaint { IsAntialias = true, Color = shadow.Color };
+            if (shadow.Blur > 0)
+            {
+                paint.MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, shadow.Blur);
+            }
+
+            if (totalStrokeWidth > 0)
+            {
+                using var shadowPath = new SKPath(path);
+                shadowPath.Offset(shadow.Dx, shadow.Dy);
+                paint.Style = SKPaintStyle.Stroke;
+                paint.StrokeWidth = totalStrokeWidth * 2;
+                paint.StrokeJoin = SKStrokeJoin.Round;
+                canvas.DrawPath(shadowPath, paint);
+            }
+
+            paint.Style = SKPaintStyle.Fill;
+            if (segments != null)
+            {
+                foreach (var seg in segments)
+                {
+                    DrawShapedText(canvas, seg.Text, seg.X + shadow.Dx, seg.Y + shadow.Dy, seg.Font, paint);
+                }
+            }
+            else
+            {
+                using var shadowFillPath = new SKPath(path);
+                shadowFillPath.Offset(shadow.Dx, shadow.Dy);
+                canvas.DrawPath(shadowFillPath, paint);
+            }
+        }
+
+        if (effects.Glow is { } glow)
+        {
+            // Repeated blurred draws saturate into a halo around the glyphs.
+            using var paint = new SKPaint
+            {
+                IsAntialias = true,
+                Color = glow.Color,
+                Style = SKPaintStyle.StrokeAndFill,
+                StrokeWidth = totalStrokeWidth * 2 + 2,
+                StrokeJoin = SKStrokeJoin.Round,
+                MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, glow.Radius),
+            };
+            for (var i = 0; i < glow.Passes; i++)
+            {
+                canvas.DrawPath(path, paint);
+            }
+        }
+
+        for (var i = effects.Strokes.Count - 1; i >= 0; i--)
+        {
+            var cumulative = 0f;
+            for (var j = 0; j <= i; j++)
+            {
+                cumulative += effects.Strokes[j].Width;
+            }
+
+            var stroke = effects.Strokes[i];
+            using var paint = new SKPaint
+            {
+                IsAntialias = true,
+                Style = SKPaintStyle.Stroke,
+                StrokeWidth = cumulative * 2,
+                StrokeJoin = SKStrokeJoin.Round,
+                StrokeCap = SKStrokeCap.Round,
+            };
+            stroke.Fill.ApplyTo(paint, SKRect.Inflate(bounds, cumulative, cumulative));
+            var strokeBlur = Math.Max(stroke.Blur, effects.EdgeBlur);
+            if (strokeBlur > 0)
+            {
+                paint.MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, strokeBlur);
+            }
+
+            canvas.DrawPath(path, paint);
+        }
+
+        using (var fillPaint = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill })
+        {
+            // With outline rings the edge blur lives on the rings; without them it softens
+            // the fill itself.
+            if (effects.EdgeBlur > 0 && effects.Strokes.Count == 0)
+            {
+                fillPaint.MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, effects.EdgeBlur);
+            }
+
+            if (effects.Fill != null)
+            {
+                effects.Fill.ApplyTo(fillPaint, bounds);
+                if (segments != null)
+                {
+                    foreach (var seg in segments)
+                    {
+                        DrawShapedText(canvas, seg.Text, seg.X, seg.Y, seg.Font, fillPaint);
+                    }
+                }
+                else
+                {
+                    canvas.DrawPath(path, fillPaint);
+                }
+            }
+            else if (segments != null)
+            {
+                foreach (var seg in segments)
+                {
+                    fillPaint.Color = seg.Color;
+                    DrawShapedText(canvas, seg.Text, seg.X, seg.Y, seg.Font, fillPaint);
+                }
+            }
+            else if (pathGroups != null)
+            {
+                foreach (var (groupPath, color) in pathGroups)
+                {
+                    fillPaint.Color = color;
+                    canvas.DrawPath(groupPath, fillPaint);
+                }
+            }
+        }
+
+        if (effects.Bevel is { } bevel)
+        {
+            // Light from the top-left, shade from the bottom-right, clipped inside the glyphs.
+            canvas.Save();
+            canvas.ClipPath(path, SKClipOperation.Intersect, antialias: true);
+
+            using (var highlightPaint = new SKPaint
+                   {
+                       IsAntialias = true,
+                       Style = SKPaintStyle.Stroke,
+                       StrokeWidth = bevel.Depth * 2,
+                       Color = bevel.Highlight,
+                       MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, bevel.Depth),
+                   })
+            using (var highlightPath = new SKPath(path))
+            {
+                highlightPath.Offset(bevel.Depth * 0.7f, bevel.Depth * 0.7f);
+                canvas.DrawPath(highlightPath, highlightPaint);
+            }
+
+            using (var shadePaint = new SKPaint
+                   {
+                       IsAntialias = true,
+                       Style = SKPaintStyle.Stroke,
+                       StrokeWidth = bevel.Depth * 2,
+                       Color = bevel.Shade,
+                       MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, bevel.Depth),
+                   })
+            using (var shadePath = new SKPath(path))
+            {
+                shadePath.Offset(-bevel.Depth * 0.7f, -bevel.Depth * 0.7f);
+                canvas.DrawPath(shadePath, shadePaint);
+            }
+
+            canvas.Restore();
+        }
+    }
+
+    private static SKColor LerpColor(SKColor a, SKColor b, float t)
+    {
+        return new SKColor(
+            (byte)(a.Red + (b.Red - a.Red) * t),
+            (byte)(a.Green + (b.Green - a.Green) * t),
+            (byte)(a.Blue + (b.Blue - a.Blue) * t),
+            (byte)(a.Alpha + (b.Alpha - a.Alpha) * t));
+    }
+
+    /// <summary>
+    /// The x where a line starts so the lines of one subtitle share the chosen edge, relative
+    /// to the widest line. The edge is the visual one for every script: shaped text is drawn
+    /// from x rightwards whatever its direction (issue #14696).
+    /// </summary>
+    private static float GetLineStartX(ExportContentAlignment alignment, float textStartX, float maxLineWidth, float lineWidth)
+    {
+        return alignment switch
+        {
+            ExportContentAlignment.Center => textStartX + (maxLineWidth - lineWidth) / 2,
+            ExportContentAlignment.Right => textStartX + maxLineWidth - lineWidth,
+            _ => textStartX,
+        };
+    }
+
+    // Glyph fallback typefaces by (family, weight, width, slant, code point). Shared across
+    // renders and threads; the typefaces live for the process, like Skia's own font cache.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(string Family, int Weight, int Width, SKFontStyleSlant Slant, int CodePoint), SKTypeface?> FallbackTypefaces = new();
+
+    /// <summary>
+    /// Splits text into runs that each have glyphs in one typeface and calls back for every
+    /// run in logical order. Characters the font has no glyph for - like "♪" in many text
+    /// fonts (issue #15499) - get a fallback typeface from the system font manager, the way
+    /// a text box would show them, instead of rendering as nothing. Marks, joiners and
+    /// variation selectors stay in the run of the character they belong to. The fallback
+    /// fonts only exist during the callback. Text that HarfBuzz shapes right-to-left (its
+    /// first letter is RTL) gets its runs in reverse, so they line up left to right the way
+    /// the unsplit string would have been drawn.
+    /// </summary>
+    private static void ForEachFontRun(string text, SKFont font, Action<string, SKFont> action)
+    {
+        var primary = font.Typeface;
+        if (string.IsNullOrEmpty(text) || primary.ContainsGlyphs(text))
+        {
+            action(text, font);
+            return;
+        }
+
+        // 1) Letters and characters the font lacks decide their typeface. Neutral characters -
+        //    spaces, punctuation, digits - are left open, and marks follow their base.
+        var style = primary.FontStyle;
+        var runes = text.EnumerateRunes().ToArray();
+        var typefaces = new SKTypeface?[runes.Length];
+        for (var i = 0; i < runes.Length; i++)
+        {
+            var rune = runes[i];
+            if (StaysInRun(rune) && !System.Text.Rune.IsWhiteSpace(rune))
+            {
+                continue; // takes the typeface of the character before it, below
+            }
+
+            if (!primary.ContainsGlyph(rune.Value))
+            {
+                typefaces[i] = GetFallbackTypeface(primary.FamilyName, style, rune.Value) ?? primary;
+            }
+            else if (System.Text.Rune.IsLetter(rune))
+            {
+                typefaces[i] = primary;
+            }
+        }
+
+        // 2) A neutral character joins the run before it, or else the run after it, when that
+        //    typeface has a glyph for it. Splitting "- (" off an Arabic line would shape it as a
+        //    separate left-to-right run and break the line's order and mirroring.
+        for (var i = 0; i < runes.Length; i++)
+        {
+            if (typefaces[i] != null)
+            {
+                continue;
+            }
+
+            var rune = runes[i];
+            if (StaysInRun(rune) && !System.Text.Rune.IsWhiteSpace(rune))
+            {
+                typefaces[i] = i > 0 ? typefaces[i - 1] : null;
+                if (typefaces[i] != null)
+                {
+                    continue;
+                }
+            }
+
+            var previous = i > 0 ? typefaces[i - 1] : null;
+            SKTypeface? next = null;
+            for (var j = i + 1; j < runes.Length && next == null; j++)
+            {
+                if (System.Text.Rune.IsLetter(runes[j]) || !primary.ContainsGlyph(runes[j].Value))
+                {
+                    next = typefaces[j];
+                }
+            }
+
+            typefaces[i] = previous != null && previous.ContainsGlyph(rune.Value) ? previous
+                : next != null && next.ContainsGlyph(rune.Value) ? next
+                : primary;
+        }
+
+        var runStart = 0;
+        SKTypeface? runTypeface = null;
+        var runs = new List<(string Text, SKTypeface Typeface)>();
+        var fallbackFonts = new Dictionary<SKTypeface, SKFont>();
+        try
+        {
+            var index = 0;
+            for (var i = 0; i < runes.Length; i++)
+            {
+                var typeface = typefaces[i] ?? primary;
+                if (runTypeface != null && !ReferenceEquals(typeface, runTypeface))
+                {
+                    runs.Add((text.Substring(runStart, index - runStart), runTypeface));
+                    runStart = index;
+                }
+
+                runTypeface = typeface;
+                index += runes[i].Utf16SequenceLength;
+            }
+
+            runs.Add((text.Substring(runStart), runTypeface ?? primary));
+            if (StartsRightToLeft(text))
+            {
+                runs.Reverse();
+
+                // A run with no letter or digit - "- (" next to Arabic in a font without those
+                // glyphs - is shaped left-to-right on its own, so lay it out the way the
+                // right-to-left line would have: characters reversed, brackets mirrored.
+                for (var i = 0; i < runs.Count; i++)
+                {
+                    if (IsNeutralRun(runs[i].Text))
+                    {
+                        runs[i] = (ReverseAndMirror(runs[i].Text), runs[i].Typeface);
+                    }
+                }
+            }
+
+            foreach (var run in runs)
+            {
+                action(run.Text, GetRunFont(run.Typeface));
+            }
+        }
+        finally
+        {
+            foreach (var fallbackFont in fallbackFonts.Values)
+            {
+                fallbackFont.Dispose();
+            }
+        }
+
+        SKFont GetRunFont(SKTypeface typeface)
+        {
+            if (ReferenceEquals(typeface, primary))
+            {
+                return font;
+            }
+
+            if (!fallbackFonts.TryGetValue(typeface, out var fallbackFont))
+            {
+                fallbackFont = new SKFont(typeface, font.Size, font.ScaleX, font.SkewX)
+                {
+                    Hinting = font.Hinting,
+                    Subpixel = font.Subpixel,
+                    Edging = font.Edging,
+                    Embolden = font.Embolden,
+                };
+                fallbackFonts[typeface] = fallbackFont;
+            }
+
+            return fallbackFont;
+        }
+    }
+
+    // HarfBuzz picks the direction of a buffer from the script of its first letter.
+    private static bool StartsRightToLeft(string text)
+    {
+        foreach (var rune in text.EnumerateRunes())
+        {
+            if (System.Text.Rune.IsLetter(rune))
+            {
+                return LanguageAutoDetect.ContainsRightToLeftLetter(rune.ToString());
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsNeutralRun(string text)
+    {
+        foreach (var rune in text.EnumerateRunes())
+        {
+            if (System.Text.Rune.IsLetterOrDigit(rune))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string ReverseAndMirror(string text)
+    {
+        var runes = text.EnumerateRunes().ToArray();
+        var sb = new System.Text.StringBuilder(text.Length);
+        for (var i = runes.Length - 1; i >= 0; i--)
+        {
+            var rune = runes[i];
+            var mirrored = rune.Value switch
+            {
+                '(' => ")", ')' => "(",
+                '[' => "]", ']' => "[",
+                '{' => "}", '}' => "{",
+                '<' => ">", '>' => "<",
+                '«' => "»", '»' => "«",
+                _ => null,
+            };
+
+            if (mirrored != null)
+            {
+                sb.Append(mirrored);
+            }
+            else
+            {
+                sb.Append(rune.ToString());
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private static bool StaysInRun(System.Text.Rune rune)
+    {
+        if (System.Text.Rune.IsWhiteSpace(rune) || System.Text.Rune.IsControl(rune))
+        {
+            return true;
+        }
+
+        var category = System.Text.Rune.GetUnicodeCategory(rune);
+        return category is UnicodeCategory.NonSpacingMark
+            or UnicodeCategory.SpacingCombiningMark
+            or UnicodeCategory.EnclosingMark
+            or UnicodeCategory.Format;
+    }
+
+    private static SKTypeface? GetFallbackTypeface(string family, SKFontStyle style, int codePoint)
+    {
+        return FallbackTypefaces.GetOrAdd((family ?? string.Empty, style.Weight, style.Width, style.Slant, codePoint), key =>
+        {
+            var match = SKFontManager.Default.MatchCharacter(key.Family, key.Weight, key.Width, key.Slant, null, key.CodePoint);
+            return match != null && match.ContainsGlyph(key.CodePoint) ? match : null;
+        });
     }
 
     // Helper method to measure text with HarfBuzz shaping via SKShaper
     private static float MeasureTextWithShaping(string text, SKFont font)
     {
-        using var shaper = new SKShaper(font.Typeface);
-        var result = shaper.Shape(text, font);
+        var advance = 0f;
+        var visualRight = 0f;
+        ForEachFontRun(text, font, (runText, runFont) =>
+        {
+            using var shaper = new SKShaper(runFont.Typeface);
+            var result = shaper.Shape(runText, runFont);
 
-        // Measure visual bounds to account for glyph overhang (important for italic text)
-        var bounds = new SKRect();
-        font.MeasureText(text, out bounds);
+            // The visual right edge (glyph overhang, e.g. italics) comes from the SHAPED glyphs.
+            // SKFont.MeasureText on the string measures the unshaped, isolated forms - for
+            // Arabic that is up to 40% wider than what is drawn, so right/center aligned lines
+            // ended at different edges (issue #14696).
+            if (result.Codepoints.Length > 0)
+            {
+                var glyphs = new ushort[result.Codepoints.Length];
+                for (var i = 0; i < glyphs.Length; i++)
+                {
+                    glyphs[i] = (ushort)result.Codepoints[i];
+                }
+
+                runFont.GetGlyphWidths(glyphs, out var glyphBounds);
+                for (var i = 0; i < glyphs.Length; i++)
+                {
+                    visualRight = Math.Max(visualRight, advance + result.Points[i].X + glyphBounds[i].Right);
+                }
+            }
+
+            advance += result.Width;
+        });
 
         // Use the maximum of advance width and visual right edge
-        return Math.Max(result.Width, bounds.Right);
+        return Math.Max(advance, visualRight);
     }
 
     // Helper method to draw shaped text using SKShaper
     private static void DrawShapedText(SKCanvas canvas, string text, float x, float y, SKFont font, SKPaint paint)
     {
-        using var shaper = new SKShaper(font.Typeface);
-        canvas.DrawShapedText(shaper, text, x, y, SKTextAlign.Left, font, paint);
+        ForEachFontRun(text, font, (runText, runFont) =>
+        {
+            using var shaper = new SKShaper(runFont.Typeface);
+            var result = shaper.Shape(runText, runFont);
+            canvas.DrawShapedText(shaper, runText, x, y, SKTextAlign.Left, runFont, paint);
+            x += result.Width;
+        });
     }
 
     // Builds the combined glyph outline path for shaped text, positioned like
@@ -500,42 +1360,26 @@ public static class ImageRenderer
     // are skipped - they get no stroke, but the fill still renders them.
     private static SKPath GetShapedTextPath(string text, float x, float y, SKFont font)
     {
-        using var shaper = new SKShaper(font.Typeface);
-        var result = shaper.Shape(text, x, y, font);
-
         var path = new SKPath();
-        for (var i = 0; i < result.Codepoints.Length; i++)
+        ForEachFontRun(text, font, (runText, runFont) =>
         {
-            using var glyphPath = font.GetGlyphPath((ushort)result.Codepoints[i]);
-            if (glyphPath == null || glyphPath.IsEmpty)
+            using var shaper = new SKShaper(runFont.Typeface);
+            var result = shaper.Shape(runText, x, y, runFont);
+            for (var i = 0; i < result.Codepoints.Length; i++)
             {
-                continue;
+                using var glyphPath = runFont.GetGlyphPath((ushort)result.Codepoints[i]);
+                if (glyphPath == null || glyphPath.IsEmpty)
+                {
+                    continue;
+                }
+
+                path.AddPath(glyphPath, result.Points[i].X, result.Points[i].Y);
             }
 
-            path.AddPath(glyphPath, result.Points[i].X, result.Points[i].Y);
-        }
+            x += result.Width;
+        });
 
         return path;
-    }
-
-    private static SKFont GetFont(TextSegment segment, SKFont regular, SKFont bold, SKFont italic, SKFont boldItalic)
-    {
-        if (segment.IsBold && segment.IsItalic)
-        {
-            return boldItalic;
-        }
-
-        if (segment.IsBold)
-        {
-            return bold;
-        }
-
-        if (segment.IsItalic)
-        {
-            return italic;
-        }
-
-        return regular;
     }
 
     private static List<List<TextSegment>> SplitIntoSegments(List<TextSegment> segments)
@@ -554,7 +1398,7 @@ public static class ImageRenderer
 
                 if (!string.IsNullOrEmpty(part))
                 {
-                    currentLine.Add(new TextSegment(part, segment.IsItalic, segment.IsBold, segment.Color));
+                    currentLine.Add(segment with { Text = part });
                 }
 
                 // Add line break (except for the last part)
@@ -608,8 +1452,7 @@ public static class ImageRenderer
                     var remainingText = text.Substring(currentPos);
                     if (!string.IsNullOrEmpty(remainingText))
                     {
-                        segments.Add(new TextSegment(remainingText, currentStyle.IsItalic, currentStyle.IsBold,
-                            currentStyle.Color));
+                        segments.Add(currentStyle.ToSegment(remainingText));
                     }
                 }
 
@@ -622,8 +1465,7 @@ public static class ImageRenderer
                 var beforeTag = text.Substring(currentPos, nextTagPos - currentPos);
                 if (!string.IsNullOrEmpty(beforeTag))
                 {
-                    segments.Add(new TextSegment(beforeTag, currentStyle.IsItalic, currentStyle.IsBold,
-                        currentStyle.Color));
+                    segments.Add(currentStyle.ToSegment(beforeTag));
                 }
             }
 
@@ -664,8 +1506,15 @@ public static class ImageRenderer
 
                         break;
                     case TagType.FontOpen:
+                        // Each attribute stands on its own: "<font size=..>" inside a
+                        // "<font color=..>" keeps the colour, and vice versa.
                         styleStack.Push(currentStyle);
-                        currentStyle = currentStyle with { Color = tagInfo.Color ?? currentStyle.Color };
+                        currentStyle = currentStyle with
+                        {
+                            Color = tagInfo.Color ?? currentStyle.Color,
+                            FontName = tagInfo.FontName ?? currentStyle.FontName,
+                            FontSize = tagInfo.FontSize ?? currentStyle.FontSize,
+                        };
                         break;
                     case TagType.FontClose:
                         if (styleStack.Count > 0)
@@ -674,7 +1523,7 @@ public static class ImageRenderer
                         }
                         else
                         {
-                            currentStyle = currentStyle with { Color = defaultFontColor };
+                            currentStyle = currentStyle with { Color = defaultFontColor, FontName = null, FontSize = null };
                         }
 
                         break;
@@ -684,8 +1533,13 @@ public static class ImageRenderer
             }
             else
             {
-                // Invalid tag, treat as regular text
-                currentPos++;
+                // Not a tag we know (a literal "<", "<br>", ...). The text before it has already
+                // been emitted above, so advancing by one made the next iteration find the same
+                // bracket and emit that same text again, minus one leading character, until
+                // currentPos caught up - "Wait < 5 minutes" rendered as "Wait ait it t   5 minutes".
+                // Emit the bracket as text and move past it.
+                segments.Add(currentStyle.ToSegment(text.Substring(nextTagPos, 1)));
+                currentPos = nextTagPos + 1;
             }
         }
 
@@ -741,69 +1595,135 @@ public static class ImageRenderer
             return new TagInfo(TagType.FontClose, endPosition);
         }
 
-        // Check for font tag with color attribute
+        // "<font color=.. face=.. size=..>" - any of the three, in any order, quoted or not.
         if (tagContent.StartsWith("font", StringComparison.OrdinalIgnoreCase))
         {
-            var color = ParseColorFromFontTag(tagContent, defaultFontColor);
-            return new TagInfo(TagType.FontOpen, endPosition, color);
+            return new TagInfo(
+                TagType.FontOpen,
+                endPosition,
+                ParseColorFromFontTag(tagContent, defaultFontColor),
+                ParseFaceFromFontTag(tagContent),
+                ParseSizeFromFontTag(tagContent));
         }
 
         return null;
     }
 
-    private static SKColor ParseColorFromFontTag(string tagContent, SKColor defaultFontColor)
+    // name="value", name='value' or a bare name=value ended by whitespace or the closing bracket
+    private static readonly System.Text.RegularExpressions.Regex FontTagAttributeRegex = new(
+        @"\b(?<name>color|face|size)\s*=\s*(?:""(?<dq>[^""]*)""|'(?<sq>[^']*)'|(?<bare>[^\s""'>]+))",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static string? GetFontTagAttribute(string tagContent, string name)
     {
-        // Look for color="#ffffff" pattern
-        var colorMatch = System.Text.RegularExpressions.Regex.Match(
-            tagContent,
-            @"color\s*=\s*[""']([^""']+)[""']",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-
-        if (colorMatch.Success)
+        foreach (System.Text.RegularExpressions.Match match in FontTagAttributeRegex.Matches(tagContent))
         {
-            var colorValue = colorMatch.Groups[1].Value;
-
-            // Handle hex colors
-            if (colorValue.StartsWith("#") && colorValue.Length == 7)
+            if (!match.Groups["name"].Value.Equals(name, StringComparison.OrdinalIgnoreCase))
             {
-                try
-                {
-                    var hex = colorValue.Substring(1);
-                    var r = Convert.ToByte(hex.Substring(0, 2), 16);
-                    var g = Convert.ToByte(hex.Substring(2, 2), 16);
-                    var b = Convert.ToByte(hex.Substring(4, 2), 16);
-                    return new SKColor(r, g, b);
-                }
-                catch
-                {
-                    return defaultFontColor;
-                }
+                continue;
             }
 
-            // Handle named colors (basic set)
-            return colorValue.ToLowerInvariant() switch
-            {
-                "red" => SKColors.Red,
-                "green" => SKColors.Green,
-                "blue" => SKColors.Blue,
-                "white" => SKColors.White,
-                "black" => SKColors.Black,
-                "yellow" => SKColors.Yellow,
-                "orange" => SKColors.Orange,
-                "purple" => SKColors.Purple,
-                "pink" => SKColors.Pink,
-                "gray" or "grey" => SKColors.Gray,
-                _ => defaultFontColor
-            };
+            var value = match.Groups["dq"].Success ? match.Groups["dq"].Value
+                : match.Groups["sq"].Success ? match.Groups["sq"].Value
+                : match.Groups["bare"].Value;
+            return value.Trim();
         }
 
-        return defaultFontColor;
+        return null;
+    }
+
+    /// <summary>The "face" attribute, or null when the tag has none (the segment keeps the current face).</summary>
+    private static string? ParseFaceFromFontTag(string tagContent)
+    {
+        var face = GetFontTagAttribute(tagContent, "face");
+        return string.IsNullOrWhiteSpace(face) ? null : face;
+    }
+
+    /// <summary>
+    /// The "size" attribute as a font size in the renderer's own unit (the same one
+    /// <see cref="ImageParameter.FontSize"/> uses - what SE4 did, and what libass does for a
+    /// "&lt;font size&gt;" in an SRT), or null when the tag has none or it is not a number.
+    /// </summary>
+    private static float? ParseSizeFromFontTag(string tagContent)
+    {
+        var size = GetFontTagAttribute(tagContent, "size");
+        if (string.IsNullOrWhiteSpace(size))
+        {
+            return null;
+        }
+
+        // "size=24px" / "size=24pt" - the unit is dropped, the number is used as is.
+        var digits = size.TrimEnd();
+        while (digits.Length > 0 && !char.IsDigit(digits[^1]) && digits[^1] != '.')
+        {
+            digits = digits[..^1];
+        }
+
+        return float.TryParse(digits, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) && value > 0
+            ? value
+            : null;
+    }
+
+    /// <summary>The "color" attribute, or null when the tag has none (the segment keeps the current colour).</summary>
+    private static SKColor? ParseColorFromFontTag(string tagContent, SKColor defaultFontColor)
+    {
+        var colorValue = GetFontTagAttribute(tagContent, "color");
+        if (string.IsNullOrWhiteSpace(colorValue))
+        {
+            return null;
+        }
+
+        // Handle hex colors
+        if (colorValue.StartsWith("#") && colorValue.Length == 7)
+        {
+            try
+            {
+                var hex = colorValue.Substring(1);
+                var r = Convert.ToByte(hex.Substring(0, 2), 16);
+                var g = Convert.ToByte(hex.Substring(2, 2), 16);
+                var b = Convert.ToByte(hex.Substring(4, 2), 16);
+                return new SKColor(r, g, b, defaultFontColor.Alpha);
+            }
+            catch
+            {
+                return defaultFontColor;
+            }
+        }
+
+        // Handle named colors (basic set)
+        // A colour tag only says which colour, never how transparent - a "{\\1a&H80&}" on the
+        // line reached the default colour's alpha, so carry that over to the tag colours too.
+        var named = colorValue.ToLowerInvariant() switch
+        {
+            "red" => SKColors.Red,
+            "green" => SKColors.Green,
+            "blue" => SKColors.Blue,
+            "white" => SKColors.White,
+            "black" => SKColors.Black,
+            "yellow" => SKColors.Yellow,
+            "orange" => SKColors.Orange,
+            "purple" => SKColors.Purple,
+            "pink" => SKColors.Pink,
+            "gray" or "grey" => SKColors.Gray,
+            _ => defaultFontColor
+        };
+
+        return named.WithAlpha(defaultFontColor.Alpha);
     }
 
     // Pre-handler: reverse only Latin letters and ASCII digits in RTL mode, leave tags/entities untouched
     private static string ReverseNumberAndLatinOnly(string input, bool isRightToLeft)
     {
         if (!isRightToLeft || string.IsNullOrEmpty(input))
+        {
+            return input;
+        }
+
+        // The pre-reverse exists only to cancel out SKShaper reversing the line, and HarfBuzz
+        // reverses only when the line itself resolves right-to-left. A line with no RTL letter -
+        // a song title, a credit, a bare number - resolves left-to-right, so pre-reversing it just
+        // rendered it mirrored ("ABC" as "CBA", "123" as "321").
+        if (!LanguageAutoDetect.ContainsRightToLeftLetter(input))
         {
             return input;
         }
@@ -898,14 +1818,20 @@ public static class ImageRenderer
                (code >= 0x0100 && code <= 0x024F);   // Latin Extended-A/B
     }
 
-    record TextSegment(string Text, bool IsItalic, bool IsBold, SKColor Color);
+    /// <summary>
+    /// A run of text with one look. <paramref name="FontName"/> and <paramref name="FontSize"/>
+    /// are null unless a "&lt;font face=.. size=..&gt;" tag set them - the dialog font applies.
+    /// </summary>
+    record TextSegment(string Text, bool IsItalic, bool IsBold, SKColor Color, string? FontName = null, float? FontSize = null);
 
-    record TextStyle(bool IsItalic = false, bool IsBold = false, SKColor Color = default)
+    record TextStyle(bool IsItalic = false, bool IsBold = false, SKColor Color = default, string? FontName = null, float? FontSize = null)
     {
         public SKColor Color { get; init; } = Color == default ? SKColors.Black : Color;
+
+        public TextSegment ToSegment(string text) => new(text, IsItalic, IsBold, Color, FontName, FontSize);
     }
 
-    record TagInfo(TagType TagType, int EndPosition, SKColor? Color = null);
+    record TagInfo(TagType TagType, int EndPosition, SKColor? Color = null, string? FontName = null, float? FontSize = null);
 
     enum TagType
     {

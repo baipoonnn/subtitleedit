@@ -1,0 +1,315 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.VisualTree;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nikse.SubtitleEdit.Logic;
+
+/// <summary>
+/// Keeps a <see cref="TableView"/> looking at the same row when the virtualizing panel
+/// re-estimates its pixel extent (issue #13619).
+///
+/// TableView virtualizes with Avalonia's VirtualizingStackPanel, which estimates the total
+/// extent as "realized rows + remaining count x average realized row height". When a realized
+/// row changes height - the subtitle grid's rows are one or two text lines, so breaking a line
+/// grows one - the average goes up, the extent estimate grows with it, and the panel keeps the
+/// pixel *offset* fixed instead of the row the user is looking at. The same offset then maps to
+/// a much earlier row, and the grid scrolls away from the line being edited by roughly
+/// index x (1 - extentBefore / extentAfter) rows - measured at 546 -> 512 for a single row
+/// gaining a second line 546 rows down, and worse the further down the file you are. The user
+/// keeps the selection and the edit box but the row is gone from the view (upstream:
+/// AvaloniaUI/Avalonia #17831, the same estimator behind #13579 and PrePositionScroll).
+///
+/// So: remember the row at the top of the viewport (and how far it is scrolled into), and when
+/// a scroll change reports an extent change that no offset change asked for - a re-estimate,
+/// not a scroll - put that row back where it was. The restore works in row indices, not pixels,
+/// because the pixels are exactly what became unreliable: it uses
+/// <see cref="TableViewExtras.PrePositionScroll"/> plus the same measure-jump-remeasure settle
+/// loop <see cref="TableViewIndexScrollBar"/> uses for its thumb.
+/// </summary>
+public sealed class TableViewScrollAnchor
+{
+    /// <summary>Refinement steps the restore is allowed to take, like PrePositionScroll.</summary>
+    private const int SettlePasses = 3;
+
+    private static readonly AttachedProperty<TableViewScrollAnchor?> InstanceProperty =
+        AvaloniaProperty.RegisterAttached<TableView, TableViewScrollAnchor?>("ScrollAnchorInstance", typeof(TableViewScrollAnchor));
+
+    private readonly TableView _tableView;
+    private ScrollViewer? _scrollViewer;
+
+    // The visible rows, top first: each row's item (so an insert above it does not shift
+    // the view by a row) and its top edge in viewport coordinates - negative while
+    // scrolled into. The first entry is the anchor proper; the rest are fallbacks, so a
+    // removal of the top row (cutting the selected line, issue #14231) migrates the
+    // anchor to the nearest surviving neighbor instead of abandoning the restore.
+    private readonly List<(object Item, double Top)> _anchorCandidates = new();
+    private int _anchorIndex = -1;
+    private int _anchorItemCount = -1;
+    private double _anchorTop;
+
+    // Restoring the anchor scrolls the view, which reports back as another scroll change.
+    private bool _restoring;
+
+    // Someone else owns the offset for the moment (see Suspend).
+    private int _suspendCount;
+
+    private TableViewScrollAnchor(TableView tableView)
+    {
+        _tableView = tableView;
+
+        if (tableView.IsLoaded)
+        {
+            HookScrollViewer();
+        }
+
+        tableView.Loaded += (_, _) => HookScrollViewer();
+    }
+
+    /// <summary>
+    /// Starts anchoring <paramref name="tableView"/>. Attaching twice returns the first
+    /// anchor instead of stacking a second set of handlers.
+    /// </summary>
+    public static TableViewScrollAnchor Attach(TableView tableView)
+    {
+        if (tableView.GetValue(InstanceProperty) is { } existing)
+        {
+            return existing;
+        }
+
+        var anchor = new TableViewScrollAnchor(tableView);
+        tableView.SetValue(InstanceProperty, anchor);
+        return anchor;
+    }
+
+    /// <summary>The anchor attached to <paramref name="tableView"/>, if any.</summary>
+    public static TableViewScrollAnchor? GetFor(TableView tableView) => tableView.GetValue(InstanceProperty);
+
+    /// <summary>
+    /// Hands the offset to the caller until the returned scope is disposed: the anchor keeps
+    /// following the view but never moves it. Deliberate multi-pass scrolling - the index
+    /// scroll bar placing a row at the viewport top - re-estimates the extent as it realizes
+    /// rows, and an anchor restore in the middle of that would fight it.
+    /// </summary>
+    public IDisposable Suspend()
+    {
+        _suspendCount++;
+        return new SuspendScope(this);
+    }
+
+    private sealed class SuspendScope : IDisposable
+    {
+        private TableViewScrollAnchor? _anchor;
+
+        public SuspendScope(TableViewScrollAnchor anchor) => _anchor = anchor;
+
+        public void Dispose()
+        {
+            if (_anchor is { } anchor)
+            {
+                _anchor = null;
+                anchor._suspendCount--;
+            }
+        }
+    }
+
+    private void HookScrollViewer()
+    {
+        if (_scrollViewer != null)
+        {
+            return;
+        }
+
+        _scrollViewer = _tableView.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
+        if (_scrollViewer == null)
+        {
+            return;
+        }
+
+        _scrollViewer.ScrollChanged += OnScrollChanged;
+        Remember();
+    }
+
+    /// <summary>
+    /// The visual whose origin is the viewport's top-left corner. The TableView template keeps
+    /// the column header *inside* the ScrollViewer (pinned above the rows), so the ScrollViewer's
+    /// own origin sits a header height above the viewport.
+    /// </summary>
+    private Visual? ViewportOrigin => (Visual?)_scrollViewer?.Presenter ?? _scrollViewer;
+
+    private void OnScrollChanged(object? sender, ScrollChangedEventArgs e)
+    {
+        if (_restoring || _scrollViewer == null)
+        {
+            return;
+        }
+
+        // An extent change with no offset change is the panel re-estimating under the view;
+        // anything else is a scroll, which is the user's (or ScrollIntoView's) business.
+        // At the very top there is nothing to correct - offset 0 always shows row 0.
+        //
+        // One re-estimate does move the offset: when the estimate shrinks below the current
+        // offset plus viewport, the ScrollViewer coerces the offset down to the new maximum in
+        // the same pass, so the offset change arrives together with the extent change without
+        // anyone having scrolled. Near the end of the file that is the whole story of the grid
+        // "jumping to the bottom" after an auto-break (#14231): the panel re-anchors from
+        // offset / average row height, the short last rows pull the average down, the index
+        // runs past the end and is clamped to the last row, and the coerced offset then kept
+        // this anchor from restoring. An offset that lands exactly on the new maximum, moving
+        // down in step with a shrinking extent, is that coerce and not a scroll.
+        var maxOffset = Math.Max(0, _scrollViewer.Extent.Height - _scrollViewer.Viewport.Height);
+        var offsetUnchanged = Math.Abs(e.OffsetDelta.Y) < 0.5;
+        var offsetCoercedToEnd = e.ExtentDelta.Y < -0.5 &&
+                                 e.OffsetDelta.Y < -0.5 &&
+                                 Math.Abs(_scrollViewer.Offset.Y - maxOffset) < 0.5;
+        if (_suspendCount == 0 &&
+            Math.Abs(e.ExtentDelta.Y) > 0.5 &&
+            (offsetUnchanged || offsetCoercedToEnd) &&
+            _scrollViewer.Offset.Y > 0.5)
+        {
+            Restore();
+        }
+
+        Remember();
+    }
+
+    private void Remember()
+    {
+        if (_scrollViewer == null || ViewportOrigin is not { } viewportOrigin)
+        {
+            return;
+        }
+
+        // Every row intersecting the viewport, with its top edge, ordered top first.
+        var visible = new List<(int Index, double Top)>();
+        foreach (var row in _tableView.GetRealizedContainers().OfType<TableViewRow>())
+        {
+            if (row.Bounds.Height <= 0 ||
+                ((Visual)row).TranslatePoint(new Point(0, 0), viewportOrigin)?.Y is not { } rowTop ||
+                rowTop + row.Bounds.Height <= 0.5 ||
+                rowTop >= _scrollViewer.Viewport.Height - 0.5)
+            {
+                continue;
+            }
+
+            var index = _tableView.IndexFromContainer(row);
+            if (index >= 0)
+            {
+                visible.Add((index, rowTop));
+            }
+        }
+
+        visible.Sort((a, b) => a.Top.CompareTo(b.Top));
+
+        if (visible.Count == 0)
+        {
+            _anchorCandidates.Clear();
+            _anchorIndex = -1;
+            _anchorItemCount = -1;
+            return;
+        }
+
+        _anchorIndex = visible[0].Index;
+        _anchorTop = visible[0].Top;
+        _anchorItemCount = _tableView.ItemCount;
+        _anchorCandidates.Clear();
+        var itemsView = _tableView.ItemsView;
+        foreach (var (index, top) in visible)
+        {
+            if (index < itemsView.Count && itemsView[index] is { } item)
+            {
+                _anchorCandidates.Add((item, top));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Where the anchored row lives now - its index plus the viewport top it should get
+    /// back - or null when there is nothing safe to restore to. The items win over the
+    /// index so an insert above the anchor keeps the same content in view, and when the
+    /// top row itself is gone (cut/delete of the selected line, issue #14231) the anchor
+    /// migrates to the next remembered row that survived, restored to its own old top.
+    /// The index is only trusted when the list is still the same length, so a reload
+    /// (every item replaced) leaves the view alone instead of jumping to a stale row.
+    /// </summary>
+    private (int Index, double Top)? ResolveAnchor()
+    {
+        var count = _tableView.ItemCount;
+        if (count == 0)
+        {
+            return null;
+        }
+
+        foreach (var (item, top) in _anchorCandidates)
+        {
+            var index = _tableView.ItemsView.IndexOf(item);
+            if (index >= 0)
+            {
+                return (index, top);
+            }
+        }
+
+        if (_anchorIndex >= 0 && _anchorIndex < count && count == _anchorItemCount)
+        {
+            return (_anchorIndex, _anchorTop);
+        }
+
+        return null;
+    }
+
+    private void Restore()
+    {
+        if (_scrollViewer == null)
+        {
+            return;
+        }
+
+        if (ResolveAnchor() is not var (index, anchorTop))
+        {
+            return;
+        }
+
+        _restoring = true;
+        try
+        {
+            // The re-estimate usually leaves the anchor row outside the realized window - it
+            // is what the view jumped away from - so bring it back the cheap way first.
+            if (_tableView.ContainerFromIndex(index) is not { Bounds.Height: > 0 })
+            {
+                TableViewExtras.PrePositionScroll(_tableView, index);
+                _tableView.ScrollIntoView(index);
+                _tableView.UpdateLayout();
+            }
+
+            // Then put its top edge back where it was. Setting the offset makes the panel
+            // re-estimate and re-anchor again, which can nudge the rows by a fraction of a
+            // row - measure and correct until the row stays put.
+            for (var pass = 0; pass < SettlePasses; pass++)
+            {
+                if (_tableView.ContainerFromIndex(index) is not { Bounds.Height: > 0 } row ||
+                    ViewportOrigin is not { } viewportOrigin ||
+                    ((Visual)row).TranslatePoint(new Point(0, 0), viewportOrigin)?.Y is not { } rowTop)
+                {
+                    break;
+                }
+
+                var newY = Math.Clamp(
+                    _scrollViewer.Offset.Y + (rowTop - anchorTop),
+                    0, Math.Max(0, _scrollViewer.Extent.Height - _scrollViewer.Viewport.Height));
+                if (Math.Abs(newY - _scrollViewer.Offset.Y) < 0.5)
+                {
+                    break;
+                }
+
+                _scrollViewer.Offset = new Vector(_scrollViewer.Offset.X, newY);
+                _tableView.UpdateLayout();
+            }
+        }
+        finally
+        {
+            _restoring = false;
+        }
+    }
+}

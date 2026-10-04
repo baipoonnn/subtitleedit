@@ -1,4 +1,6 @@
-﻿using Nikse.SubtitleEdit.Core.Common;
+﻿using System.Buffers;
+using System.Text.RegularExpressions;
+using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Core.Dictionaries;
 using Nikse.SubtitleEdit.Core.Interfaces;
 using Nikse.SubtitleEdit.UiLogic.SpellCheck;
@@ -17,6 +19,13 @@ public interface IOcrFixEngine
     void SkipAll(string word);
     void AddName(string name);
     List<string> ReloadNames();
+
+    /// <summary>
+    /// The text comes from an OCR engine that writes "*" for a glyph it could not match (nOCR,
+    /// binary image compare): fill such gaps inside a word when exactly one letter (or apostrophe)
+    /// makes it a dictionary word. Off by default - elsewhere "sh*t" is deliberate censoring.
+    /// </summary>
+    bool FillUnknownCharacters { get; set; }
 }
 
 public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
@@ -32,8 +41,11 @@ public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
     private Subtitle _subtitle;
     private HashSet<string> _wordSkipList = new HashSet<string>();
     private Dictionary<string, string> _changeAllDictionary;
+    private HashSet<string> _abbreviations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
     private readonly ISpellChecker _spellCheckManager;
+
+    public bool FillUnknownCharacters { get; set; }
 
     public OcrFixEngine(ISpellChecker spellCheckManager)
     {
@@ -69,13 +81,25 @@ public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
         var names = ReloadNames();
         _wordSplitList = StringWithoutSpaceSplitToWords.LoadWordSplitList(SpellCheckConfig.DictionariesFolder(), _threeLetterIsoLanguageName, names);
         _ocrFixReplaceList = OcrFixReplaceList2.FromLanguageId(_threeLetterIsoLanguageName);
+        _abbreviations = AbbreviationList.Load(SpellCheckConfig.DictionariesFolder(), _fiveLetterName);
     }
 
     public OcrFixLineResult FixOcrErrors(int index, string text, bool doTryToGuessUnknownWords)
     {
         var wordsToIgnore = new List<string>();
 
+        if (FillUnknownCharacters)
+        {
+            text = FillUnknownCharactersInWords(text);
+        }
+
         var replacedLine = ReplaceLineFixes(index, text, wordsToIgnore);
+        if (Configuration.Settings.Tools.OcrFixUseHardcodedRules)
+        {
+            replacedLine = NormalizeApostrophes(replacedLine);
+        }
+
+        replacedLine = FixStartWithUppercaseLetterAfterSentenceEnd(index, replacedLine);
         var splitLine = SplitLine(replacedLine, index);
         ExpandThaiWords(splitLine);
         if (replacedLine != text)
@@ -103,6 +127,129 @@ public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
         }
 
         return splitLine;
+    }
+
+    /// <summary>
+    /// A line that follows a finished sentence starts with an uppercase letter (SE4 parity: OCR
+    /// often drops the case of the first glyph, "you're out of luck." after "Yes.", and Tesseract
+    /// reads a leading "I" as "l"). Only high-confidence cases are touched:
+    /// - the previous line ends directly in . ! or ? - a trailing quote ("...Mother!" you're...)
+    ///   can be a quotation inside a running sentence, so it does not count; neither do "..." or
+    ///   an abbreviation ("Mr.");
+    /// - the previous line is text OCR actually produced, so the first line and a run started
+    ///   from the middle are left alone;
+    /// - the capitalized first word is one the dictionary knows.
+    /// </summary>
+    internal string FixStartWithUppercaseLetterAfterSentenceEnd(int index, string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return text;
+        }
+
+        var previous = index > 0 ? _subtitle.GetParagraphOrDefault(index - 1) : null;
+        if (previous == null || !IsConfidentSentenceEnd(previous.Text))
+        {
+            return text; // no previous line (or not OCR'd yet) = no evidence a sentence ended
+        }
+
+        var st = new StrippableText(text);
+        if (st.StrippedText.Length == 0 || !char.IsLower(st.StrippedText[0]) ||
+            st.Pre.EndsWith('[') || st.Pre.EndsWith('(') || st.Pre.EndsWith('\'') ||
+            st.Pre.Contains("...", StringComparison.Ordinal) || st.Pre.Contains('…') ||
+            HtmlUtil.StartsWithUrl(st.StrippedText))
+        {
+            return text;
+        }
+
+        var firstWord = GetFirstWord(st.StrippedText);
+        var uppercaseLetter = char.ToUpperInvariant(firstWord[0]);
+        if (uppercaseLetter == 'L' && (firstWord == "l" || firstWord.StartsWith("l'", StringComparison.Ordinal)))
+        {
+            uppercaseLetter = 'I'; // "l said" / "l'm" are a misread "I said" / "I'm"
+        }
+
+        var fixedFirstWord = uppercaseLetter + firstWord.Substring(1);
+        if (!_spellCheckManager.IsWordCorrect(fixedFirstWord) && !_spellCheckWordLists.HasName(fixedFirstWord))
+        {
+            return text;
+        }
+
+        st.StrippedText = fixedFirstWord + st.StrippedText.Substring(firstWord.Length);
+        return st.Pre + st.StrippedText + st.Post;
+    }
+
+    private bool IsConfidentSentenceEnd(string previousText)
+    {
+        if (string.IsNullOrWhiteSpace(previousText))
+        {
+            return false;
+        }
+
+        var lastLine = HtmlUtil.RemoveHtmlTags(previousText, true).Trim('♪', '♫', ' ');
+        if (lastLine.Length < 2 || lastLine.EndsWith("...", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var last = lastLine[lastLine.Length - 1];
+        if (last != '.' && last != '!' && last != '?')
+        {
+            return false;
+        }
+
+        return last != '.' || !EndsWithAbbreviation(lastLine);
+    }
+
+    private static string GetFirstWord(string text)
+    {
+        var i = 0;
+        while (i < text.Length && (char.IsLetter(text[i]) || text[i] == '\'' || text[i] == '’'))
+        {
+            i++;
+        }
+
+        return i == 0 ? text.Substring(0, 1) : text.Substring(0, i);
+    }
+
+    private bool EndsWithAbbreviation(string lastLine)
+    {
+        if (_abbreviations.Count == 0)
+        {
+            return false;
+        }
+
+        var lastSpace = lastLine.LastIndexOf(' ');
+        var lastWord = lastSpace < 0 ? lastLine : lastLine.Substring(lastSpace + 1);
+        return _abbreviations.Contains(lastWord);
+    }
+
+    /// <summary>
+    /// Tesseract emits typographic single quotes for apostrophes ("‘cause", "didn’t"); subtitles
+    /// use the plain apostrophe. A line holding both an opening and a closing curly quote is
+    /// quoting something ("La lettera ‘E’") and is left alone. Runs after the replace list so
+    /// entries written with the curly forms still match. Like the per-word straightening in
+    /// <see cref="OcrFixReplaceList2.FixCommonWordErrors"/> it is one of the hardcoded rules, so
+    /// "use hardcoded rules" turns both off together.
+    /// </summary>
+    internal static string NormalizeApostrophes(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return text;
+        }
+
+        var hasOpening = text.IndexOf('‘') >= 0;
+        var hasClosing = text.IndexOf('’') >= 0;
+        if (hasOpening == hasClosing)
+        {
+            return text; // neither, or a quotation pair
+        }
+
+        // Tesseract also emits both forms side by side ("'‘cause", "ma‘'am") - collapse that pair,
+        // but only that pair: a straight '' elsewhere on the line is not the OCR's doing.
+        return text.Replace("'‘", "'").Replace("‘'", "'").Replace("'’", "'").Replace("’'", "'")
+            .Replace('‘', '\'').Replace('’', '\'');
     }
 
     private string ReplaceLineFixes(int index, string text, List<string> wordsToIgnore)
@@ -192,7 +339,10 @@ public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
             if (char.IsLetterOrDigit(line[i]) && line[i] != '"')
             {
                 var wordStart = i;
-                while (i < line.Length && ThaiScript.IsWordChar(line[i]))
+                // U+2019 is the apostrophe Tesseract emits for "didn’t"; without it the word split
+                // into "didn" + "’" + "t" and "didn" was flagged as unknown.
+                while (i < line.Length &&
+                       (ThaiScript.IsWordChar(line[i]) || line[i] == '\'' || line[i] == '’' || line[i] == '-'))
                 {
                     i++;
                 }
@@ -427,11 +577,33 @@ public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
                 isWordCorrect = true;
             }
 
-            if (!string.IsNullOrEmpty(result) && !isWordCorrect && doTryToGuessUnknownWords)
+            // Binary image compare reads lowercase l as i (italics) or uppercase I (sans-serif
+            // fonts), in any language: "friendiy", "hostiie", "InteIIigence". The replace-list
+            // rules only cover a fixed pattern per entry, and the PartialWords guesses need
+            // "try to guess unknown words" on - so try the letter swap here, unconditionally,
+            // and keep it only when the dictionary or names list confirms the result (#13660).
+            if (!isWordCorrect && TryFixLMisreadAsI(result, out var lFixed))
+            {
+                result = lFixed;
+                word.GuessUsed = true;
+                isWordCorrect = true;
+            }
+
+            // Splitting a word via the word split list ("soproudofyou" -> "so proud of you") runs even
+            // with "try to guess unknown words" off, like SE4's cautious guess level: every part must
+            // be a dictionary word, so it rarely breaks a correct word. The heuristic splitter and the
+            // letter-substitution guesses below are the over-correcting ones (#12441), so only they
+            // follow the setting.
+            if (!string.IsNullOrEmpty(result) && !isWordCorrect)
             {
                 var guesses = new List<string>();
 
-                if (w.Length > 4 && SpellCheckConfig.UseWordSplitList() && !IsThaiWordBreakerActive())
+                // A word glued to a character that is not punctuation (nOCR's "*" for an unknown
+                // glyph, "exper*ment") is only a fragment of a word, so splitting it ("ex per*ment")
+                // always breaks it.
+                var isStandaloneWord = IsStandaloneWord(splitLine, index);
+
+                if (w.Length > 4 && isStandaloneWord && SpellCheckConfig.UseWordSplitList() && !IsThaiWordBreakerActive())
                 {
                     if (_threeLetterIsoLanguageName == "eng" &&
                         w.EndsWith("in", StringComparison.Ordinal) &&
@@ -443,7 +615,7 @@ public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
                     else
                     {
                         var splitWords = StringWithoutSpaceSplitToWords.SplitWord(_wordSplitList, w, _threeLetterIsoLanguageName);
-                        if (splitWords != w)
+                        if (splitWords != w && !HasMisplacedUppercasePart(splitWords))
                         {
                             guesses.Add(splitWords);
                         }
@@ -454,13 +626,21 @@ public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
                 // it must obey the same "word split list" toggle - otherwise turning that off still left this
                 // path splitting words unconditionally, which over-corrects more than it fixes (#12243).
                 // When a Thai word breaker is active it owns segmentation; do not also run SE's Latin-oriented splitter.
-                if (SpellCheckConfig.UseWordSplitList() && !IsThaiWordBreakerActive())
+                if (doTryToGuessUnknownWords && isStandaloneWord && SpellCheckConfig.UseWordSplitList() && !IsThaiWordBreakerActive())
                 {
                     var autoSplitGuesses = UnknownWordGuesser.CreateGuessesFromLetters(result, _threeLetterIsoLanguageName);
                     if (autoSplitGuesses.Any())
                     {
                         guesses.AddRange(autoSplitGuesses);
                     }
+                }
+
+                if (doTryToGuessUnknownWords && w.Length > 4)
+                {
+                    // Substitute the replace list's <PartialWords> pairs (e.g. italic OCR often
+                    // reads 'l' as 'i': "viei" -> "viel"); a guess only wins if the dictionary
+                    // or names list below confirms it.
+                    guesses.AddRange(_ocrFixReplaceList.CreateGuessesFromLetters(result, _threeLetterIsoLanguageName));
                 }
 
                 foreach (var g in guesses)
@@ -479,6 +659,246 @@ public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
 
         word.FixedWord = result;
         word.IsSpellCheckedOk = isWordCorrect;
+    }
+
+    // Tries every combination of the word's 'i'/'I' letters replaced by 'l' (fewest swaps first)
+    // and returns the first one the dictionary or names list accepts. Only words of at least five
+    // letters are considered, like the other unknown-word guesses, and a word with more than six
+    // candidate letters only gets the single-letter and all-letters variants.
+    private bool TryFixLMisreadAsI(string word, out string fixedWord)
+    {
+        fixedWord = word;
+        if (word.Length < 5)
+        {
+            return false;
+        }
+
+        var positions = new List<int>();
+        for (var i = 0; i < word.Length; i++)
+        {
+            var ch = word[i];
+            if (ch == 'i' || ch == 'I')
+            {
+                positions.Add(i);
+            }
+            else if (!char.IsLetter(ch) && ch != '\'' && ch != '-')
+            {
+                return false;
+            }
+        }
+
+        if (positions.Count == 0)
+        {
+            return false;
+        }
+
+        var chars = word.ToCharArray();
+        var found = string.Empty;
+        bool Accept(IReadOnlyList<int> swap)
+        {
+            foreach (var idx in swap)
+            {
+                chars[idx] = 'l';
+            }
+
+            var candidate = new string(chars);
+            foreach (var idx in swap)
+            {
+                chars[idx] = word[idx];
+            }
+
+            if (IsSpelledCorrect(candidate) || _spellCheckWordLists.HasName(candidate.Trim('\'', '-')))
+            {
+                found = candidate;
+                return true;
+            }
+
+            return false;
+        }
+
+        const int maxCombinationLetters = 6;
+        if (positions.Count > maxCombinationLetters)
+        {
+            foreach (var idx in positions)
+            {
+                if (Accept(new[] { idx }))
+                {
+                    fixedWord = found;
+                    return true;
+                }
+            }
+
+            if (Accept(positions))
+            {
+                fixedWord = found;
+                return true;
+            }
+
+            return false;
+        }
+
+        // All non-empty subsets of the positions, smallest subsets first.
+        var total = 1 << positions.Count;
+        for (var size = 1; size <= positions.Count; size++)
+        {
+            for (var mask = 1; mask < total; mask++)
+            {
+                if (System.Numerics.BitOperations.PopCount((uint)mask) != size)
+                {
+                    continue;
+                }
+
+                var swap = new List<int>(size);
+                for (var bit = 0; bit < positions.Count; bit++)
+                {
+                    if ((mask & (1 << bit)) != 0)
+                    {
+                        swap.Add(positions[bit]);
+                    }
+                }
+
+                if (Accept(swap))
+                {
+                    fixedWord = found;
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private const char UnknownCharacter = '*';
+    private const string UnknownCharacterCandidates = "abcdefghijklmnopqrstuvwxyz'";
+    private const string UnknownCharacterCandidatesFirst = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    private static readonly Regex UnknownCharacterWordRegex = new(@"[\p{L}\d'*]*\*[\p{L}\d'*]*", RegexOptions.Compiled);
+
+    /// <summary>
+    /// "exper*ment" -> "experiment", "assho*e" -> "asshole": each "*" inside a word is tried as
+    /// every letter (and an apostrophe, "they*ve"), and the word is only changed when exactly one
+    /// combination is a dictionary word. A trailing "*" is left alone - it is as often a missed
+    /// full stop or comma - and so are words with more than two gaps or fewer than three letters.
+    /// </summary>
+    internal string FillUnknownCharactersInWords(string text)
+    {
+        if (string.IsNullOrEmpty(text) || text.IndexOf(UnknownCharacter) < 0 || !_isLoaded)
+        {
+            return text;
+        }
+
+        return UnknownCharacterWordRegex.Replace(text, match =>
+        {
+            var word = match.Value.TrimEnd(UnknownCharacter);
+            var trailing = match.Value.Substring(word.Length);
+            var gaps = 0;
+            var letters = 0;
+            foreach (var ch in word)
+            {
+                if (ch == UnknownCharacter)
+                {
+                    gaps++;
+                }
+                else if (char.IsLetter(ch))
+                {
+                    letters++;
+                }
+                else if (char.IsDigit(ch))
+                {
+                    return match.Value; // "c0m*ng" - the 0 is misread too
+                }
+            }
+
+            if (gaps == 0 || gaps > 2 || letters < 3)
+            {
+                return match.Value;
+            }
+
+            string? found = null;
+            var chars = word.ToCharArray();
+            if (!TryFillGap(chars, 0, ref found))
+            {
+                return match.Value; // ambiguous
+            }
+
+            return found == null ? match.Value : found + trailing;
+        });
+    }
+
+    // Fills the gaps from position 'start' on; returns false as soon as a second dictionary word
+    // turns up, so an ambiguous gap ("b*t" -> bat/bet/bit/but) is never filled.
+    private bool TryFillGap(char[] chars, int start, ref string? found)
+    {
+        var gap = Array.IndexOf(chars, UnknownCharacter, start);
+        if (gap < 0)
+        {
+            var candidate = new string(chars);
+            if (candidate[0] == '\'' || candidate[^1] == '\'' || !DoSpell(candidate))
+            {
+                return true;
+            }
+
+            if (found != null)
+            {
+                // Hunspell also accepts "Landscape" for "landscape"; the lowercase one came first.
+                return string.Equals(found, candidate, StringComparison.OrdinalIgnoreCase);
+            }
+
+            found = candidate;
+            return true;
+        }
+
+        foreach (var ch in gap == 0 ? UnknownCharacterCandidatesFirst : UnknownCharacterCandidates)
+        {
+            chars[gap] = ch;
+            if (!TryFillGap(chars, gap + 1, ref found))
+            {
+                chars[gap] = UnknownCharacter;
+                return false;
+            }
+        }
+
+        chars[gap] = UnknownCharacter;
+        return true;
+    }
+
+    private static readonly SearchValues<char> StandaloneWordNeighbours = SearchValues.Create(".,!?:;\"'()[]-…♪♫¿¡“”„‘’«»—–");
+
+    // True when the word part is surrounded only by white space, tags, the line ends or
+    // ordinary punctuation.
+    private static bool IsStandaloneWord(OcrFixLineResult splitLine, int index)
+    {
+        return IsStandaloneNeighbour(splitLine, index - 1) && IsStandaloneNeighbour(splitLine, index + 1);
+    }
+
+    private static bool IsStandaloneNeighbour(OcrFixLineResult splitLine, int index)
+    {
+        if (index < 0 || index >= splitLine.Words.Count)
+        {
+            return true;
+        }
+
+        var part = splitLine.Words[index];
+        return part.LinePartType != OcrFixLinePartType.SpecialCharacters ||
+               !part.Word.AsSpan().ContainsAnyExcept(StandaloneWordNeighbours);
+    }
+
+    // A capitalized part after the first one must be a name or "I": "forAndy" -> "for Andy" is
+    // fine, but "ofhaIfa" (OCR read the l in "half" as I) -> "of ha If a" is not.
+    private bool HasMisplacedUppercasePart(string splitWords)
+    {
+        var parts = splitWords.Split(' ');
+        for (var i = 1; i < parts.Length; i++)
+        {
+            var part = parts[i];
+            if (part.Length > 0 && char.IsUpper(part[0]) &&
+                part != "I" && !part.StartsWith("I'", StringComparison.Ordinal) &&
+                !_spellCheckWordLists.HasName(part))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // True when the word is a hyphenated compound (at least two parts) and every part is a
@@ -648,7 +1068,6 @@ public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
 
     public List<string> ReloadNames()
     {
-        var names = _spellCheckWordLists.GetAllNames();
         try
         {
             _spellCheckWordLists = new SpellCheckWordLists(_fiveLetterName, this);
@@ -658,7 +1077,11 @@ public partial class OcrFixEngine : IOcrFixEngine, IDoSpell
             SpellCheckConfig.LogError("Error loading names for OCR fix engine: " + exception.Message);
             _spellCheckWordLists = new SpellCheckWordLists(string.Empty, this);
         }
-        
-        return names;
+
+        // Read the names *after* rebuilding for _fiveLetterName. Reading first returned the
+        // previous language's names (or none at all on the first run), and Initialize feeds
+        // this list into the word-split list - so run-together words containing a proper
+        // name were split against the wrong language's name set.
+        return _spellCheckWordLists.GetAllNames();
     }
 }

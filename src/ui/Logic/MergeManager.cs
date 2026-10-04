@@ -44,7 +44,20 @@ namespace Nikse.SubtitleEdit.Logic
             }
 
             var subtitle = new Subtitle(inputSubtitle, false);
+
+            // Only a contiguous ascending selection can be merged. Validate up front: the
+            // loop below rewrites continuation marks as it goes, so refusing mid-loop would
+            // leave the first lines (and the unselected line after them) already mutated.
+            for (var i = 1; i < selectedIndices.Length; i++)
+            {
+                if (selectedIndices[i] != selectedIndices[0] + i)
+                {
+                    return subtitle;
+                }
+            }
+
             var sb = new StringBuilder();
+            var textCount = 0; // merged lines with text - one line with text keeps its own line breaks (issue #15441)
             var deleteIndices = new List<int>();
             var first = true;
             var firstIndex = 0;
@@ -95,13 +108,18 @@ namespace Nikse.SubtitleEdit.Logic
                     // addText = RemoveAssStartAlignmentTag(addText);
                 }
 
-                if (breakMode == BreakMode.UnbreakNoSpace)
+                // An empty line adds nothing to the merged text (and must not add an empty line).
+                if (!string.IsNullOrWhiteSpace(addText))
                 {
-                    sb.Append(addText);
-                }
-                else
-                {
-                    sb.AppendLine(addText);
+                    textCount++;
+                    if (breakMode == BreakMode.UnbreakNoSpace)
+                    {
+                        sb.Append(addText);
+                    }
+                    else
+                    {
+                        sb.AppendLine(addText);
+                    }
                 }
 
                 // Max, not last: with "keep end time" the merged line must span every merged
@@ -128,7 +146,7 @@ namespace Nikse.SubtitleEdit.Logic
                     .Replace(" " + Environment.NewLine, string.Empty)
                     .Replace(Environment.NewLine, string.Empty);
             }
-            else
+            else if (textCount > 1)
             {
                 text = Utilities.AutoBreakLine(text, DetectLanguage());
             }
@@ -160,9 +178,30 @@ namespace Nikse.SubtitleEdit.Logic
                 return;
             }
 
-           // var subtitle = new Subtitle(inputSubtitle, false);
+            // Only a contiguous ascending selection can be merged. Validate up front: the
+            // loop below rewrites continuation marks in the live view-models as it goes, so
+            // refusing mid-loop would leave the first lines (and the unselected line right
+            // after them) already mutated.
+            // One IndexOf for the first row, then a look at the rows that must follow it - not
+            // an IndexOf scan per selected row (select all + merge was O(rows * rows)).
+            var firstSelectedIndex = inputSubtitle.IndexOf(selectedItems[0]);
+            if (firstSelectedIndex < 0 || firstSelectedIndex + selectedItems.Count > inputSubtitle.Count)
+            {
+                return;
+            }
+
+            for (var i = 1; i < selectedItems.Count; i++)
+            {
+                if (!ReferenceEquals(inputSubtitle[firstSelectedIndex + i], selectedItems[i]))
+                {
+                    return;
+                }
+            }
+
             var sb = new StringBuilder();
             var sbOriginal = new StringBuilder();
+            var textCount = 0; // merged lines with text - one line with text keeps its own line breaks (issue #15441)
+            var originalTextCount = 0;
             var deleteIndices = new List<int>();
             var first = true;
             var firstIndex = 0;
@@ -176,9 +215,9 @@ namespace Nikse.SubtitleEdit.Logic
             string? language = null;
             string DetectLanguage() => language ?? (language = inputSubtitle.AutoDetectGoogleLanguage());
 
-            foreach (var selectedItem in selectedItems)
+            for (var selectedIndex = 0; selectedIndex < selectedItems.Count; selectedIndex++)
             {
-                var index = inputSubtitle.IndexOf(selectedItem);
+                var index = firstSelectedIndex + selectedIndex; // validated above; the loop does not move rows
                 if (first)
                 {
                     firstIndex = index;
@@ -214,15 +253,32 @@ namespace Nikse.SubtitleEdit.Logic
                     // addText = RemoveAssStartAlignmentTag(addText);
                 }
 
-                if (breakMode == BreakMode.UnbreakNoSpace)
+                // An empty line adds nothing to the merged text (and must not add an empty line).
+                var addOriginalText = inputSubtitle[index].OriginalText;
+                if (!string.IsNullOrWhiteSpace(addText))
                 {
-                    sb.Append(addText);
-                    sbOriginal.Append(inputSubtitle[index].OriginalText);
+                    textCount++;
+                    if (breakMode == BreakMode.UnbreakNoSpace)
+                    {
+                        sb.Append(addText);
+                    }
+                    else
+                    {
+                        sb.AppendLine(addText);
+                    }
                 }
-                else
+
+                if (!string.IsNullOrWhiteSpace(addOriginalText))
                 {
-                    sb.AppendLine(addText);
-                    sbOriginal.AppendLine(inputSubtitle[index].OriginalText);
+                    originalTextCount++;
+                    if (breakMode == BreakMode.UnbreakNoSpace)
+                    {
+                        sbOriginal.Append(addOriginalText);
+                    }
+                    else
+                    {
+                        sbOriginal.AppendLine(addOriginalText);
+                    }
                 }
 
                 // Max, not last: with "keep end time" the merged line must span every merged
@@ -249,7 +305,7 @@ namespace Nikse.SubtitleEdit.Logic
                     .Replace(" " + Environment.NewLine, string.Empty)
                     .Replace(Environment.NewLine, string.Empty);
             }
-            else if (breakMode != BreakMode.KeepBreaks)
+            else if (breakMode != BreakMode.KeepBreaks && textCount > 1)
             {
                 text = Utilities.AutoBreakLine(text, DetectLanguage());
             }
@@ -271,7 +327,7 @@ namespace Nikse.SubtitleEdit.Logic
                         .Replace(" " + Environment.NewLine, string.Empty)
                         .Replace(Environment.NewLine, string.Empty);
                 }
-                else if (breakMode != BreakMode.KeepBreaks)
+                else if (breakMode != BreakMode.KeepBreaks && originalTextCount > 1)
                 {
                     originalText = Utilities.AutoBreakLine(originalText, DetectLanguage());
                 }

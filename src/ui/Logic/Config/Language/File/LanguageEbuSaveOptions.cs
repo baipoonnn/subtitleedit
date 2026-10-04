@@ -31,9 +31,16 @@ public class LanguageEbuSaveOptions
     public string Teletext { get; set; }
     public string UseBox { get; set; }
     public string DoubleHeight { get; set; }
+    public string VideoPreview { get; set; }
+    public string PreviewFont { get; set; }
+    public string PreviewFontDefault { get; set; }
+    public string PreviewFontSample { get; set; }
     public string Errors { get; set; }
     public string ErrorsX { get; set; }
     public string MaxLengthError { get; set; }
+    public string MaxLengthErrorTeletextColored { get; set; }
+    public string MaxLengthErrorTeletextWhite { get; set; }
+    public string MaxLengthErrorTeletextSingleHeight { get; set; }
     public string DiscSequenceNumber { get; set; }
 
     public LanguageEbuSaveOptions()
@@ -67,9 +74,16 @@ public class LanguageEbuSaveOptions
         Teletext = "Teletext";
         UseBox = "Use box around text";
         DoubleHeight = "Use double height for text";
+        VideoPreview = "Video preview";
+        PreviewFont = "Custom font";
+        PreviewFontDefault = "(use the video preview font)";
+        PreviewFontSample = "I know the quick brown fox jumps over the lazy dog - 0123456789";
         Errors = "Errors";
         ErrorsX = "Errors: {0}";
         MaxLengthError = "Line {0} exceeds max length ({1}) by {2}: {3}";
+        MaxLengthErrorTeletextColored = "Line {0}-{1}: 36 (not {2}) should be maximum characters for double height colored text";
+        MaxLengthErrorTeletextWhite = "Line {0}-{1}: 37 (not {2}) should be maximum characters for double height white text";
+        MaxLengthErrorTeletextSingleHeight = "Line {0}: 38 (not {1}) should be maximum characters for single height white text";
         DiscSequenceNumber = "Disc sequence number";
     }
 }

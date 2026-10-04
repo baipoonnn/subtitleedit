@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -48,10 +48,16 @@ public partial class AssaApplyCustomOverrideTagsViewModel : ObservableObject
     private LibMpvDynamicPlayer? _mpvPlayer;
     private bool _isSubtitleLoaded;
     private string _oldSubtitleText;
+
+    // What the last preview was built from. The lines, header and selection are fixed once the
+    // dialog is open, so while these are unchanged the tick has nothing to do - it used to copy,
+    // tag and serialize the whole subtitle every 500 ms just to find the text unchanged.
+    private (string Tag, bool All, bool Selected, bool Forward, LibMpvDynamicPlayer Player)? _previewKey;
     private string? _header;
     private string? _footer;
     private string? _videoFileName;
-    private DispatcherTimer _positionTimer = new DispatcherTimer();
+    private bool _closed; // set by OnClosing; stops the posted half of Initialize from starting a pump on a disposed player
+    private UiTickPump _positionTimer = new(TimeSpan.FromMilliseconds(500)); // posted ticks, not a DispatcherTimer - see UiTickPump
     private List<SubtitleLineViewModel> _subtitleLines = new List<SubtitleLineViewModel>();
     private List<SubtitleLineViewModel> _selectedSubtitleLines = new List<SubtitleLineViewModel>();
 
@@ -102,6 +108,15 @@ public partial class AssaApplyCustomOverrideTagsViewModel : ObservableObject
 
         Dispatcher.UIThread.Post(() =>
         {
+            // Closed before this post ran: OnClosing has already stopped the (placeholder) pump
+            // and disposed the player, so the pump started below would never be stopped and
+            // would poll the dead player for the rest of the session - every poll an
+            // error-log entry.
+            if (_closed)
+            {
+                return;
+            }
+
             if (!string.IsNullOrEmpty(videoFileName))
             {
                 _ = VideoPlayerControl.Open(videoFileName);
@@ -122,10 +137,16 @@ public partial class AssaApplyCustomOverrideTagsViewModel : ObservableObject
 
     private void StartTitleTimer()
     {
-        _positionTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        _positionTimer = new UiTickPump(TimeSpan.FromMilliseconds(500));
         _positionTimer.Tick += (s, e) =>
         {
             if (_mpvPlayer == null)
+            {
+                return;
+            }
+
+            var key = (CurrentTag, AdjustAll, AdjustSelectedLines, AdjustSelectedLinesAndForward, _mpvPlayer);
+            if (_previewKey == key)
             {
                 return;
             }
@@ -134,6 +155,7 @@ public partial class AssaApplyCustomOverrideTagsViewModel : ObservableObject
             var text = _assaFormat.ToText(subtitle, string.Empty);
             if (_oldSubtitleText == text)
             {
+                _previewKey = key;
                 return;
             }
 
@@ -149,6 +171,7 @@ public partial class AssaApplyCustomOverrideTagsViewModel : ObservableObject
             }
 
             _oldSubtitleText = text;
+            _previewKey = key;
         };
 
         _positionTimer.Start();
@@ -262,6 +285,22 @@ public partial class AssaApplyCustomOverrideTagsViewModel : ObservableObject
         // runs when a video is loaded (OK used to be a silent no-op without one), and its last
         // tick could be up to 500 ms behind the current tag.
         UpdatedSubtitle = BuildTaggedSubtitle();
+
+        // History has to remember the tag that was actually applied - the editable CurrentTag -
+        // not the combo box template. Recording SelectedOverrideTag from OnClosing meant the list
+        // could only ever hold the stock tags, and filled up even when the user pressed Cancel.
+        var applied = (CurrentTag ?? string.Empty).Trim();
+        if (applied.Length > 0)
+        {
+            var history = Se.Settings.Assa.LastOverrideTags;
+            history.Remove(applied);
+            history.Insert(0, applied);
+            while (history.Count > 25)
+            {
+                history.RemoveAt(history.Count - 1);
+            }
+        }
+
         OkPressed = true;
         Window?.Close();
     }
@@ -275,7 +314,9 @@ public partial class AssaApplyCustomOverrideTagsViewModel : ObservableObject
     [RelayCommand]
     private async Task PlayAndBack()
     {
-        if (SelectedParagraphIndex <= 0)
+        // Index 0 is the first line, not "nothing selected" - the sibling advanced-effect dialog
+        // gets this right. With <= 0 the first line never moved the video.
+        if (SelectedParagraphIndex < 0)
         {
             await PlayAndBack(VideoPlayerControl, 3000);
             return;
@@ -297,8 +338,9 @@ public partial class AssaApplyCustomOverrideTagsViewModel : ObservableObject
 
     internal void OnClosing()
     {
+        _closed = true;
         _positionTimer.Stop();
-        VideoPlayerControl.VideoPlayer.CloseFile();
+        VideoPlayerControl.CloseAndDisposePlayer();
         try
         {
             if (File.Exists(_tempSubtitleFileName))
@@ -311,13 +353,11 @@ public partial class AssaApplyCustomOverrideTagsViewModel : ObservableObject
             // ignore
         }
 
+        // Only the combo box restore value belongs here; the history list is written from Ok().
         var tag = SelectedOverrideTag?.Tag ?? string.Empty;
         if (!string.IsNullOrEmpty(tag))
         {
             Se.Settings.Assa.LastOverrideTag = tag;
-
-            Se.Settings.Assa.LastOverrideTags.Remove(tag);
-            Se.Settings.Assa.LastOverrideTags.Insert(0, tag);
         }
     }
 
@@ -368,7 +408,7 @@ public partial class AssaApplyCustomOverrideTagsViewModel : ObservableObject
 
     internal void ComboBoxParagraphsChanged(object? sender, SelectionChangedEventArgs e)
     {
-        if (SelectedParagraphIndex <= 0)
+        if (SelectedParagraphIndex < 0)
         {
             return;
         }

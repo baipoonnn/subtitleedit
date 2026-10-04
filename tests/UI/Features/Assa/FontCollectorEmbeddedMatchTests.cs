@@ -15,7 +15,7 @@ public class FontCollectorEmbeddedMatchTests
 {
     private sealed class FakeFolderHelper : IFolderHelper
     {
-        public Task<string> PickFolderAsync(Window window, string title) => Task.FromResult(string.Empty);
+        public Task<string> PickFolderAsync(Window window, string title, string? suggestedStartFolder = null) => Task.FromResult(string.Empty);
         public Task OpenFolder(Window window, string folder) => Task.CompletedTask;
         public Task OpenFolderWithFileSelected(Window window, string selectedFile) => Task.CompletedTask;
     }
@@ -25,7 +25,7 @@ public class FontCollectorEmbeddedMatchTests
         // Only the members the collector could touch matter; the rest throw if reached.
         public Task<string> PickOpenFile(Visual sender, string title, string extensionTitle, string extension, string extensionTitle2 = "", string extension2 = "", string? suggestedStartFolder = null) => Task.FromResult(string.Empty);
         public Task<string[]> PickOpenFiles(Visual sender, string title, string extensionTitle, List<string> extensions, string extensionTitle2, List<string> extensions2) => Task.FromResult(Array.Empty<string>());
-        public Task<string> PickOpenSubtitleFile(Visual sender, string title, bool includeVideoFiles = true, string? lastOpenedFilePath = null) => throw new NotSupportedException();
+        public Task<string> PickOpenSubtitleFile(Visual sender, string title, bool includeVideoFiles = true, string? lastOpenedFilePath = null, bool includeSpreadsheets = false) => throw new NotSupportedException();
         public Task<string[]> PickOpenSubtitleFiles(Visual sender, string title, bool includeVideoFiles = true, string? lastOpenedFilePath = null) => throw new NotSupportedException();
         public Task<string> PickSaveSubtitleFile(Visual sender, Nikse.SubtitleEdit.Core.SubtitleFormats.SubtitleFormat currentFormat, string suggestedFileName, string title) => throw new NotSupportedException();
         public Task<FileHelperSubtitleSavePickerResult?> PickSaveSubtitleFileAs(Visual sender, Nikse.SubtitleEdit.Core.SubtitleFormats.SubtitleFormat currentFormat, string suggestedFileName, string title) => throw new NotSupportedException();
@@ -33,7 +33,7 @@ public class FontCollectorEmbeddedMatchTests
         public Task<string> PickSaveFile(Visual sender, string extension, string suggestedFileName, string title) => throw new NotSupportedException();
         public Task<string> PickSaveFile(Visual sender, string extension, string extensionTitle, string suggestedFileName, string title) => throw new NotSupportedException();
         public Task<string> PickSaveFile(Visual sender, IReadOnlyList<(string Name, string Extension)> fileTypes, string suggestedFileName, string title) => throw new NotSupportedException();
-        public Task<string> PickOpenVideoFile(Visual sender, string title) => throw new NotSupportedException();
+        public Task<string> PickOpenVideoFile(Visual sender, string title, string? lastOpenedFilePath = null) => throw new NotSupportedException();
         public Task<string[]> PickOpenVideoFiles(Visual sender, string title) => throw new NotSupportedException();
         public Task<string> PickOpenImageFile(Visual sender, string title) => throw new NotSupportedException();
     }
@@ -86,7 +86,9 @@ public class FontCollectorEmbeddedMatchTests
 
         Assert.Single(embedded);
         Assert.True(embedded[0].Bytes.Length >= bytes.Length, $"decoded {embedded[0].Bytes.Length} < original {bytes.Length}");
-        Assert.Equal(bytes, embedded[0].Bytes.Take(bytes.Length));
+        // Span compare, not Assert.Equal over the enumerable: xUnit walks a real font file
+        // (Arial is ~1 MB) byte by byte through IEnumerable, which took ~3 s on its own.
+        Assert.True(embedded[0].Bytes.AsSpan(0, bytes.Length).SequenceEqual(bytes), "decoded bytes differ from the original font");
 
         using var typeface = SKTypeface.FromData(SKData.CreateCopy(embedded[0].Bytes));
         Assert.NotNull(typeface);

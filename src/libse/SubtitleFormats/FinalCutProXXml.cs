@@ -108,17 +108,26 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             return xmlAsText;
         }
 
+        public override bool IsMine(List<string> lines, string fileName)
+        {
+            // Paragraphs only come from fcpxml/.../clip elements: skip parsing any other XML.
+            if (lines != null && (!AnyLineContains(lines, "<fcpxml") || !AnyLineContains(lines, "<clip")))
+            {
+                return false;
+            }
+
+            return base.IsMine(lines, fileName);
+        }
+
         public override void LoadSubtitle(Subtitle subtitle, List<string> lines, string fileName)
         {
             _errorCount = 0;
             FrameRate = Configuration.Settings.General.CurrentFrameRate;
 
-            var sb = new StringBuilder();
-            lines.ForEach(line => sb.AppendLine(line));
             var xml = new XmlDocument { XmlResolver = null };
             try
             {
-                xml.LoadXml(sb.ToString().Trim());
+                xml.LoadXml(JoinLinesTrimmed(lines));
 
                 foreach (XmlNode node in xml.SelectNodes("fcpxml/project/sequence/spine/clip"))
                 {

@@ -19,7 +19,7 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
                 return false;
             }
 
-            if (index - 3 > 0 && char.IsLetterOrDigit(text[index - 1]) && text[index - 2] == '.') // e.g: O.R.
+            if (IsInnerPeriodAbbreviation(text, index)) // e.g: O.R., a.m., EE.UU.
             {
                 return true;
             }
@@ -36,6 +36,56 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
             }
 
             return callbacks.GetAbbreviations().Contains(word + ".");
+        }
+
+        /// <summary>How many letters an inner-period abbreviation may have between two periods.</summary>
+        /// <remarks>
+        /// Two covers the doubled-letter plurals ("EE.UU.", "AA.VV."); three is room for the rare
+        /// longer group without letting a real sentence end ("Vino a casa. Ya.") look like one.
+        /// </remarks>
+        private const int MaxInnerPeriodGroupLength = 3;
+
+        /// <summary>
+        /// True for an abbreviation written with a period inside it - "U.S.", "a.m.", and the
+        /// Spanish doubled-letter plurals "EE.UU." / "AA.VV." (#13773). These are recognized by
+        /// shape, so they need no entry in the per-language abbreviation list (an entry could not
+        /// match anyway: the lookup above stops walking at the inner period).
+        /// </summary>
+        private static bool IsInnerPeriodAbbreviation(string text, int index)
+        {
+            // The letters directly before the period at index ("UU" of "EE.UU."). Letters only:
+            // digit groups would make a decimal or clock time ("3.50.", "8.30.") pass as an
+            // abbreviation and swallow a genuine sentence end.
+            var lastGroupEnd = index - 1;
+            var i = lastGroupEnd;
+            while (i >= 0 && char.IsLetter(text[i]))
+            {
+                i--;
+            }
+
+            var lastGroupLength = lastGroupEnd - i;
+            if (lastGroupLength < 1 || lastGroupLength > MaxInnerPeriodGroupLength || i < 0 || text[i] != '.')
+            {
+                return false;
+            }
+
+            // ...and the letters before that inner period ("EE").
+            var firstGroupEnd = i - 1;
+            i = firstGroupEnd;
+            while (i >= 0 && char.IsLetter(text[i]))
+            {
+                i--;
+            }
+
+            var firstGroupLength = firstGroupEnd - i;
+            if (firstGroupLength < 1 || firstGroupLength > MaxInnerPeriodGroupLength)
+            {
+                return false;
+            }
+
+            // The whole thing has to start at a word boundary, so a period landing mid-word does
+            // not turn its tail into an abbreviation.
+            return i < 0 || !char.IsLetterOrDigit(text[i]);
         }
 
         /// <summary>
@@ -230,6 +280,8 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
 
         private static readonly string[] EndPlusDashList = { ". -", "! -", "? -", "— -", "-- -", ") -", "] -", "> -", ".\" -", "!\" -", "?\" -", ")\" -", "]\" -" };
         private static readonly string[] EndPlusDashListShort = { ". -", "! -", "? -", "— -" };
+        // EndPlusDashList with "<i>" before the dash (". <i>-"); was rebuilt with LINQ per call.
+        private static readonly string[] EndPlusDashItalicList = EndPlusDashList.Select(p => p.Insert(p.Length - 1, "<i>")).ToArray();
 
         public static string FixDialogsOnOneLine(string text, string language)
         {
@@ -244,7 +296,7 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
                         part1.Length > 1 && (char.IsUpper(part1[0]) || "\"'♫♪{[(".Contains(part1[0])))
                     {
                         text = text.Replace(" - ", Environment.NewLine + "- ");
-                        if (char.IsLetter(part0[0]) || CharUtils.IsDigit(part0[0]))
+                        if (char.IsLetter(part0[0]) || CharUtils.IsAsciiDigit(part0[0]))
                         {
                             if (text.Length > 3 && text[0] == '<' && text[2] == '>')
                             {
@@ -262,8 +314,7 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
             var idx = text.IndexOfAny(EndPlusDashList, StringComparison.Ordinal);
             if (idx < 0)
             {
-                var endPlusDashItalicList = EndPlusDashList.Select(p => p.Insert(p.Length - 1, "<i>")).ToArray();
-                idx = text.IndexOfAny(endPlusDashItalicList, StringComparison.Ordinal);
+                idx = text.IndexOfAny(EndPlusDashItalicList, StringComparison.Ordinal);
             }
 
             if (idx >= 0)
@@ -527,14 +578,18 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
                 }
             }
 
-            if (text.LineStartsWithHtmlTag(true) && text[3] == 0x20)
+            // Bound the index like the "{\...}" branch above: LineStartsWithHtmlTag(true) is
+            // satisfied by a string that is exactly "<i>", so text[3] read past the end. Reached
+            // by FixHyphensRemoveForSingleLine on "<i>-" (the dash is stripped first, leaving
+            // "<i>"), which took down the whole Fix-Common-Errors / Remove-text-for-HI run.
+            if (text.Length > 3 && text.LineStartsWithHtmlTag(true) && text[3] == 0x20)
             {
                 text = text.Remove(3, 1).TrimStart();
             }
             if (text.LineStartsWithHtmlTag(false, true))
             {
                 var closeIdx = text.IndexOf('>');
-                if (closeIdx > 6 && text[closeIdx + 1] == 0x20)
+                if (closeIdx > 6 && closeIdx + 1 < text.Length && text[closeIdx + 1] == 0x20)
                 {
                     text = text.Remove(closeIdx + 1, 1);
                 }
@@ -599,7 +654,7 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
                         if (parts.Count == 2 && !string.IsNullOrWhiteSpace(parts[0]))
                         {
                             var part0 = parts[0].TrimEnd().Trim('"');
-                            bool doAdd = "!?.".Contains(part0[part0.Length - 1]) || LanguageAutoDetect.IsLanguageWithoutPeriods(language);
+                            bool doAdd = part0.Length > 0 && ("!?.".Contains(part0[part0.Length - 1]) || LanguageAutoDetect.IsLanguageWithoutPeriods(language));
                             if (parts[0].TrimStart().StartsWith('-') && parts[1].Contains(':') && doAdd ||
                                 parts[1].TrimStart().StartsWith('-') && parts[0].Contains(':') && doAdd)
                             {

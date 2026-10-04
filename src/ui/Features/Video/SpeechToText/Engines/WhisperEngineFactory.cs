@@ -42,6 +42,11 @@ public static class WhisperEngineFactory
             return new WhisperEnginePurfviewFasterWhisperXxl();
         }
 
+        if (staticName == WhisperEngineWhisperX.StaticName)
+        {
+            return new WhisperEngineWhisperX();
+        }
+
         if (staticName == Qwen3AsrCppEngine.StaticName)
         {
             return new Qwen3AsrCppEngine();
@@ -60,6 +65,11 @@ public static class WhisperEngineFactory
         if (staticName == DashScopeQwen3SttEngine.StaticName)
         {
             return new DashScopeQwen3SttEngine();
+        }
+
+        if (staticName == GoogleCloudSttEngine.StaticName)
+        {
+            return new GoogleCloudSttEngine();
         }
 
         throw new NotImplementedException();

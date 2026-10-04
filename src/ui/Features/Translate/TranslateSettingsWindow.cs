@@ -27,7 +27,7 @@ public class TranslateSettingsWindow : Window
         if (!vm.PromptIsVisible)
         {
             Width = MinWidth = 400;
-            Height = MinHeight = 220;
+            Height = MinHeight = 250;
             CanResize = false;
         }
 
@@ -58,11 +58,24 @@ public class TranslateSettingsWindow : Window
         maxBytesNumericUpDown.Increment = 100;
         maxBytesNumericUpDown.FormatString = "#,###,##0";
 
-        var labelPrompt = UiUtil.MakeTextBlock(Se.Language.Translate.PromptText, vm, null, nameof(vm.PromptIsVisible));
+        var checkBoxKeepMusicLines = UiUtil.MakeCheckBox(Se.Language.Translate.KeepMusicLinesUntranslated, vm, nameof(vm.KeepMusicLinesUntranslated));
+
+        var labelPrompt = UiUtil.MakeTextBlock(Se.Language.Translate.PromptText);
+        var buttonResetPrompt = UiUtil.MakeButton(vm.ResetPromptCommand, IconNames.Restore, Se.Language.Translate.ResetPromptToDefault);
+        var panelPrompt = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+            Spacing = 5,
+            Children = { labelPrompt, buttonResetPrompt },
+        }.BindIsVisible(vm, nameof(vm.PromptIsVisible));
+
         var promptTextBox = new TextBox
         {
             AcceptsReturn = true,
-            AcceptsTab = true,
+            // A tab is not meaningful in a translation prompt, and accepting it trapped the
+            // keyboard in this box - Tab could not reach the buttons below (#14313).
+            AcceptsTab = false,
             VerticalAlignment = VerticalAlignment.Stretch,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             Width = double.NaN,
@@ -77,7 +90,7 @@ public class TranslateSettingsWindow : Window
 
         var grid = new Grid
         {
-            RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto,*,Auto"),
+            RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto,Auto,*,Auto"),
             ColumnDefinitions = new ColumnDefinitions("Auto,*"),
             Margin = new Thickness(UiUtil.WindowMarginWidth),
             ColumnSpacing = 10,
@@ -109,10 +122,16 @@ public class TranslateSettingsWindow : Window
         Grid.SetColumn(maxBytesNumericUpDown, 1);
         row++;
 
-        grid.Children.Add(labelPrompt);
-        Grid.SetRow(labelPrompt, row);
-        Grid.SetColumn(labelPrompt, 0);
-        Grid.SetColumnSpan(labelPrompt, 2);
+        grid.Children.Add(checkBoxKeepMusicLines);
+        Grid.SetRow(checkBoxKeepMusicLines, row);
+        Grid.SetColumn(checkBoxKeepMusicLines, 0);
+        Grid.SetColumnSpan(checkBoxKeepMusicLines, 2);
+        row++;
+
+        grid.Children.Add(panelPrompt);
+        Grid.SetRow(panelPrompt, row);
+        Grid.SetColumn(panelPrompt, 0);
+        Grid.SetColumnSpan(panelPrompt, 2);
         row++;
 
         grid.Children.Add(promptTextBox);
@@ -128,7 +147,7 @@ public class TranslateSettingsWindow : Window
 
         Content = grid;
 
-        Activated += delegate { comboMerge.Focus(); }; // initial focus on an input, not an action button - a focused button clicks on bare Space
+        UiUtil.FocusOnFirstActivation(this, comboMerge); // initial focus on an input, not an action button - a focused button clicks on bare Space
         Loaded += vm.Onloaded;
         Closing += vm.OnClosing;
     }

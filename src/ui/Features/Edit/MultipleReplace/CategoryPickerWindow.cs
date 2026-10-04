@@ -53,13 +53,16 @@ public class CategoryPickerWindow : Window
             HorizontalAlignment = HorizontalAlignment.Stretch,
         };
 
-        grid.Add(MakeDataGrid(vm, out var dataGrid), 0, 0);
+        // The selection buttons and the OK/Cancel bar get a column each. Sharing one cell (with
+        // the button bar spanning both columns) only kept them apart because one is left- and the
+        // other right-aligned - in a locale with longer button labels they overlap.
+        grid.Add(MakeDataGrid(vm, out var dataGrid), 0, 0, 1, 2);
         grid.Add(panelSelectionButtons, 1, 0);
-        grid.Add(panelButtons, 1, 0, 1, 2);
+        grid.Add(panelButtons, 1, 1);
 
         Content = grid;
 
-        Activated += delegate { TableViewExtras.FocusRow(dataGrid); }; // initial focus on an input, not an action button - a focused button clicks on bare Space
+        UiUtil.FocusOnFirstActivation(this, () => { TableViewExtras.FocusRow(dataGrid); }); // initial focus on an input, not an action button - a focused button clicks on bare Space
         KeyDown += vm.KeyDown;
     }
 

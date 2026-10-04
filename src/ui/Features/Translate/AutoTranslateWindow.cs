@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Data;
@@ -6,6 +6,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 using Nikse.SubtitleEdit.UiLogic.AutoTranslate;
 using Nikse.SubtitleEdit.Features.Translate.LlamaCppAdvanced;
 using Nikse.SubtitleEdit.Features.Video.SpeechToText;
@@ -69,7 +70,14 @@ public class AutoTranslateWindow : Window
         ApplyButtonAccentStates(vm);
         vm.PropertyChanged += OnViewModelPropertyChanged;
 
+        AddHandler(KeyDownEvent, (_, e) => _vm.PreviewKeyDown(e), RoutingStrategies.Tunnel, handledEventsToo: false);
+
         Loaded += (s, e) => UiUtil.RestoreWindowPosition(this);
+
+        // Start out on the accented button so it is selected, not just coloured like it - Enter
+        // then starts the translation right away. First activation only: coming back from a
+        // dialog must not pull focus away from where the user left it.
+        UiUtil.FocusOnFirstActivation(this, () => _buttonTranslate?.Focus());
     }
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -90,6 +98,21 @@ public class AutoTranslateWindow : Window
     {
         SetAccent(_buttonTranslate, vm.IsTranslatePrimary);
         SetAccent(_buttonOk, vm.IsOkPrimary);
+
+        // A focused button answers Enter itself, so let the focus follow the accent when OK takes
+        // over as the default button after a translation - otherwise Enter would keep translating.
+        // Posted: this runs from the first of the property changes that flip the two buttons, and
+        // OK is still disabled (hence unfocusable) until its own IsEnabled binding has caught up.
+        if (vm.IsOkPrimary && _buttonTranslate?.IsFocused == true)
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_vm.IsOkPrimary && _buttonTranslate?.IsFocused == true)
+                {
+                    _buttonOk?.Focus();
+                }
+            });
+        }
     }
 
     private static void SetAccent(Button? button, bool accent)
@@ -180,11 +203,11 @@ public class AutoTranslateWindow : Window
 
         var poweredByLabel = UiUtil.MakeTextBlock(Se.Language.General.PoweredBy);
         poweredByLabel.Foreground = UiUtil.GetTextColor(0.65);
-        poweredByLabel.FontSize = 11;
+        poweredByLabel.FontSize = UiUtil.ScaledFontSize(11);
         poweredByLabel.VerticalAlignment = VerticalAlignment.Center;
 
         var poweredByLink = UiUtil.MakeLink("Google Translate V1", vm.GoToAutoTranslatorUriCommand, vm, nameof(vm.AutoTranslatorLinkText));
-        poweredByLink.FontSize = 11;
+        poweredByLink.FontSize = UiUtil.ScaledFontSize(11);
         poweredByLink.VerticalAlignment = VerticalAlignment.Center;
 
         var poweredByPanel = new StackPanel
@@ -206,60 +229,10 @@ public class AutoTranslateWindow : Window
         return MakeCard(stack);
     }
 
+    // Shared with batch convert's auto-translate view - see AutoTranslateCombos.
     private static FuncDataTemplate<IAutoTranslator> BuildTranslatorItemTemplate()
     {
-        return StatusDots.ComboItemTemplate<IAutoTranslator>(
-            translator => translator.Name,
-            _ => null,
-            GetTranslatorDotStatus);
-    }
-
-    // Install-status dot for the auto-translate engine combo. Only the two engines that Subtitle
-    // Edit downloads itself - llama.cpp and CrispASR/MADLAD - get a dot; cloud/API translators
-    // (Google, DeepL, ChatGPT, ...) and externally-hosted servers have nothing to install.
-    private static DownloadDotStatus GetTranslatorDotStatus(IAutoTranslator translator)
-    {
-        switch (translator)
-        {
-            case LlamaCppTranslate:
-            case LlamaCppAdvancedTranslate:
-                return StatusDots.From(
-                    LlamaCppServerManager.IsEngineInstalled(),
-                    LlamaCppUpdateStatus.GetEngineUpdateStatus());
-            case CrispAsrMadladTranslate:
-                var crispAsr = new CrispAsrMadlad();
-                if (!crispAsr.IsEngineInstalled())
-                {
-                    return DownloadDotStatus.NotInstalled;
-                }
-
-                return StatusDots.From(true, DownloadHashManager.GetSidecarStatus(crispAsr.GetAndCreateWhisperFolder()));
-            default:
-                return DownloadDotStatus.None;
-        }
-    }
-
-    // A custom *.gguf the user dropped into the models folder has no Url - it is already on disk,
-    // so it shows a green dot and a "custom" size tag rather than a download size.
-    private static string? GetLlamaCppModelSize(LlamaCppModelDisplay model)
-    {
-        if (string.IsNullOrEmpty(model.Model.Url))
-        {
-            var custom = Se.Language.General.Custom;
-            return string.IsNullOrEmpty(model.Model.Size) ? custom : $"{custom}, {model.Model.Size}";
-        }
-
-        return string.IsNullOrEmpty(model.Model.Size) ? null : model.Model.Size;
-    }
-
-    private static DownloadDotStatus GetLlamaCppModelDotStatus(LlamaCppModelDisplay model)
-    {
-        if (string.IsNullOrEmpty(model.Model.Url) || LlamaCppServerManager.IsModelInstalled(model.Model))
-        {
-            return DownloadDotStatus.UpToDate;
-        }
-
-        return DownloadDotStatus.NotInstalled;
+        return AutoTranslateCombos.EngineItemTemplate();
     }
 
     private static Border BuildApiConfigCard(AutoTranslateViewModel vm)
@@ -270,19 +243,11 @@ public class AutoTranslateWindow : Window
         buttonDownloadCrispAsr.Bind(Button.IsVisibleProperty, new Binding(nameof(vm.ButtonDownloadIsVisible)));
 
         var crispAsrModelCombo = UiUtil.MakeComboBox(vm.CrispAsrModels, vm, nameof(vm.SelectedCrispAsrModel), nameof(vm.CrispAsrModelComboIsVisible));
-        crispAsrModelCombo.ItemTemplate = StatusDots.ComboItemTemplate<SpeechToTextModelDisplay>(
-            model => model.Model.Name,
-            model => string.IsNullOrEmpty(model.Model.Size) ? null : model.Model.Size,
-            model => model.Engine.IsModelInstalled(model.Model)
-                ? DownloadDotStatus.UpToDate
-                : DownloadDotStatus.NotInstalled);
+        crispAsrModelCombo.ItemTemplate = AutoTranslateCombos.CrispAsrModelItemTemplate();
         crispAsrModelCombo.WithAccessibleName(Se.Language.General.Model);
 
         var llamaCppModelCombo = UiUtil.MakeComboBox(vm.LlamaCppModels, vm, nameof(vm.SelectedLlamaCppModel), nameof(vm.LlamaCppModelComboIsVisible)).WithWidth(220);
-        llamaCppModelCombo.ItemTemplate = StatusDots.ComboItemTemplate<LlamaCppModelDisplay>(
-            model => model.Model.DisplayName,
-            GetLlamaCppModelSize,
-            GetLlamaCppModelDotStatus);
+        llamaCppModelCombo.ItemTemplate = AutoTranslateCombos.LlamaCppModelItemTemplate();
         llamaCppModelCombo.WithAccessibleName(Se.Language.General.Model);
 
         var buttonDownloadLlamaCpp = UiUtil.MakeButton(string.Empty, vm.DownloadLlamaCppCommand)
@@ -293,6 +258,11 @@ public class AutoTranslateWindow : Window
         var buttonLlamaCppServer = UiUtil.MakeButton(string.Empty, vm.ToggleLlamaCppServerCommand).WithMarginLeft(5);
         buttonLlamaCppServer.Bind(Button.ContentProperty, new Binding(nameof(vm.LlamaCppServerButtonText)));
         buttonLlamaCppServer.Bind(Button.IsVisibleProperty, new Binding(nameof(vm.LlamaCppButtonsAreVisible)));
+        if (Se.Settings.Appearance.ShowHints)
+        {
+            // The local server's live endpoint (random port) - see LlamaCppServerUrlInfo.
+            buttonLlamaCppServer.Bind(ToolTip.TipProperty, new Binding(nameof(vm.LlamaCppServerUrlInfo)));
+        }
 
         var buttonLlamaCppOpenFolder = UiUtil.MakeButton(vm.OpenLlamaCppModelsFolderCommand, IconNames.FolderOpen, Se.Language.General.OpenContainingFolder)
             .WithMarginLeft(5);
@@ -304,12 +274,12 @@ public class AutoTranslateWindow : Window
         ToolTip.SetTip(buttonLlamaCppEngineSettings, Se.Language.General.LlamaCppEngineSettings);
         buttonLlamaCppEngineSettings.Bind(Button.IsVisibleProperty, new Binding(nameof(vm.LlamaCppButtonsAreVisible)));
 
-        var buttonLlamaCppAdvancedSettings = UiUtil.MakeButton(Se.Language.Translate.AdvancedDotDotDot, vm.ShowLlamaCppAdvancedSettingsCommand)
+        var buttonLlamaCppAdvancedSettings = UiUtil.MakeButton(Se.Language.General.AdvancedDotDotDot, vm.ShowLlamaCppAdvancedSettingsCommand)
             .WithMarginLeft(5)
-            .WithAccessibleName(Se.Language.Translate.AdvancedSettings);
+            .WithAccessibleName(Se.Language.General.AdvancedSettings);
         if (Se.Settings.Appearance.ShowHints)
         {
-            ToolTip.SetTip(buttonLlamaCppAdvancedSettings, Se.Language.Translate.AdvancedSettings);
+            ToolTip.SetTip(buttonLlamaCppAdvancedSettings, Se.Language.General.AdvancedSettings);
         }
         buttonLlamaCppAdvancedSettings.Bind(Button.IsVisibleProperty, new Binding(nameof(vm.LlamaCppAdvancedButtonIsVisible)));
 
@@ -348,7 +318,13 @@ public class AutoTranslateWindow : Window
         settingsPanel.Children.Add(textBoxApiUrl);
 
         settingsPanel.Children.Add(UiUtil.MakeTextBlock(Se.Language.General.Model, vm, null, nameof(vm.ModelIsVisible)).WithMarginRight(5));
-        settingsPanel.Children.Add(UiUtil.MakeTextBox(150, vm, nameof(vm.ModelText), nameof(vm.ModelIsVisible)).WithAccessibleName(Se.Language.General.Model));
+        settingsPanel.Children.Add(UiUtil.MakeTextBox(150, vm, nameof(vm.ModelText), nameof(vm.ModelTextBoxIsVisible)).WithAccessibleName(Se.Language.General.Model));
+
+        // The engines that know their models offer them in a drop-down; any other name can still be typed.
+        var modelCombo = UiUtil.MakeEditableComboBox(220, System.Array.Empty<string>(), vm, nameof(vm.ModelText)).WithAccessibleName(Se.Language.General.Model);
+        modelCombo.Bind(ComboBox.ItemsSourceProperty, new Binding(nameof(vm.ModelPresets)));
+        modelCombo.Bind(ComboBox.IsVisibleProperty, new Binding(nameof(vm.ModelComboIsVisible)));
+        settingsPanel.Children.Add(modelCombo);
         settingsPanel.Children.Add(UiUtil.MakeButtonBrowse(vm.BrowseModelCommand, nameof(vm.ModelBrowseIsVisible), Se.Language.General.Model).WithMarginLeft(5));
 
         settingsPanel.Children.Add(UiUtil.MakeTextBlock(Se.Language.General.Model, vm, null, nameof(vm.CrispAsrModelComboIsVisible)).WithMarginRight(5));
@@ -436,7 +412,30 @@ public class AutoTranslateWindow : Window
         tableView.Columns.Add(new SeTableViewColumn
         {
             Header = Se.Language.General.Translation,
-            CellTemplate = TableViewExtras.MakeTextCellTemplate(nameof(TranslateRow.TranslatedText)),
+            // Editable in place: a click on the selected row's translation opens a TextBox, so a
+            // slip in the machine translation is fixed here instead of after closing the window.
+            // The display stays a binding, so rows keep updating while a translation runs; editing
+            // is gated to when no translation is running, as the engine writes TranslatedText then.
+            CellTemplate = new FuncDataTemplate<TranslateRow>((row, _nameScope) =>
+            {
+                if (row == null)
+                {
+                    return new Border();
+                }
+
+                var cell = new Border { Background = Brushes.Transparent };
+                _ = new TableViewInlineTextEditor(cell, tableView,
+                    () => row.TranslatedText,
+                    text =>
+                    {
+                        row.TranslatedText = text;
+                        vm.HasTranslatedSomething = true; // an edited translation is something to keep - enables OK
+                    },
+                    () => TableViewExtras.MakeTextCellTemplate(nameof(TranslateRow.TranslatedText)).Build(row)!,
+                    canEdit: () => vm.IsTranslateEnabled,
+                    hint: Se.Language.Translate.EditTranslationHint);
+                return cell;
+            }),
             Width = new GridLength(1, GridUnitType.Star),
             CellTheme = UiUtil.TableViewCellTheme,
             HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
@@ -511,14 +510,23 @@ public class AutoTranslateWindow : Window
             }
         };
 
+        var checkBoxTranslateInPlace = UiUtil.MakeCheckBox(Se.Language.Translate.TranslateInPlaceNoOriginal, vm, nameof(vm.TranslateInPlace));
+        checkBoxTranslateInPlace.VerticalAlignment = VerticalAlignment.Center;
+        checkBoxTranslateInPlace.Bind(CheckBox.IsVisibleProperty, new Binding(nameof(vm.TranslateInPlaceIsVisible)));
+
         var footerGrid = new Grid
         {
             RowDefinitions = new RowDefinitions("Auto,Auto"),
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
         };
         footerGrid.Children.Add(progressGrid);
         Grid.SetRow(progressGrid, 0);
+        Grid.SetColumnSpan(progressGrid, 2);
+        footerGrid.Children.Add(checkBoxTranslateInPlace);
+        Grid.SetRow(checkBoxTranslateInPlace, 1);
         footerGrid.Children.Add(buttonBar);
         Grid.SetRow(buttonBar, 1);
+        Grid.SetColumn(buttonBar, 1);
 
         return footerGrid;
     }

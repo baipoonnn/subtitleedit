@@ -18,6 +18,7 @@ public class LanguageFixCommonErrors
     public string FixShortDisplayTimes { get; set; }
     public string FixLongDisplayTimes { get; set; }
     public string FixShortGaps { get; set; }
+    public string FixShortGap { get; set; }
     public string FixInvalidItalicTags { get; set; }
     public string RemoveUnneededSpaces { get; set; }
     public string RemoveUnneededPeriods { get; set; }
@@ -29,6 +30,7 @@ public class LanguageFixCommonErrors
     public string RemoveLineBreaksPixelWidth { get; set; }
     public string FixUppercaseIInsideLowercaseWords { get; set; }
     public string FixDoubleApostrophes { get; set; }
+    public string FixMisreadQuotes { get; set; }
     public string AddPeriods { get; set; }
     public string StartWithUppercaseLetterAfterParagraph { get; set; }
     public string StartWithUppercaseLetterAfterPeriodInsideParagraph { get; set; }
@@ -51,6 +53,7 @@ public class LanguageFixCommonErrors
     public string FixCommasExample { get; set; }
     public string RemoveLineBreaksExample { get; set; }
     public string FixDoubleApostrophesExample { get; set; }
+    public string FixMisreadQuotesExample { get; set; }
     public string AddPeriodsExample { get; set; }
     public string StartWithUppercaseLetterAfterParagraphExample { get; set; }
     public string StartWithUppercaseLetterAfterPeriodInsideParagraphExample { get; set; }
@@ -61,6 +64,12 @@ public class LanguageFixCommonErrors
     public string Fix3PlusLines { get; set; }
     public string Analysing { get; set; }
     public string NothingToFix { get; set; }
+    public string Log { get; set; }
+    public string NothingFixableBut { get; set; }
+    public string XFixedBut { get; set; }
+    public string XCouldBeFixedBut { get; set; }
+    public string NumberOfImportantLogMessages { get; set; }
+    public string FixedOkXY { get; set; }
     public string XFixesApplied { get; set; }
     public string XFixesYSelected { get; set; }
     public string FixFirstLetterToUppercaseAfterParagraph { get; set; }
@@ -137,6 +146,7 @@ public class LanguageFixCommonErrors
         FixShortDisplayTimes = "Fix short display times";
         FixLongDisplayTimes = "Fix long display times";
         FixShortGaps = "Fix short gaps";
+        FixShortGap = "Fix short gap";
         FixInvalidItalicTags = "Fix invalid italic tags";
         RemoveUnneededSpaces = "Remove unneeded spaces";
         RemoveUnneededPeriods = "Remove unneeded periods";
@@ -148,6 +158,7 @@ public class LanguageFixCommonErrors
         RemoveLineBreaksPixelWidth = "Unbreak subtitles that can fit on one line (pixel width)";
         FixUppercaseIInsideLowercaseWords = "Fix uppercase 'i' inside lowercase words (OCR error)";
         FixDoubleApostrophes = "Fix double apostrophe characters ('') to a single quote (\")";
+        FixMisreadQuotes = "Fix apostrophes misread as double quotes (OCR, English)";
         AddPeriods = "Add period after lines where next line starts with uppercase letter";
         StartWithUppercaseLetterAfterParagraph = "Start with uppercase letter after paragraph";
         StartWithUppercaseLetterAfterPeriodInsideParagraph = "Start with uppercase letter after period inside paragraph";
@@ -171,6 +182,7 @@ public class LanguageFixCommonErrors
         FixCommasExample = ",, -> ,";
         RemoveLineBreaksExample = "Foo</br>bar! -> Foo bar!";
         FixDoubleApostrophesExample = "''Has double single quotes'' -> \"Has single double quote\"";
+        FixMisreadQuotesExample = "\"Hello' -> \"Hello\"";
         AddPeriodsExample = "Hello world -> Hello world.";
         StartWithUppercaseLetterAfterParagraphExample = "p1: Foobar! || p2: foobar! -> p1: Foobar! || p2: Foobar!";
         StartWithUppercaseLetterAfterPeriodInsideParagraphExample = "Hello there! how are you?  -> Hello there! How are you?";
@@ -181,6 +193,12 @@ public class LanguageFixCommonErrors
         Fix3PlusLines = "Fix subtitles with more than two lines";
         Analysing = "Analyzing...";
         NothingToFix = "Nothing to fix :)";
+        Log = "Log";
+        NothingFixableBut = "Nothing could be fixed automatically. The subtitle contains errors - see log for details";
+        XFixedBut = "{0} issue(s) fixed but the subtitle still contains errors - see log for details";
+        XCouldBeFixedBut = "{0} issue(s) could be fixed but the subtitle will still contain errors - see log for details";
+        NumberOfImportantLogMessages = "{0} important log messages!";
+        FixedOkXY = "Fixed and OK - '{0}': {1}";
         XFixesApplied = "Fixes applied: {0}";
         XFixesYSelected = "{0} fixes - {1} selected";
         FixFirstLetterToUppercaseAfterParagraph = "Fix first letter to uppercase after paragraph";

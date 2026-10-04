@@ -234,20 +234,29 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             return xmlAsText;
         }
 
+        public override bool IsMine(List<string> lines, string fileName)
+        {
+            // Paragraphs only come from <generatoritem> elements: skip parsing any other XML twice.
+            if (lines != null && (!AnyLineContains(lines, "<generatoritem")))
+            {
+                return false;
+            }
+
+            return base.IsMine(lines, fileName);
+        }
+
         public override void LoadSubtitle(Subtitle subtitle, List<string> lines, string fileName)
         {
             _errorCount = 0;
             var frameRate = Configuration.Settings.General.CurrentFrameRate;
 
-            var sb = new StringBuilder();
-            lines.ForEach(line => sb.AppendLine(line));
             var xml = new XmlDocument { XmlResolver = null };
             try
             {
-                xml.LoadXml(sb.ToString().Trim());
+                xml.LoadXml(JoinLinesTrimmed(lines));
 
                 var header = new XmlDocument { XmlResolver = null };
-                header.LoadXml(sb.ToString());
+                header.LoadXml(JoinLines(lines));
                 if (header.SelectSingleNode("sequence/media/video/track") != null)
                 {
                     header.RemoveChild(header.SelectSingleNode("sequence/media/video/track"));

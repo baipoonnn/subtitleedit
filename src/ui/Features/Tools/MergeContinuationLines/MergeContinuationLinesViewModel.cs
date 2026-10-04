@@ -8,6 +8,7 @@ using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Linq;
 
 namespace Nikse.SubtitleEdit.Features.Tools.MergeContinuationLines;
 
@@ -29,6 +30,7 @@ public partial class MergeContinuationLinesViewModel : ObservableObject, IClosin
     private readonly System.Timers.Timer _previewTimer;
     private volatile bool _isClosing;
     private bool _isDirty;
+    private bool _saveSettings;
 
     public MergeContinuationLinesViewModel()
     {
@@ -37,8 +39,11 @@ public partial class MergeContinuationLinesViewModel : ObservableObject, IClosin
         AllSubtitlesFixed = new List<SubtitleLineViewModel>();
         CandidatesInfo = string.Empty;
 
-        MaxMillisecondsBetweenLines = 500;
-        MaxCharacters = Se.Settings.General.SubtitleLineMaximumLength * Se.Settings.General.MaxNumberOfLines;
+        MaxMillisecondsBetweenLines = Se.Settings.Tools.MergeContinuationLinesMaxGapMs;
+        // 0 means "not saved yet" - fall back to the general defaults (#13514 pattern).
+        MaxCharacters = Se.Settings.Tools.MergeContinuationLinesMaxCharacters > 0
+            ? Se.Settings.Tools.MergeContinuationLinesMaxCharacters
+            : Se.Settings.General.SubtitleLineMaximumLength * Se.Settings.General.MaxNumberOfLines;
 
         _previewTimer = new System.Timers.Timer(250);
         _previewTimer.Elapsed += PreviewTimerElapsed;
@@ -75,6 +80,10 @@ public partial class MergeContinuationLinesViewModel : ObservableObject, IClosin
     {
         _allSubtitles = subtitles;
         _language = language;
+
+        // Callers that pass their own limits (text to speech uses 500/500) must not overwrite
+        // what the user last picked in the tool itself.
+        _saveSettings = !maxGapMs.HasValue && !maxCharacters.HasValue;
         if (maxGapMs.HasValue)
         {
             MaxMillisecondsBetweenLines = maxGapMs.Value;
@@ -112,7 +121,28 @@ public partial class MergeContinuationLinesViewModel : ObservableObject, IClosin
     [RelayCommand]
     private void Ok()
     {
-        AllSubtitlesFixed = MergeContinuationLinesHelper.Apply(_allSubtitles, Candidates, _language);
+        // Recompute the candidates from the current settings instead of applying the preview
+        // collection: the preview is filled by a 250 ms timer, so it is empty when OK comes
+        // right after opening and stale when it comes right after a settings change. The
+        // user's deselections in the shown list are carried over by first-line index.
+        var deselected = new HashSet<int>(Candidates.Where(c => !c.IsSelected).Select(c => c.Index));
+        var candidates = MergeContinuationLinesHelper.Detect(_allSubtitles, _language, MaxMillisecondsBetweenLines, MaxCharacters);
+        foreach (var candidate in candidates)
+        {
+            if (deselected.Contains(candidate.Index))
+            {
+                candidate.IsSelected = false;
+            }
+        }
+
+        AllSubtitlesFixed = MergeContinuationLinesHelper.Apply(_allSubtitles, candidates, _language);
+        if (_saveSettings)
+        {
+            Se.Settings.Tools.MergeContinuationLinesMaxGapMs = MaxMillisecondsBetweenLines;
+            Se.Settings.Tools.MergeContinuationLinesMaxCharacters = MaxCharacters;
+            Se.SaveSettings();
+        }
+
         OkPressed = true;
         Window?.Close();
     }

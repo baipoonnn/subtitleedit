@@ -39,6 +39,26 @@ env:
 
 
 jobs:
+  # A stable release is the one a Flathub build is cut from: the flathub manifest
+  # pins a tag and installs the AppStream metainfo from that tagged checkout, so
+  # whatever <releases> block is committed at the tag is what the published app
+  # advertises forever. v5.1.0 was tagged without bumping it and therefore claims
+  # 5.0.0 as its newest release. Cheap job, no needs, so it fails within seconds
+  # instead of after the whole build matrix - but create-release depends on it,
+  # so a stable release cannot get out without the entry.
+  verify-metainfo-release-entry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Verify the metainfo has a <release> entry for this version
+        run: |
+          if [ "${{ inputs.is_prerelease }}" = "true" ]; then
+            echo "Pre-release build - a metainfo <release> entry is not required."
+            exit 0
+          fi
+          bash installer/flatpak/update-metainfo-version.sh --check
+
   # The flatpak chain (regenerate-flatpak-nuget-sources → build-linux-flatpak)
   # is defined first so GitHub's job-graph view lays it out in its own visual
   # lane on the left, rather than routing arrows from build-macos / build-linux
@@ -55,10 +75,30 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # The Ubuntu archive can stall mid-fetch on GitHub runners: the runner's
+      # mirrorlist fails over from azure.archive.ubuntu.com to archive.ubuntu.com,
+      # and a fallback connection that dies after the response headers never trips
+      # apt's inactivity timeout. On the first v5.2.0-beta18 release run both
+      # flatpak jobs sat on a single "Get: noble-security InRelease" for 39 minutes
+      # (until cancelled) while every other build was already green - and with no
+      # job timeout set, that would have parked the release for up to 6 hours.
+      # Bound each apt call and retry instead of hanging.
       - name: Install flatpak
+        timeout-minutes: 12
         run: |
-          sudo apt-get update
-          sudo apt-get install -y flatpak
+          apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+          for attempt in 1 2 3; do
+            if sudo timeout 180 apt-get update $apt_opts && \
+               sudo timeout 180 apt-get install -y $apt_opts flatpak; then
+              exit 0
+            fi
+            echo "::warning::apt stalled or failed (attempt $attempt/3)"
+            # A killed apt can leave dpkg half-configured; clear it before retrying.
+            sudo dpkg --configure -a || true
+            sleep 15
+          done
+          echo "::error::Could not install flatpak from the Ubuntu archive after 3 attempts"
+          exit 1
 
       # Cache the Freedesktop SDK + dotnet extension so we don't re-download
       # ~6 GB of runtimes on every CI run. Bump the key suffix (-vN) to invalidate.
@@ -159,10 +199,30 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # The Ubuntu archive can stall mid-fetch on GitHub runners: the runner's
+      # mirrorlist fails over from azure.archive.ubuntu.com to archive.ubuntu.com,
+      # and a fallback connection that dies after the response headers never trips
+      # apt's inactivity timeout. On the first v5.2.0-beta18 release run both
+      # flatpak jobs sat on a single "Get: noble-security InRelease" for 39 minutes
+      # (until cancelled) while every other build was already green - and with no
+      # job timeout set, that would have parked the release for up to 6 hours.
+      # Bound each apt call and retry instead of hanging.
       - name: Install flatpak
+        timeout-minutes: 12
         run: |
-          sudo apt-get update
-          sudo apt-get install -y flatpak
+          apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+          for attempt in 1 2 3; do
+            if sudo timeout 180 apt-get update $apt_opts && \
+               sudo timeout 180 apt-get install -y $apt_opts flatpak; then
+              exit 0
+            fi
+            echo "::warning::apt stalled or failed (attempt $attempt/3)"
+            # A killed apt can leave dpkg half-configured; clear it before retrying.
+            sudo dpkg --configure -a || true
+            sleep 15
+          done
+          echo "::error::Could not install flatpak from the Ubuntu archive after 3 attempts"
+          exit 1
 
       - name: Cache flatpak runtimes
         id: flatpak-cache
@@ -322,9 +382,9 @@ jobs:
 
       - name: Download libmpv for Windows
         run: |
-          Invoke-WebRequest -Uri "https://github.com/SubtitleEdit/support-files/releases/download/libmpv-2026-04-21/libmpv2-win64.zip" -OutFile "libmpv2-64.zip"
+          Invoke-WebRequest -Uri "https://github.com/SubtitleEdit/support-files/releases/download/libmpv-2026-08-14b/libmpv2-win64.zip" -OutFile "libmpv2-64.zip"
           Expand-Archive -Path "libmpv2-64.zip" -DestinationPath "libmpv-temp"
-          Invoke-WebRequest -Uri "https://github.com/SubtitleEdit/support-files/releases/download/libmpv-2026-04-21/libmpv2-win-arm64.zip" -OutFile "libmpv2-arm64.zip"
+          Invoke-WebRequest -Uri "https://github.com/SubtitleEdit/support-files/releases/download/libmpv-2026-08-14b/libmpv2-win-arm64.zip" -OutFile "libmpv2-arm64.zip"
           Expand-Archive -Path "libmpv2-arm64.zip" -DestinationPath "libmpv-arm64-temp"
 
       - name: Publish Windows x64 app
@@ -337,10 +397,14 @@ jobs:
             -p:FileVersion=$env:APP_VER_FULL `
             -p:InformationalVersion=$env:APP_VER_DISPLAY `
             -o ./publish/windows-x64
-          Copy-Item "libmpv-temp/libmpv-2.dll" "./publish/windows-x64/"
+          # The zip also carries libmpv's vulkan-1.dll dependency (+ its license) - copy everything (#13856).
+          Copy-Item "libmpv-temp/*" "./publish/windows-x64/"
           # Native PDBs (libSkiaSharp.pdb, libHarfBuzzSharp.pdb, ...) come from the SkiaSharp
           # runtime NuGet packages and aren't suppressed by -p:DebugType=none.
           Get-ChildItem -Path "./publish/windows-x64" -Filter "*.pdb" -Recurse -File | Remove-Item -Force
+          # libse.xml is libse's API documentation (GenerateDocumentationFile, for the NuGet package);
+          # the app never reads it, and users updating by hand wondered if it held settings.
+          Remove-Item -Path "./publish/windows-x64/libse.xml" -Force -ErrorAction SilentlyContinue
 
       - name: Publish Windows ARM64 app
         run: |
@@ -353,8 +417,10 @@ jobs:
             -p:InformationalVersion=$env:APP_VER_DISPLAY `
             -o ./publish/windows-arm64
           # Must be the native ARM64 libmpv build — an ARM64 process cannot load the x64 DLL (issue #12087).
-          Copy-Item "libmpv-arm64-temp/libmpv-2.dll" "./publish/windows-arm64/"
+          # The zip also carries libmpv's vulkan-1.dll dependency (+ its license) - copy everything (#13856).
+          Copy-Item "libmpv-arm64-temp/*" "./publish/windows-arm64/"
           Get-ChildItem -Path "./publish/windows-arm64" -Filter "*.pdb" -Recurse -File | Remove-Item -Force
+          Remove-Item -Path "./publish/windows-arm64/libse.xml" -Force -ErrorAction SilentlyContinue
 
       # - name: Setup WiX
       #   run: |
@@ -470,6 +536,8 @@ jobs:
             arch_label: ARM64
             runtime: osx-arm64
             ffmpeg_url: https://www.osxexperts.net/ffmpeg81arm.zip
+            voikko_url: https://github.com/SubtitleEdit/support-files/releases/download/voikko-4.3-fi-2024-06/libvoikko-4.3.3-macos-arm64.zip
+            voikko_sha256: 21a131d6a972890384c7900f2aace608a6c8baa14da8c63863ee7433def9bb2b
             ffmpeg_sha256: ebb82529562b71170807bbc6b0e7eb4f0b13af8cbb0e085bb9e8f6fe709598ad
             dmg_format: UDBZ
             expected_arch: arm64
@@ -477,6 +545,8 @@ jobs:
             arch_label: x64
             runtime: osx-x64
             ffmpeg_url: https://www.osxexperts.net/ffmpeg80intel.zip
+            voikko_url: https://github.com/SubtitleEdit/support-files/releases/download/voikko-4.3-fi-2024-06/libvoikko-4.3.3-macos-x64.zip
+            voikko_sha256: fbd458122536708192a4f56f98f34d28a399547e628ce17d14d4cc6534b7a62b
             ffmpeg_sha256: 2d24d22db78c87f394a5822867acd5c5dc5e762cd261a44bd26923f3a5af3e07
             dmg_format: UDZO
             expected_arch: x86_64
@@ -566,6 +636,29 @@ jobs:
           }
           echo "Extracted $(ls libmpv-temp | wc -l) dylibs ($(du -sh libmpv-temp | cut -f1))"
 
+      # libvoikko for Finnish spell check: self-contained build of libvoikko 4.3.3 (no HFST,
+      # links only libc++/libSystem, install name @rpath/libvoikko.1.dylib) plus the voikko-fi
+      # "format 5" dictionary. The dylib joins the Frameworks payload (signed with the rest),
+      # the dictionary goes to Contents/Resources/voikko where VoikkoSpellChecker probes.
+      - name: Download + verify libvoikko + voikko-fi dictionary (${{ matrix.arch }})
+        run: |
+          set -e
+          curl -fL -o libvoikko.zip "${{ matrix.voikko_url }}"
+          echo "${{ matrix.voikko_sha256 }}  libvoikko.zip" | shasum -a 256 -c -
+          unzip -o libvoikko.zip -d libmpv-temp
+          rm libvoikko.zip
+          archs=$(lipo -archs libmpv-temp/libvoikko.1.dylib)
+          if [ "$archs" != "${{ matrix.expected_arch }}" ]; then
+            echo "ERROR: libvoikko archs are '$archs', expected exactly '${{ matrix.expected_arch }}'"
+            exit 1
+          fi
+          curl -fL -o voikko-dict.zip "https://github.com/SubtitleEdit/support-files/releases/download/voikko-4.3-fi-2024-06/dict.zip"
+          echo "98f26bb67e08288910fbf1aa92521f28bee79538ba86aefa267713333e7fa537  voikko-dict.zip" | shasum -a 256 -c -
+          mkdir -p voikko-dict-temp
+          unzip -o voikko-dict.zip -d voikko-dict-temp
+          rm voikko-dict.zip
+          [ -f voikko-dict-temp/5/mor-standard/mor.vfst ] || { echo "ERROR: voikko dictionary layout changed"; exit 1; }
+
       - name: Setup code signing (if certificates available)
         run: |
           if [ -n "${{ secrets.MACOS_CERTIFICATE }}" ] && [ -n "${{ secrets.APPLE_ID_USER }}" ]; then
@@ -595,6 +688,7 @@ jobs:
             -p:InformationalVersion="$APP_VER_DISPLAY" \
             -o ./publish/macos-${{ matrix.arch }}
           find ./publish/macos-${{ matrix.arch }} -name "*.pdb" -delete
+          rm -f ./publish/macos-${{ matrix.arch }}/libse.xml
           # Arch sanity on the cross-published SE executable (lipo: exact match).
           file ./publish/macos-${{ matrix.arch }}/SubtitleEdit
           archs=$(lipo -archs ./publish/macos-${{ matrix.arch }}/SubtitleEdit)
@@ -635,6 +729,10 @@ jobs:
           cp "./libmpv-temp/"*.dylib "$app/Contents/Frameworks/"
           chmod -R 755 "$app/Contents/Frameworks/"
           rm -rf "./libmpv-temp"
+
+          mkdir -p "$app/Contents/Resources/voikko"
+          cp -R "./voikko-dict-temp/5" "$app/Contents/Resources/voikko/"
+          rm -rf "./voikko-dict-temp"
 
           # Point the SE executable at the bundled Frameworks for @rpath resolution.
           # The dylibs themselves already use @rpath/* internally (IINA's CI fixed
@@ -777,6 +875,7 @@ jobs:
 
           # Native PDBs from the SkiaSharp runtime NuGet aren't suppressed by -p:DebugType=none.
           find ./publish/linux-x64 -name "*.pdb" -delete
+          rm -f ./publish/linux-x64/libse.xml
 
       - name: Publish Linux ARM64 app
         run: |
@@ -790,6 +889,7 @@ jobs:
             -o ./publish/linux-arm64
 
           find ./publish/linux-arm64 -name "*.pdb" -delete
+          rm -f ./publish/linux-arm64/libse.xml
 
       - name: Create Linux TAR packages
         run: |
@@ -822,7 +922,7 @@ jobs:
 
   create-release:
     if: ${{ inputs.create_release }}
-    needs: [build-windows, build-macos, build-linux, build-linux-flatpak]
+    needs: [build-windows, build-macos, build-linux, build-linux-flatpak, verify-metainfo-release-entry]
     runs-on: ubuntu-latest
     permissions:
       contents: write

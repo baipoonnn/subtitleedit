@@ -31,8 +31,10 @@ public partial class AssaAttachmentsViewModel : ObservableObject
     [ObservableProperty] private bool _isCopyFontnameToClipboardVisible;
     [ObservableProperty] private bool _isDeleteVisible;
     [ObservableProperty] private bool _isDeleteAllVisible;
+    [ObservableProperty] private bool _isMoveVisible;
 
     public Window? Window { get; internal set; }
+    public TableView AttachmentGrid { get; set; }
     public bool OkPressed { get; private set; }
     public string Header { get; set; }
     public string Footer { get; set; }
@@ -60,6 +62,28 @@ public partial class AssaAttachmentsViewModel : ObservableObject
         Header = string.Empty;
         Footer = string.Empty;
         _subtitle = new Subtitle();
+        AttachmentGrid = new TableView();
+    }
+
+    [RelayCommand]
+    private void MoveUp() => MoveAttachments(ListMoveDirection.Up);
+
+    [RelayCommand]
+    private void MoveDown() => MoveAttachments(ListMoveDirection.Down);
+
+    [RelayCommand]
+    private void MoveToTop() => MoveAttachments(ListMoveDirection.Top);
+
+    [RelayCommand]
+    private void MoveToBottom() => MoveAttachments(ListMoveDirection.Bottom);
+
+    /// <summary>
+    /// Reorders the selected attachments, as in SE 4. The list order is not presentation-only -
+    /// it is the order the attachments are written back to the [Fonts]/[Graphics] sections on OK.
+    /// </summary>
+    private void MoveAttachments(ListMoveDirection direction)
+    {
+        TableViewExtras.MoveSelectedRows(AttachmentGrid, Attachments, direction);
     }
 
     [RelayCommand]
@@ -146,8 +170,12 @@ public partial class AssaAttachmentsViewModel : ObservableObject
             return;
         }
 
+        // Parse returns null when the picked file is not Advanced Sub Station Alpha (an empty
+        // file, a renamed .ssa, a broken header) - dereferencing it crashed the dialog.
         var subtitle = Subtitle.Parse(fileName, new AdvancedSubStationAlpha());
-        var attachments = ListAttachments(subtitle.Footer.SplitToLines() ?? []);
+        var attachments = subtitle == null
+            ? new List<AssaAttachmentItem>()
+            : ListAttachments(subtitle.Footer.SplitToLines() ?? []);
         if (attachments.Count == 0)
         {
             await MessageBox.Show(Window, Se.Language.General.Error, Se.Language.Assa.NoAttachmentsFound, MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -181,12 +209,111 @@ public partial class AssaAttachmentsViewModel : ObservableObject
         var bytes = selected.Bytes;
         try
         {
-            File.WriteAllBytes(fileName, bytes);
+            await File.WriteAllBytesAsync(fileName, bytes);
         }
         catch (Exception exception)
         {
             await MessageBox.Show(Window, exception.Message, Se.Language.General.Error, MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    /// <summary>
+    /// Trims all embedded font attachments to the glyphs the current subtitle text uses
+    /// (see <see cref="FontTrimmer"/>), after a confirmation - the trimmed fonts cannot
+    /// display characters that are added to the subtitle later.
+    /// </summary>
+    [RelayCommand]
+    private async Task TrimFontsToUsedCharacters()
+    {
+        if (Window == null)
+        {
+            return;
+        }
+
+        var fonts = Attachments.Where(a => a.Category == Se.Language.General.Fonts && a.Bytes.Length > 0).ToList();
+        if (fonts.Count == 0)
+        {
+            await MessageBox.Show(Window, Se.Language.Assa.Attachments, Se.Language.Assa.TrimFontsNoFontsToTrim, MessageBoxButtons.OK);
+            return;
+        }
+
+        // Trim up front (nothing is applied yet), so the confirmation can show each
+        // font's old -> new size and the total saving before the user decides.
+        var usedTextLines = AssaFontEmbedder.GetUsedTextLines(_subtitle);
+        long savedBytes = 0;
+        var results = new List<(AssaAttachmentItem Font, FontTrimmer.TrimResult Result)>();
+        var reportLines = new List<string>();
+        foreach (var font in fonts)
+        {
+            var result = FontTrimmer.Trim(font.Bytes, usedTextLines);
+            results.Add((font, result));
+            if (result.Trimmed)
+            {
+                savedBytes += font.Bytes.Length - result.Bytes.Length;
+                reportLines.Add(
+                    $"{font.FileName}: {Utilities.FormatBytesToDisplayFileSize(font.Bytes.Length)} -> " +
+                    Utilities.FormatBytesToDisplayFileSize(result.Bytes.Length));
+            }
+            else
+            {
+                reportLines.Add($"{font.FileName}: {FontTrimmer.GetSkipReasonDisplay(result.SkipReason)}");
+            }
+        }
+
+        var trimmableCount = results.Count(r => r.Result.Trimmed);
+        if (trimmableCount == 0)
+        {
+            await MessageBox.Show(
+                Window,
+                Se.Language.Assa.Attachments,
+                string.Format(
+                    Se.Language.Assa.TrimFontsXFontsTrimmedSavedYZ,
+                    0,
+                    Utilities.FormatBytesToDisplayFileSize(0),
+                    string.Join(Environment.NewLine, reportLines)),
+                MessageBoxButtons.OK);
+            return;
+        }
+
+        // The [Fonts] section stores 3 bytes as 4 characters, so the .ass file shrinks by more
+        // than the raw font-byte difference - same math as the font collector's prompt.
+        var savedEncodedBytes = (long)(savedBytes * 4.0 / 3.0);
+        var message =
+            string.Format(Se.Language.Assa.TrimFontsPromptX, trimmableCount) + Environment.NewLine + Environment.NewLine +
+            string.Join(Environment.NewLine, reportLines) + Environment.NewLine + Environment.NewLine +
+            string.Format(Se.Language.Assa.TrimFontsTotalSavingX, Utilities.FormatBytesToDisplayFileSize(savedEncodedBytes));
+        var answer = await MessageBox.Show(Window, Se.Language.Assa.Attachments, message, MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (answer != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        var selectedFileName = SelectedAttachment?.FileName;
+        foreach (var (font, result) in results)
+        {
+            if (!result.Trimmed)
+            {
+                continue;
+            }
+
+            // replace the row so the grid picks up the new size (the item is not observable)
+            var trimmed = new AssaAttachmentItem
+            {
+                FileName = font.FileName,
+                Category = font.Category,
+                Bytes = result.Bytes,
+                Content = UUEncoding.UUEncode(result.Bytes).Trim(),
+                Size = Utilities.FormatBytesToDisplayFileSize(result.Bytes.Length),
+                FontName = font.FontName,
+            };
+            Attachments[Attachments.IndexOf(font)] = trimmed;
+            if (font.FileName == selectedFileName)
+            {
+                SelectedAttachment = trimmed;
+            }
+        }
+
+        UpdatePreview();
     }
 
     [RelayCommand]
@@ -246,7 +373,7 @@ public partial class AssaAttachmentsViewModel : ObservableObject
 
     public void Initialize(Subtitle subtitle, SubtitleFormat format, string fileName)
     {
-        Title = string.Format(Se.Language.Assa.AttachmentsTitleX, fileName);
+        Title = UiUtil.FormatTitleWithFileName(Se.Language.Assa.AttachmentsTitleX, fileName);
         Header = subtitle.Header;
         Footer = subtitle.Footer ?? string.Empty;
         _subtitle = subtitle;
@@ -528,6 +655,7 @@ public partial class AssaAttachmentsViewModel : ObservableObject
     {
         IsDeleteAllVisible = Attachments.Count > 0;
         IsDeleteVisible = SelectedAttachment != null;
+        IsMoveVisible = Attachments.Count > 1 && AttachmentGrid.SelectedItems?.Count > 0;
     }
 
     internal void AttachmentsDataGridKeyDown(object? sender, KeyEventArgs e)
@@ -535,6 +663,30 @@ public partial class AssaAttachmentsViewModel : ObservableObject
         if (e.Key == Key.Delete && SelectedAttachment != null)
         {
             AttachmentRemove();
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>
+    /// Ctrl+Up/Ctrl+Down reorder the selected attachments, as in SE 4. Tunneled, because the
+    /// ListBox underneath TableView handles Ctrl+Arrow itself (move focus without changing
+    /// the selection) and a bubbling handler would never see the key.
+    /// </summary>
+    internal void AttachmentsMoveKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.KeyModifiers != KeyModifiers.Control || e.Source is TextBox)
+        {
+            return;
+        }
+
+        if (e.Key == Key.Up)
+        {
+            MoveAttachments(ListMoveDirection.Up);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Down)
+        {
+            MoveAttachments(ListMoveDirection.Down);
             e.Handled = true;
         }
     }

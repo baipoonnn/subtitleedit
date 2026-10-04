@@ -1,8 +1,9 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Nikse.SubtitleEdit.Core.Common;
+using Nikse.SubtitleEdit.Core.Common.TextLengthCalculator;
 using Nikse.SubtitleEdit.Features.Main;
 using Nikse.SubtitleEdit.Logic.Config;
 using System;
@@ -56,7 +57,9 @@ internal static class SubtitleTextInfoHelper
 
         var cps = GetCharactersPerSecond(text, item.StartTime, item.EndTime);
         cpsText = string.Format(Se.Language.Main.CharactersPerSecond, $"{cps:0.0}");
-        cpsBackground = Se.Settings.General.ColorCharactersPerSecond && cps > maxCps ? _errorBrush : _transparentBrush;
+        // Same rounded comparison as the grid row, so the label cannot read "15.0" in red while
+        // the row for the same line is not flagged (#14418).
+        cpsBackground = Se.Settings.General.ColorCharactersPerSecond && CpsHelper.IsAboveMax(cps, maxCps) ? _errorBrush : _transparentBrush;
         totalText = info.TotalText;
         totalBackground = info.TotalBackground;
     }
@@ -99,7 +102,12 @@ internal static class SubtitleTextInfoHelper
     internal static void FillLineLengthPanel(StackPanel panel, List<string> lines, bool colorTextTooLong, int maxLineLength)
     {
         var children = panel.Children;
-        var needed = 1 + lines.Count + Math.Max(0, lines.Count - 1);
+
+        // Only the first few lines get a length label - a pasted wall of text would otherwise
+        // push the panel across the whole window and shove the controls below it out of view (#14831).
+        var shownLines = Math.Min(lines.Count, MaxLineLengthLabels);
+        var truncated = lines.Count > shownLines;
+        var needed = 1 + shownLines + Math.Max(0, shownLines - 1) + (truncated ? 1 : 0);
         while (children.Count > needed)
         {
             children.RemoveAt(children.Count - 1);
@@ -107,7 +115,7 @@ internal static class SubtitleTextInfoHelper
 
         var index = 0;
         SetLabel(children, ref index, Se.Language.Main.SingleLineLength, null);
-        for (var i = 0; i < lines.Count; i++)
+        for (var i = 0; i < shownLines; i++)
         {
             if (i > 0)
             {
@@ -120,7 +128,17 @@ internal static class SubtitleTextInfoHelper
                 lineLength.ToString(CultureInfo.InvariantCulture),
                 colorTextTooLong && lineLength > maxLineLength ? _errorBrush : null);
         }
+
+        if (truncated)
+        {
+            SetLabel(children, ref index, "/ ...", null);
+        }
     }
+
+    /// <summary>
+    /// Maximum number of per-line length labels shown in the edit box's single-line-length panel.
+    /// </summary>
+    internal const int MaxLineLengthLabels = 5;
 
     private const double LabelFontSize = 12;
     private static readonly Thickness LabelPadding = new Thickness(2);
@@ -148,7 +166,7 @@ internal static class SubtitleTextInfoHelper
 
             if (Math.Abs(existing.FontSize - LabelFontSize) > 0.001)
             {
-                existing.FontSize = LabelFontSize;
+                existing.FontSize = UiUtil.ScaledFontSize(LabelFontSize);
             }
 
             if (existing.Padding != LabelPadding)
@@ -193,7 +211,59 @@ internal static class SubtitleTextInfoHelper
     }
 
     internal static string StripHtml(string text)
-        => HtmlUtil.RemoveHtmlTags(text, true);
+        => CalcFactory.RemoveTags(text);
+
+    /// <summary>
+    /// Number of lines for the "too many lines" rule. Like <paramref name="strippedLineCount"/>
+    /// (the stripped text split to lines), except a line produced by an ASSA hard break
+    /// (\N or \n) that is empty or whitespace once tags are removed is not counted - repeated
+    /// "\N" is used to lift a subtitle up the screen, which adds no text lines (#15531).
+    /// A real empty line (no \N) still counts.
+    /// </summary>
+    internal static int GetLineCountForMaxLines(string text, int strippedLineCount)
+    {
+        if (string.IsNullOrEmpty(text) || text.IndexOf('\\') < 0)
+        {
+            return strippedLineCount;
+        }
+
+        var count = 0;
+        foreach (var line in text.SplitToLines())
+        {
+            var start = 0;
+            var hasHardBreak = false;
+            var lineCount = 0;
+            for (var i = 0; i < line.Length - 1; i++)
+            {
+                if (line[i] == '\\' && (line[i + 1] == 'N' || line[i + 1] == 'n'))
+                {
+                    hasHardBreak = true;
+                    if (!string.IsNullOrWhiteSpace(StripHtml(line.Substring(start, i - start))))
+                    {
+                        lineCount++;
+                    }
+
+                    start = i + 2;
+                    i++;
+                }
+            }
+
+            if (!hasHardBreak)
+            {
+                count++;
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(StripHtml(line.Substring(start))))
+            {
+                lineCount++;
+            }
+
+            count += lineCount;
+        }
+
+        return count;
+    }
 
     internal static double GetTotalLength(string text)
         => (double)text.CountCharacters(false);

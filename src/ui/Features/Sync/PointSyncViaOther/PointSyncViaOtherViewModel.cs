@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -50,8 +50,14 @@ public partial class PointSyncViaOtherViewModel : ObservableObject
     private readonly IFileHelper _fileHelper;
     private readonly IWindowService _windowService;
 
+    // Carried down to the "Set sync point" dialog, which opens its own player (issue #13995).
+    private int _audioTrackId = -1;
+
     private string _videoFileName;
     private List<SubtitleLineViewModel> _originalSubtitles;
+
+    // Only passed on to "Set sync point via video", which draws the subtitle on its video (#13767).
+    private VideoPreviewSubtitleContext _previewContext = VideoPreviewSubtitleContext.Default;
 
     public PointSyncViaOtherViewModel(IFileHelper fileHelper, IWindowService windowService)
     {
@@ -68,17 +74,37 @@ public partial class PointSyncViaOtherViewModel : ObservableObject
         _originalSubtitles = new List<SubtitleLineViewModel>();
     }
 
-    public void Initialize(List<SubtitleLineViewModel> subtitles, string videoFileName, string fileName)
+    public void Initialize(List<SubtitleLineViewModel> subtitles, int selectedIndex, string videoFileName, string fileName, VideoPreviewSubtitleContext previewContext, int audioTrackId = -1)
     {
+        _audioTrackId = audioTrackId;
         Subtitles.Clear();
         Subtitles.AddRange(subtitles);
         _originalSubtitles = subtitles.Select(s => new SubtitleLineViewModel(s)).ToList();
         FileName = fileName;
         _videoFileName = videoFileName;
+        _previewContext = previewContext;
+        UpdateGaps(Subtitles);
 
         if (Subtitles.Count > 0)
         {
-            SelectedSubtitle = Subtitles[0];
+            // Start at the line selected in the main window (issue #15062).
+            SelectedSubtitle = Subtitles[Math.Clamp(selectedIndex, 0, Subtitles.Count - 1)];
+        }
+    }
+
+    /// <summary>
+    /// Fills in the silence before each line's start, shown in the "Gap" column to point out
+    /// likely sync points (issue #10175). Unlike the main grid's gap-to-next, the gap here is
+    /// the one *before* a line - a line starting after silence is where two independently made
+    /// subtitle files are most likely to truly align. The first line's gap is measured from
+    /// 00:00, since it too starts after "silence".
+    /// </summary>
+    private static void UpdateGaps(IList<SubtitleLineViewModel> lines)
+    {
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var previousEnd = i == 0 ? TimeSpan.Zero : lines[i - 1].EndTime;
+            lines[i].PreviousGap = (lines[i].StartTime - previousEnd).TotalMilliseconds;
         }
     }
 
@@ -146,7 +172,10 @@ public partial class PointSyncViaOtherViewModel : ObservableObject
             return;
         }
 
-        var fileName = await _fileHelper.PickOpenSubtitleFile(Window, Se.Language.General.OpenSubtitleFileTitle);
+        // Start in the folder of the other subtitle if one is already picked, else where the
+        // current subtitle lives - the other file is normally right next to it (#13488).
+        var startPath = string.IsNullOrEmpty(FileNameOther) ? FileName : FileNameOther;
+        var fileName = await _fileHelper.PickOpenSubtitleFile(Window, Se.Language.General.OpenSubtitleFileTitle, lastOpenedFilePath: startPath);
         if (string.IsNullOrEmpty(fileName))
         {
             return;
@@ -180,6 +209,7 @@ public partial class PointSyncViaOtherViewModel : ObservableObject
             Othersubtitles.Add(new SubtitleLineViewModel(p, subtitle.OriginalFormat));
         }
 
+        UpdateGaps(Othersubtitles);
         SelectedOtherSubtitle = Othersubtitles.FirstOrDefault();
 
         // Sync points reference lines in the replaced file, so they are no longer valid.
@@ -227,7 +257,7 @@ public partial class PointSyncViaOtherViewModel : ObservableObject
 
         var result = await _windowService.ShowDialogAsync<SetSyncPointWindow, SetSyncPointViewModel>(Window, vm =>
         {
-            vm.Initialize(Subtitles.ToList(), left, _videoFileName, FileName, null);
+            vm.Initialize(Subtitles.ToList(), left, _videoFileName, FileName, _previewContext, null, _audioTrackId);
         });
 
         // Keep a video opened (or found) in there - also when the dialog was cancelled.
@@ -309,6 +339,8 @@ public partial class PointSyncViaOtherViewModel : ObservableObject
             Subtitles[i].StartTime = synced[i].StartTime;
             Subtitles[i].EndTime = synced[i].EndTime;
         }
+
+        UpdateGaps(Subtitles);
     }
 
     [RelayCommand]

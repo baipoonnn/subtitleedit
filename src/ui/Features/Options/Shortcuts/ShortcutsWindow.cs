@@ -46,7 +46,7 @@ public class ShortcutsWindow : Window
             Margin = new Thickness(10),
             Width = double.NaN,
             HorizontalAlignment = HorizontalAlignment.Stretch,
-        };
+        }.WithSearchAndClearIcons();
         _searchBox.Bind(TextBox.TextProperty, new Binding(nameof(vm.SearchText)) { Source = vm });
         // Give the interactive controls accessible names so screen readers announce them instead of
         // reading a generic "edit"/"combo box"/"check box" (issue #11745).
@@ -64,7 +64,7 @@ public class ShortcutsWindow : Window
             Child = new TextBlock
             {
                 [!TextBlock.TextProperty] = new Binding(nameof(vm.FlatNodes) + ".Count") { Source = vm, Mode = BindingMode.OneWay, Converter = new NumberToStringWithThousandSeparator() },
-                FontSize = 10,
+                FontSize = UiUtil.ScaledFontSize(10),
                 FontWeight = FontWeight.SemiBold,
                 VerticalAlignment = VerticalAlignment.Center,
                 Foreground = new SolidColorBrush(accentColor),
@@ -128,7 +128,7 @@ public class ShortcutsWindow : Window
             {
                 var icon = new ContentControl
                 {
-                    FontSize = 17,
+                    FontSize = UiUtil.ScaledFontSize(17),
                     Foreground = Brushes.White,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
@@ -151,7 +151,7 @@ public class ShortcutsWindow : Window
 
                 var name = new TextBlock
                 {
-                    FontSize = 11,
+                    FontSize = UiUtil.ScaledFontSize(11),
                     HorizontalAlignment = HorizontalAlignment.Center,
                     TextAlignment = TextAlignment.Center,
                 };
@@ -159,7 +159,7 @@ public class ShortcutsWindow : Window
 
                 var count = new TextBlock
                 {
-                    FontSize = 10,
+                    FontSize = UiUtil.ScaledFontSize(10),
                     Opacity = 0.6,
                     HorizontalAlignment = HorizontalAlignment.Center,
                 };
@@ -180,11 +180,25 @@ public class ShortcutsWindow : Window
         // TableView has no content-based column sizing (Auto behaves as star), so the
         // former Auto columns get pixel widths measured from the widest strings they
         // can show (the VM is initialized before the window ctor, so the rows exist).
+        // Measure with the UI font the user picked - the FontManager default (Helvetica Neue on
+        // macOS) may not load at all, and a measuring failure must never stop the window from
+        // opening: fall back to a rough per-character estimate (#15562).
         const double sortArrowSlack = 18; // room for TableViewHeaderSorter's ▲/▼ header suffix
-        static double MeasureWidth(string text, double fontSize, FontWeight fontWeight) =>
-            new FormattedText(text, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
-                new Typeface(Typeface.Default.FontFamily, FontStyle.Normal, fontWeight), fontSize, null).Width;
-        static double HeaderWidth(string header) =>
+        var measureFontFamily = FontFamilyHelper.Make(Se.Settings.Appearance.FontName);
+        double MeasureWidth(string text, double fontSize, FontWeight fontWeight)
+        {
+            try
+            {
+                return new FormattedText(text ?? string.Empty, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+                    new Typeface(measureFontFamily, FontStyle.Normal, fontWeight), fontSize, null).Width;
+            }
+            catch (Exception exception)
+            {
+                Se.LogError(exception, "ShortcutsWindow: could not measure text width");
+                return (text?.Length ?? 0) * fontSize * 0.6;
+            }
+        }
+        double HeaderWidth(string header) =>
             MeasureWidth(header, 14, FontWeight.SemiBold) + 8 + sortArrowSlack;
 
         var activeInTexts = new[]
@@ -206,7 +220,7 @@ public class ShortcutsWindow : Window
                 .DefaultIfEmpty(90).Max());
 
         // Keycap chips: 6+6 padding, 1+1 border, min 24 wide, 3 spacing; panel margin 4+20.
-        static double ChipRowWidth(ShortcutTreeNode node) => node.KeyParts.Count == 0
+        double ChipRowWidth(ShortcutTreeNode node) => node.KeyParts.Count == 0
             ? MeasureWidth(Se.Language.Options.Shortcuts.Unassigned, 11, FontWeight.Normal)
             : node.KeyParts.Sum(k => Math.Max(24, MeasureWidth(k, 11, FontWeight.SemiBold) + 14)) +
               (node.KeyParts.Count - 1) * 3;
@@ -223,7 +237,7 @@ public class ShortcutsWindow : Window
             {
                 var text = new TextBlock
                 {
-                    FontSize = 11,
+                    FontSize = UiUtil.ScaledFontSize(11),
                     VerticalAlignment = VerticalAlignment.Center,
                 };
                 text.Bind(TextBlock.TextProperty, new Binding(nameof(ShortcutTreeNode.ActiveIn)));
@@ -255,7 +269,7 @@ public class ShortcutsWindow : Window
             {
                 var icon = new ContentControl
                 {
-                    FontSize = 16,
+                    FontSize = UiUtil.ScaledFontSize(16),
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
                 };
@@ -290,7 +304,7 @@ public class ShortcutsWindow : Window
                 // (text variant: darkened on the light theme for contrast, #12778).
                 var text = new TextBlock
                 {
-                    FontSize = 12,
+                    FontSize = UiUtil.ScaledFontSize(12),
                     FontWeight = FontWeight.Medium,
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(2, 0, 14, 0),
@@ -332,7 +346,7 @@ public class ShortcutsWindow : Window
                     {
                         var keyText = new TextBlock
                         {
-                            FontSize = 11,
+                            FontSize = UiUtil.ScaledFontSize(11),
                             FontWeight = FontWeight.SemiBold,
                             HorizontalAlignment = HorizontalAlignment.Center,
                         };
@@ -355,7 +369,7 @@ public class ShortcutsWindow : Window
                 var notSet = new TextBlock
                 {
                     Text = Se.Language.Options.Shortcuts.Unassigned,
-                    FontSize = 11,
+                    FontSize = UiUtil.ScaledFontSize(11),
                     FontStyle = FontStyle.Italic,
                     Opacity = 0.45,
                     HorizontalAlignment = HorizontalAlignment.Right,
@@ -374,6 +388,7 @@ public class ShortcutsWindow : Window
         };
 
         var shortcutsGrid = TableViewExtras.MakeTableView(multiSelect: false);
+        shortcutsGrid.WithAccessibleName(Se.Language.General.Shortcuts);
         shortcutsGrid.DataContext = vm;
         shortcutsGrid.ItemsSource = vm.FlatNodes;
         shortcutsGrid.Columns.Add(columnActiveIn);
@@ -450,6 +465,11 @@ public class ShortcutsWindow : Window
         };
         flyout.Items.Add(menuItemImportSe4);
 
+        // On macOS a Ctrl+click is the secondary click, but it does not reach ContextFlyout
+        // reliably - so without this the Import/Export menu is unreachable for anyone using a
+        // one-button mouse or a trackpad with secondary click turned off. Every other window
+        // with a control-scoped flyout already does this; this grid was the one left out.
+        UiUtil.AttachMacContextFlyoutHandler(shortcutsGrid);
 
         var buttonOk = UiUtil.MakeButtonOk(vm.CommandOkCommand);
         var buttonResetAllShortcuts = UiUtil.MakeButton(Se.Language.General.Reset, vm.ResetAllShortcutsCommand);

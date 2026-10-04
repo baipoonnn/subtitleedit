@@ -36,6 +36,8 @@ public class LanguageOcr
     public string NOcrDatabase { get; set; }
     public string DrawMode { get; set; }
     public string AddNewCharcter { get; set; }
+    public string AddNOcrCharacterTitle { get; set; }
+    public string AddBinaryOcrCharacterTitle { get; set; }
     public string LineIndexX { get; set; }
     public string InspectNOcrAdditions { get; set; }
     public string OcrSelectedLines { get; set; }
@@ -85,6 +87,8 @@ public class LanguageOcr
     public string BinaryImageCompareInspectImageMatches { get; set; }
     public string SaveBlankTextTitle { get; set; }
     public string SaveBlankTextPrompt { get; set; }
+    public string DrawnLinesDoNotMatchTitle { get; set; }
+    public string DrawnLinesDoNotMatchPrompt { get; set; }
     public string YesAndNeverAskAgain { get; set; }
     public string ImportTextFromSubtitleDotDotDot { get; set; }
     public string ImportTextFromSubtitleOverwritePrompt { get; set; }
@@ -92,6 +96,20 @@ public class LanguageOcr
     public string ImportTextFromSubtitleXLinesImported { get; set; }
     public string ExportTextAsSubtitleDotDotDot { get; set; }
     public string ExportTextAsSubtitleNoText { get; set; }
+    public string SaveAllImagesWithHtmlIndexDotDotDot { get; set; }
+    public string SaveAllImagesWithHtmlIndexPickFolder { get; set; }
+    public string SaveAllImagesWithHtmlIndexSaved { get; set; }
+    public string SavingImagesDotDotDot { get; set; }
+    public string HtmlExportTitle { get; set; }
+    public string HtmlExportXImagesYWithoutText { get; set; }
+    public string HtmlExportSearch { get; set; }
+    public string HtmlExportOnlyWithoutText { get; set; }
+    public string HtmlExportNoText { get; set; }
+    public string HtmlExportNoMatches { get; set; }
+    public string HtmlExportImageBackground { get; set; }
+    public string HtmlExportCheckerboard { get; set; }
+    public string HtmlExportTheme { get; set; }
+    public string HtmlExportGeneratedBySubtitleEdit { get; set; }
     public string VobSubColors { get; set; }
     public string VobSubColorsTitle { get; set; }
     public string VobSubColorsHeader { get; set; }
@@ -125,6 +143,9 @@ public class LanguageOcr
     public string LlamaCppDownloadModelPrompt { get; set; }
     public string CrispEmbedNotDownloaded { get; set; }
     public string CrispEmbedReturnedNoText { get; set; }
+    public string AppleVisionReturnedNoText { get; set; }
+    public string CrispEmbedSettingsTitle { get; set; }
+    public string CrispEmbedDescription { get; set; }
     public string TrainNOcrDatabase { get; set; }
     public string StartTraining { get; set; }
     public string AbortTraining { get; set; }
@@ -144,8 +165,8 @@ public class LanguageOcr
         LinesToDraw = "Lines to draw";
         CurrentImage = "Current image";
         AutoDrawAgain = "Auto draw again";
-        StartOcr = "Start OCR";
-        PauseOcr = "Pause OCR";
+        StartOcr = "_Start OCR";
+        PauseOcr = "_Pause OCR";
         InspectLine = "Inspect line...";
         OcrEngine = "OCR Engine";
         TesseractEngineMode = "Engine mode";
@@ -173,6 +194,8 @@ public class LanguageOcr
         NOcrDatabase = "nOCR database";
         DrawMode = "Draw mode:";
         AddNewCharcter = "Add new character";
+        AddNOcrCharacterTitle = "Add nOCR character for line {0}, character {1} of {2} using database \"{3}\"";
+        AddBinaryOcrCharacterTitle = "Add binary OCR character for line {0}, character {1} of {2} using database \"{3}\"";
         LineIndexX = "Line {0}";
         InspectNOcrAdditions = "Inspect new nOCR additions";
         OcrSelectedLines = "OCR selected lines";
@@ -212,7 +235,7 @@ public class LanguageOcr
         OcrImage = "OCR image";
         OneColor = "One color (white)";
         DarknessThreshold = "Darkness threshold";
-        EditExportDotDotDot = "Edit/export...";
+        EditExportDotDotDot = "_Edit/export...";
         EditBinaryOcrDatabase = "Edit \"Binary image compare\" database";
         BinaryImageCompareDatabase = "\"Binary image compare\" database";
         RemoveXFromUnknownWordsList = "Remove \"{0}\" from unknown words list";
@@ -222,6 +245,10 @@ public class LanguageOcr
         BinaryImageCompareInspectImageMatches = "\"Binary image compare\" - Inspect image matches";
         SaveBlankTextTitle = "Save blank text?";
         SaveBlankTextPrompt = "Save blank text for image?";
+        DrawnLinesDoNotMatchTitle = "Lines do not match image";
+        DrawnLinesDoNotMatchPrompt = "Some of the drawn lines do not match the image (green lines must be on the character, red lines must be off it), so this character will not be recognized." + Environment.NewLine +
+                                     Environment.NewLine +
+                                     "Save anyway?";
         YesAndNeverAskAgain = "Yes and never ask again";
         ImportTextFromSubtitleDotDotDot = "Import text from subtitle...";
         ImportTextFromSubtitleOverwritePrompt = "Some lines already have OCR text. Overwrite existing text?";
@@ -229,6 +256,20 @@ public class LanguageOcr
         ImportTextFromSubtitleXLinesImported = "Imported text for {0} line(s).";
         ExportTextAsSubtitleDotDotDot = "Export text as subtitle...";
         ExportTextAsSubtitleNoText = "No OCR text to export. Run OCR first or import text.";
+        SaveAllImagesWithHtmlIndexDotDotDot = "Save all images with HTML index...";
+        SaveAllImagesWithHtmlIndexPickFolder = "Choose a folder for the images and the HTML index";
+        SaveAllImagesWithHtmlIndexSaved = "{0} images saved with an HTML index";
+        SavingImagesDotDotDot = "Saving images...";
+        HtmlExportTitle = "Subtitle images";
+        HtmlExportXImagesYWithoutText = "{0} images - {1} without text";
+        HtmlExportSearch = "Search text";
+        HtmlExportOnlyWithoutText = "Only lines without text";
+        HtmlExportNoText = "(no text)";
+        HtmlExportNoMatches = "No lines match the filter";
+        HtmlExportImageBackground = "Image background";
+        HtmlExportCheckerboard = "Checkerboard";
+        HtmlExportTheme = "Theme";
+        HtmlExportGeneratedBySubtitleEdit = "Generated by Subtitle Edit";
         VobSubColors = "VobSub/DVD colors...";
         VobSubColorsTitle = "VobSub/DVD colors";
         VobSubColorsHeader = "Customize the four VobSub colors";
@@ -265,6 +306,9 @@ public class LanguageOcr
         LlamaCppDownloadModelPrompt = "llama.cpp requires the selected OCR model to be downloaded. Download now?";
         CrispEmbedNotDownloaded = "CrispEmbed engine/model not downloaded - download via batch convert settings";
         CrispEmbedReturnedNoText = "CrispEmbed returned no text - check the model";
+        AppleVisionReturnedNoText = "Apple Vision returned no text - check the language";
+        CrispEmbedSettingsTitle = "CrispEmbed settings";
+        CrispEmbedDescription = "Local OCR engine with multiple model backends - download the engine and the models here.";
 
         TrainNOcrDatabase = "Train nOCR database...";
         StartTraining = "Start training";

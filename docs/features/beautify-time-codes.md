@@ -3,7 +3,7 @@
 Snap subtitle in- and out-cues to shot changes, frame boundaries, and minimum-gap / duration rules in one pass, using a fully configurable profile.
 
 - **Menu:** Tools → Beautify time codes…
-- **Profile editor:** Options → Settings → Waveform → gear icon next to *Snap to shot changes*, or *Edit beautify time codes profile…* button inside the tool window.
+- **Profile editor:** Options → Settings → Waveform → gear icon next to *Snap to shot changes*, or the **Edit profile...** button inside the tool window.
 
 <!-- Screenshot: Beautify time codes window with Original/Beautified visualizers -->
 ![Beautify time codes](../screenshots/beautify-time-codes.png)
@@ -19,9 +19,11 @@ Above the visualizers a stats line summarises the run:
 
 > Subtitles: N · Changed: M · Frame rate: 25 · Shot changes: K
 
+By default the frame boundaries are calculated from the video frame rate. Tick **Use exact time codes** and click **Extract time codes** to read the real frame time codes from the video file instead (a progress bar shows the extraction); the stats line then says *use exact time codes*. This matters for variable-frame-rate video, where calculated frames drift from the actual ones.
+
 Below the visualizers, the **change navigator** lets you step through every cue the beautify pass moved:
 
-- **▲ / ▼** — previous / next change. Both visualizers center on the change.
+- **▲ / ▼** — previous / next change. Both visualizers center on the change. The keyboard works too: **Up** / **Down** (or **Left** / **Right**, **PageUp** / **PageDown**) step one change, **Home** / **End** jump to the first / last change.
 - **Change X of Y** — position counter.
 - **Detail line** — `#15   Start: 00:01:23,456 → 00:01:23,400  (−56 ms / −1.4 f)    End: …`
 - **Reason line** — italic, dimmed: explains *why* the cue moved, per side:
@@ -84,13 +86,14 @@ Each sub-tab offers:
 
 ## Snap-to-shot-changes while editing
 
-The profile's **In cues / Out cues red zones** also drive the snap distance when you drag a paragraph edge in the main waveform:
+The profile's **In cues gap** and **Out cues gap** decide where a cue lands when it snaps to a shot change anywhere in Subtitle Edit — dragging in the waveform, or the *snap to shot change* shortcuts:
 
-- Drag a paragraph start into the red zone around a shot change → snaps to the shot change.
-- Drag a paragraph end into the red zone → snaps to one frame **before** the shot change (so the cue doesn't bleed onto the next shot).
-- **Hold Shift while dragging** to bypass the snap entirely.
+- A snapped **start** lands the *In cues gap* **after** the shot change.
+- A snapped **end** lands the *Out cues gap* **before** the shot change (so the cue doesn't bleed onto the next shot).
 
-Toggle the whole behavior with *Snap to shot changes (hold Shift to override)* in Options → Settings → Waveform.
+With both gaps at 0 (the *Default* preset) cues land exactly on the cut. Raise *Out cues gap* to 1 or 2 frames if you prefer ends to stop just short of it.
+
+*How close* a cue has to be before it snaps is **not** taken from the profile — that is set in Options → Settings → Waveform, in pixels for dragging and in seconds for the keyboard commands. See [Audio Visualizer](audio-visualizer.md#snapping-to-shot-changes).
 
 ## Related
 

@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.Input;
 using Nikse.SubtitleEdit.Controls;
 using Nikse.SubtitleEdit.Controls.AudioVisualizerControl;
 using Nikse.SubtitleEdit.Controls.VideoPlayer;
+using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Features.Main;
 using Nikse.SubtitleEdit.Features.Shared.FindText;
 using Nikse.SubtitleEdit.Logic;
@@ -58,18 +59,31 @@ public partial class SetSyncPointViewModel : ObservableObject
 
     private readonly IWindowService _windowService;
     private readonly IFileHelper _fileHelper;
+    private readonly IVideoPreviewSubtitle _previewSubtitle;
 
     private string? _videoFileName;
-    private DispatcherTimer _positionTimer = new DispatcherTimer();
+
+    // The audio track picked in the main window's Video > Audio tracks. A brand new mpv instance
+    // starts on the file's default track, so it has to be re-applied here or a dubbed track plays
+    // while the user syncs against the original (issue #13995).
+    private int _audioTrackId = -1;
+    private bool _closed; // set by OnClosing; stops the posted half of Initialize from starting a pump on a disposed player
+    private UiTickPump _positionTimer = new(TimeSpan.FromMilliseconds(150)); // posted ticks, not a DispatcherTimer - see UiTickPump
     private List<SubtitleLineViewModel> _subtitleLines = new List<SubtitleLineViewModel>();
+
+    // The lines are never re-timed in this dialog, so the waveform's sorted copy is built once
+    // instead of on every 150 ms tick (as in VisualSync).
+    private List<SubtitleLineViewModel>? _sortedLines;
+    private VideoPreviewSubtitleContext _previewContext = VideoPreviewSubtitleContext.Default;
     private bool _updateAudioVisualizer;
     private bool _updateTimeCodeFromVideo;
     private bool _timeCodeUpDownFocused;
 
-    public SetSyncPointViewModel(IWindowService windowService, IFileHelper fileHelper)
+    public SetSyncPointViewModel(IWindowService windowService, IFileHelper fileHelper, IVideoPreviewSubtitle previewSubtitle)
     {
         _windowService = windowService;
         _fileHelper = fileHelper;
+        _previewSubtitle = previewSubtitle;
 
         Title = string.Empty;
         VideoInfo = string.Empty;
@@ -90,10 +104,17 @@ public partial class SetSyncPointViewModel : ObservableObject
         SubtitleLineViewModel? selectedSubtitle,
         string? videoFileName,
         string? subtitleFileName,
-        AudioVisualizer? audioVisualizer)
+        VideoPreviewSubtitleContext previewContext,
+        AudioVisualizer? audioVisualizer,
+        int audioTrackId = -1)
     {
+        _audioTrackId = audioTrackId;
         Paragraphs = new ObservableCollection<SubtitleDisplayItem>(paragraphs.Select(p => new SubtitleDisplayItem(p)));
         _subtitleLines = paragraphs;
+        _sortedLines = null;
+
+        // Carried in so the subtitle drawn on the video looks like the one on the main window's video.
+        _previewContext = previewContext;
 
         // Only a video the caller already had, or one the user picks here, is reported back - a
         // video merely found on disk must not travel up and open in the main window, which would
@@ -128,9 +149,18 @@ public partial class SetSyncPointViewModel : ObservableObject
 
         Dispatcher.UIThread.Post(() =>
         {
+            // Closed before this post ran: OnClosing has already stopped the (placeholder) pump
+            // and disposed the player, so the pump started below would never be stopped and
+            // would poll the dead player for the rest of the session - every poll an
+            // error-log entry.
+            if (_closed)
+            {
+                return;
+            }
+
             if (!string.IsNullOrEmpty(_videoFileName))
             {
-                _ = VideoPlayerControl.Open(_videoFileName);
+                _ = OpenPlayerAsync(_videoFileName);
             }
 
             // An audio visualizer without peaks is just an empty box - only show it when the main
@@ -181,12 +211,17 @@ public partial class SetSyncPointViewModel : ObservableObject
 
     }
 
+    /// <summary>Test hook: whether the position pump is ticking.</summary>
+    internal bool IsPositionTimerRunning => _positionTimer.IsRunning;
+
     private void StartTitleTimer()
     {
-        _positionTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+        _positionTimer = new UiTickPump(TimeSpan.FromMilliseconds(150));
         _positionTimer.Tick += (s, e) =>
         {
             UpdateAudioVisualizer(VideoPlayerControl.VideoPlayer, AudioVisualizer, SelectedParagraphIndex);
+
+            RefreshPreviewSubtitle();
 
             // Follow the video position - but leave the time code alone while the user is typing
             // in it (a running video moves on its own, so then the box should still follow).
@@ -207,6 +242,26 @@ public partial class SetSyncPointViewModel : ObservableObject
         _positionTimer.Start();
     }
 
+    /// <summary>
+    /// The player gets the whole subtitle, so it shows whatever line belongs at the frame it is
+    /// parked on - the point of scrubbing to a scene here (discussion #13767).
+    /// </summary>
+    internal void RefreshPreviewSubtitle()
+    {
+        _previewSubtitle.Refresh(VideoPlayerControl.VideoPlayer, BuildPreviewSubtitle, _previewContext);
+    }
+
+    private Subtitle BuildPreviewSubtitle()
+    {
+        var subtitle = new Subtitle { Header = _previewContext.Header };
+        foreach (var p in Paragraphs)
+        {
+            subtitle.Paragraphs.Add(p.Subtitle.ToParagraph(_previewContext.Format));
+        }
+
+        return subtitle;
+    }
+
     private void UpdateAudioVisualizer(
         IVideoPlayer vp,
         AudioVisualizer av,
@@ -216,7 +271,7 @@ public partial class SetSyncPointViewModel : ObservableObject
             ? null
             : Paragraphs[selectedParagraphIndex];
 
-        var subtitle = _subtitleLines.OrderBy(p => p.StartTime.TotalMilliseconds).ToList();
+        var subtitle = _sortedLines ??= _subtitleLines.OrderBy(p => p.StartTime.TotalMilliseconds).ToList();
         var firstSelectedIndex = -1;
 
         var mediaPlayerSeconds = vp.Position;
@@ -338,6 +393,25 @@ public partial class SetSyncPointViewModel : ObservableObject
         _updateAudioVisualizer = true;
     }
 
+    /// <summary>
+    /// Opens the preview player and, once the video is loaded, applies the audio track the user
+    /// selected in the main window - the same thing Visual Sync does (issue #11952). Setting it
+    /// before the file is open is silently ignored, so the await matters.
+    /// </summary>
+    private async Task OpenPlayerAsync(string videoFileName, double startPositionSeconds = 0)
+    {
+        await VideoPlayerControl.Open(videoFileName, startPositionSeconds);
+        ApplySelectedAudioTrack();
+    }
+
+    private void ApplySelectedAudioTrack()
+    {
+        if (_audioTrackId > 0)
+        {
+            VideoPlayerControl.VideoPlayer?.SetAudioTrack(_audioTrackId);
+        }
+    }
+
     private void CenterWaveform(VideoPlayerControl videoPlayerControl, AudioVisualizer audioVisualizer)
     {
         audioVisualizer.StartPositionSeconds = Math.Max(0, videoPlayerControl.Position - 0.5);
@@ -369,8 +443,12 @@ public partial class SetSyncPointViewModel : ObservableObject
         // the start of the newly opened file. It has to be passed to Open: the position slider is
         // clamped to Duration, which is only polled once the player is running, so seeking right
         // after the open would land at zero.
-        await VideoPlayerControl.Open(fileName, Math.Max(0, syncPoint.TotalSeconds));
+        await OpenPlayerAsync(fileName, Math.Max(0, syncPoint.TotalSeconds));
         await VideoPlayerControl.WaitForPlayersReadyAsync();
+
+        // The external subtitle went with the old file (if there was one) - it has to be added to
+        // the new one from scratch, not reloaded into a track that is no longer there.
+        _previewSubtitle.Reset();
 
         // Only now does the player own the sync point - handing it over any earlier would let the
         // timer copy the still-zero position into the time code while the file is loading.
@@ -445,8 +523,12 @@ public partial class SetSyncPointViewModel : ObservableObject
     internal void OnClosing()
     {
         UiUtil.SaveWindowPosition(Window);
+        _closed = true;
         _positionTimer.Stop();
-        VideoPlayerControl.VideoPlayer.CloseFile();
+        VideoPlayerControl.CloseAndDisposePlayer();
+
+        // Deletes the temp subtitle file handed to the player.
+        _previewSubtitle.Reset();
     }
 
     [RelayCommand]
@@ -498,6 +580,11 @@ public partial class SetSyncPointViewModel : ObservableObject
             e.Handled = true;
             Window?.Close();
         }
+        else if (UiUtil.IsHelp(e))
+        {
+            e.Handled = true;
+            UiUtil.ShowHelp("features/point-sync", "set-sync-point-window");
+        }
 
         if (e.Key == Key.Space || (e.Key == Key.P && e.KeyModifiers.HasFlag(KeyModifiers.Control)))
         {
@@ -527,6 +614,41 @@ public partial class SetSyncPointViewModel : ObservableObject
             e.Handled = true;
             SetVideoPosition(CurrentPositionSeconds + 0.5);
         }
+        else if ((e.Key == Key.Add || e.Key == Key.OemPlus) && e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            e.Handled = true;
+            WaveformVerticalZoomIn();
+        }
+        else if ((e.Key == Key.Subtract || e.Key == Key.OemMinus) && e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            e.Handled = true;
+            WaveformVerticalZoomOut();
+        }
+    }
+
+    /// <summary>
+    /// Mirrors the main window's waveform vertical zoom (Shift +/-): scales the waveform's
+    /// amplitude in place instead of resizing the split panel, so zooming in does not eat into
+    /// the video area (#14419 comment).
+    /// </summary>
+    private void WaveformVerticalZoomIn()
+    {
+        if (!IsAudioVisualizerVisible)
+        {
+            return;
+        }
+
+        AudioVisualizer.VerticalZoomFactor = Math.Max(Math.Min(AudioVisualizer.VerticalZoomFactor - 0.1, AudioVisualizer.MaxZoomFactor), AudioVisualizer.MinZoomFactor);
+    }
+
+    private void WaveformVerticalZoomOut()
+    {
+        if (!IsAudioVisualizerVisible)
+        {
+            return;
+        }
+
+        AudioVisualizer.VerticalZoomFactor = Math.Max(Math.Min(AudioVisualizer.VerticalZoomFactor + 0.1, AudioVisualizer.MaxZoomFactor), AudioVisualizer.MinZoomFactor);
     }
 
     /// <summary>

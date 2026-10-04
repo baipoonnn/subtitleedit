@@ -114,43 +114,43 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 int i = 0;
                 while (i < line.Length)
                 {
-                    if (line.Substring(i).StartsWith("<i>", StringComparison.OrdinalIgnoreCase))
+                    if (line.StartsWithAt(i, "<i>", StringComparison.OrdinalIgnoreCase))
                     {
                         AppendText(currentText, italicOn, boldOn, underlineOn, currentColor, xml, lineNode);
                         italicOn = true;
                         i += 3;
                     }
-                    else if (line.Substring(i).StartsWith("</i>", StringComparison.OrdinalIgnoreCase))
+                    else if (line.StartsWithAt(i, "</i>", StringComparison.OrdinalIgnoreCase))
                     {
                         AppendText(currentText, italicOn, boldOn, underlineOn, currentColor, xml, lineNode);
                         italicOn = false;
                         i += 4;
                     }
-                    else if (line.Substring(i).StartsWith("<b>", StringComparison.OrdinalIgnoreCase))
+                    else if (line.StartsWithAt(i, "<b>", StringComparison.OrdinalIgnoreCase))
                     {
                         AppendText(currentText, italicOn, boldOn, underlineOn, currentColor, xml, lineNode);
                         boldOn = true;
                         i += 3;
                     }
-                    else if (line.Substring(i).StartsWith("</b>", StringComparison.OrdinalIgnoreCase))
+                    else if (line.StartsWithAt(i, "</b>", StringComparison.OrdinalIgnoreCase))
                     {
                         AppendText(currentText, italicOn, boldOn, underlineOn, currentColor, xml, lineNode);
                         boldOn = false;
                         i += 4;
                     }
-                    else if (line.Substring(i).StartsWith("<u>", StringComparison.OrdinalIgnoreCase))
+                    else if (line.StartsWithAt(i, "<u>", StringComparison.OrdinalIgnoreCase))
                     {
                         AppendText(currentText, italicOn, boldOn, underlineOn, currentColor, xml, lineNode);
                         underlineOn = true;
                         i += 3;
                     }
-                    else if (line.Substring(i).StartsWith("</u>", StringComparison.OrdinalIgnoreCase))
+                    else if (line.StartsWithAt(i, "</u>", StringComparison.OrdinalIgnoreCase))
                     {
                         AppendText(currentText, italicOn, boldOn, underlineOn, currentColor, xml, lineNode);
                         underlineOn = false;
                         i += 4;
                     }
-                    else if (line.Substring(i).StartsWith("<font ", StringComparison.OrdinalIgnoreCase))
+                    else if (line.StartsWithAt(i, "<font ", StringComparison.OrdinalIgnoreCase))
                     {
                         AppendText(currentText, italicOn, boldOn, underlineOn, currentColor, xml, lineNode);
                         currentColor = string.Empty;
@@ -178,7 +178,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                             i = int.MaxValue;
                         }
                     }
-                    else if (line.Substring(i).StartsWith("</font>", StringComparison.OrdinalIgnoreCase))
+                    else if (line.StartsWithAt(i, "</font>", StringComparison.OrdinalIgnoreCase))
                     {
                         AppendText(currentText, italicOn, boldOn, underlineOn, currentColor, xml, lineNode);
                         currentColor = string.Empty;
@@ -267,9 +267,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
         public override void LoadSubtitle(Subtitle subtitle, List<string> lines, string fileName)
         {
             _errorCount = 0;
-            var sb = new StringBuilder();
-            lines.ForEach(line => sb.AppendLine(line));
-            string xmlString = sb.ToString();
+            string xmlString = JoinLines(lines);
             if (!xmlString.Contains("<subtitlelist"))
             {
                 return;
@@ -287,10 +285,22 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             }
 
             subtitle.Header = xmlString;
+            var sb = new StringBuilder();
             char[] timeCodeSeparators = { ':' };
             var ns = new XmlNamespaceManager(xml.NameTable);
             ns.AddNamespace("esub-xf", NameSpaceUri);
             var isTimebaseSmtp = xml.DocumentElement.Attributes["timebase"]?.Value != "msec"; // "msec" or "smtp"
+
+            // The file declares the frame rate its SMPTE time codes were written at (ToText
+            // writes it) - honor it, or the frames are decoded at whatever rate happens to be
+            // loaded and every time code shifts.
+            var frameRateAttribute = xml.DocumentElement.Attributes["framerate"]?.Value;
+            if (isTimebaseSmtp && !string.IsNullOrEmpty(frameRateAttribute) &&
+                double.TryParse(frameRateAttribute, NumberStyles.Float, CultureInfo.InvariantCulture, out var declaredFrameRate) &&
+                declaredFrameRate > 1 && declaredFrameRate < 200)
+            {
+                Configuration.Settings.General.CurrentFrameRate = declaredFrameRate;
+            }
             foreach (XmlNode node in xml.DocumentElement.SelectNodes("//esub-xf:subtitlelist/esub-xf:subtitle", ns))
             {
                 try

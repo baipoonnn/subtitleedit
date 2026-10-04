@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
@@ -9,6 +10,7 @@ using Avalonia.Layout;
 using Avalonia.Threading;
 using Avalonia.Media;
 using System.Collections;
+using Nikse.SubtitleEdit.Controls;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
 using Nikse.SubtitleEdit.Logic.ValueConverters;
@@ -50,9 +52,9 @@ public class BatchConvertWindow : Window
                 labelBatchItemsInfo,
             }
         };
-        panelInfo.WithBindVisible(vm, nameof(vm.IsConverting), new InverseBooleanConverter());
+        panelInfo.WithBindVisible(vm, nameof(vm.IsConverting), InverseBooleanConverter.Instance);
 
-        var buttonConvert = new SplitButton
+        var buttonConvert = new SeSplitButton
         {
             Content = Se.Language.General.Convert,
             Command = vm.ConvertCommand,
@@ -73,9 +75,9 @@ public class BatchConvertWindow : Window
                 }
             }
         };
-        buttonConvert.Bind(SplitButton.IsEnabledProperty, new Binding(nameof(vm.IsConverting)) { Converter = new InverseBooleanConverter() });
+        buttonConvert.Bind(SplitButton.IsEnabledProperty, new Binding(nameof(vm.IsConverting)) { Converter = InverseBooleanConverter.Instance });
 
-        var buttonDone = UiUtil.MakeButtonDone(vm.DoneCommand).WithBindIsVisible(nameof(vm.IsConverting), new InverseBooleanConverter());
+        var buttonDone = UiUtil.MakeButtonDone(vm.DoneCommand).WithBindIsVisible(nameof(vm.IsConverting), InverseBooleanConverter.Instance);
         var buttonCancel = UiUtil.MakeButtonCancel(vm.CancelCommand).WithBindIsVisible(vm, nameof(vm.IsConverting));
         var buttonPanel = UiUtil.MakeButtonBar(
             buttonConvert,
@@ -116,7 +118,7 @@ public class BatchConvertWindow : Window
 
         Content = grid;
 
-        Activated += delegate { buttonDone.Focus(); }; // hack to make OnKeyDown work
+        UiUtil.FocusOnFirstActivation(this, buttonDone); // hack to make OnKeyDown work
         Loaded += vm.Onloaded;
         Closing += vm.OnClosing;
         KeyDown += (s, e) => vm.OnKeyDown(e);
@@ -173,13 +175,14 @@ public class BatchConvertWindow : Window
             CellTheme = UiUtil.TableViewNoPaddingCellTheme,
             HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
             Width = new GridLength(120),
+            NameBinding = new Binding(nameof(BatchConvertItem.Status)),
             CellTemplate = new FuncDataTemplate<BatchConvertItem>((_, _) =>
             {
                 // Status as a colored badge: green converted, red errors, gray cancelled;
                 // in-progress statuses render as plain text (converter returns unset).
                 var text = new TextBlock
                 {
-                    FontSize = 11,
+                    FontSize = UiUtil.ScaledFontSize(11),
                     VerticalAlignment = VerticalAlignment.Center,
                 };
                 text.Bind(TextBlock.TextProperty, new Binding(nameof(BatchConvertItem.Status)));
@@ -212,6 +215,7 @@ public class BatchConvertWindow : Window
         dataGrid.DataContext = vm;
         dataGrid.ItemsSource = vm.BatchItems;
         dataGrid.Columns.AddRange(new[] { columnFileName, columnSize, columnFormat, columnStatus });
+        dataGrid.WithAccessibleName(Se.Language.General.SubtitleFiles);
 
         dataGrid.Bind(TableView.SelectedItemProperty, new Binding(nameof(vm.SelectedBatchItem)) { Source = vm });
         dataGrid.KeyDown += vm.FileGridKeyDown;
@@ -242,8 +246,15 @@ public class BatchConvertWindow : Window
             .WithMarginLeft(5)
             .WithMarginRight(5);
         buttonTargetFormatSettings.WithBindIsVisible(vm, nameof(vm.IsTargetFormatSettingsVisible));
+        // Only offered while a Transport Stream file is in the list - the settings apply to nothing else.
+        var buttonTransportStreamSettings = UiUtil.MakeButton(vm.ShowTransportStreamSettingsCommand, IconNames.FileCog, Se.Language.Tools.BatchConvert.TransportStreamSettingsDotDotDot)
+            .WithMarginLeft(5)
+            .WithMarginRight(5);
+        buttonTransportStreamSettings.WithBindIsVisible(vm, nameof(vm.IsTransportStreamSettingsVisible));
         var buttonSettings = UiUtil.MakeButton(vm.ShowOutputPropertiesCommand, IconNames.Settings, Se.Language.General.Settings).WithMarginLeft(15).WithMarginRight(5);
 
+        // Add/Remove/Clear are locked while converting: the run works on a snapshot of the list,
+        // so removed files would still be converted and added files silently skipped (#15116).
         var panelFileControls = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -252,12 +263,15 @@ public class BatchConvertWindow : Window
             Margin = new Thickness(0, 0, 0, 0),
             Children =
             {
-                UiUtil.MakeButton(vm.AddFilesCommand, IconNames.Plus, Se.Language.General.Add).WithMarginLeft(10),
-                UiUtil.MakeButton(vm.RemoveSelectedFilesCommand, IconNames.Trash, Se.Language.General.Remove).WithMarginLeft(5),
-                UiUtil.MakeButton(vm.ClearAllFilesCommand, IconNames.Close, Se.Language.General.Clear).WithMarginLeft(5),
+                UiUtil.MakeButton(vm.AddFilesCommand, IconNames.Plus, Se.Language.General.Add).WithMarginLeft(10).WithBindEnabled(nameof(vm.AreControlsEnabled)),
+                UiUtil.MakeButton(vm.AddFolderCommand, IconNames.Folder, Se.Language.Tools.BatchConvert.AddFolderDotDotDot).WithMarginLeft(5).WithBindEnabled(nameof(vm.AreControlsEnabled)),
+                UiUtil.MakeButton(vm.AddFolderRecursiveCommand, IconNames.FolderMultiple, Se.Language.Tools.BatchConvert.AddFolderRecursiveDotDotDot).WithMarginLeft(5).WithBindEnabled(nameof(vm.AreControlsEnabled)),
+                UiUtil.MakeButton(vm.RemoveSelectedFilesCommand, IconNames.Trash, Se.Language.General.Remove).WithMarginLeft(5).WithBindEnabled(nameof(vm.AreControlsEnabled)),
+                UiUtil.MakeButton(vm.ClearAllFilesCommand, IconNames.Close, Se.Language.General.Clear).WithMarginLeft(5).WithBindEnabled(nameof(vm.AreControlsEnabled)),
                 UiUtil.MakeLabel(Se.Language.General.TargetFormat).WithMarginLeft(15),
                 comboBoxSubtitleFormat,
                 buttonTargetFormatSettings,
+                buttonTransportStreamSettings,
                 buttonSettings,
                 MakeOutputPropertiesGrid(vm),
             }
@@ -268,7 +282,8 @@ public class BatchConvertWindow : Window
             .WithMarginRight(3);
         comboBoxFilter.SelectionChanged += (_, _) => vm.FilterComboBoxChanged();
         var textBoxFilter = UiUtil.MakeTextBox(200, vm, nameof(vm.FilterText))
-            .WithBindIsVisible(nameof(vm.IsFilterTextVisible));
+            .WithBindIsVisible(nameof(vm.IsFilterTextVisible))
+            .WithSearchAndClearIcons();
         textBoxFilter.TextChanged += (_, _) => vm.FilterTextChanged();
         var panelFilter = new StackPanel
         {
@@ -295,7 +310,7 @@ public class BatchConvertWindow : Window
         menuItemRemove.Bind(MenuItem.IsVisibleProperty, new Binding(nameof(vm.IsRemoveVisible)) { Source = vm });
         menuItemRemove.Bind(MenuItem.IsEnabledProperty, new Binding(nameof(vm.IsConverting))
         {
-            Converter = new InverseBooleanConverter(),
+            Converter = InverseBooleanConverter.Instance,
             Source = vm,
         });
         flyout.Items.Add(menuItemRemove);
@@ -309,7 +324,7 @@ public class BatchConvertWindow : Window
         menuItemOpenContainingFolder.Bind(MenuItem.IsVisibleProperty, new Binding(nameof(vm.IsOpenContainingFolderVisible)) { Source = vm });
         menuItemOpenContainingFolder.Bind(MenuItem.IsEnabledProperty, new Binding(nameof(vm.IsConverting))
         {
-            Converter = new InverseBooleanConverter(),
+            Converter = InverseBooleanConverter.Instance,
             Source = vm,
         });
         flyout.Items.Add(menuItemOpenContainingFolder);
@@ -321,6 +336,22 @@ public class BatchConvertWindow : Window
             Command = vm.AddFilesCommand,
         };
         flyout.Items.Add(menuItemImport);
+
+        var menuItemImportFolder = new MenuItem
+        {
+            Header = Se.Language.Tools.BatchConvert.AddFolderDotDotDot,
+            DataContext = vm,
+            Command = vm.AddFolderCommand,
+        };
+        flyout.Items.Add(menuItemImportFolder);
+
+        var menuItemImportFolderRecursive = new MenuItem
+        {
+            Header = Se.Language.Tools.BatchConvert.AddFolderRecursiveDotDotDot,
+            DataContext = vm,
+            Command = vm.AddFolderRecursiveCommand,
+        };
+        flyout.Items.Add(menuItemImportFolderRecursive);
 
         // hack to make drag and drop work on the file grid - also on empty rows
         var dropHost = new Border
@@ -376,6 +407,8 @@ public class BatchConvertWindow : Window
         };
         progressBar.Bind(ProgressBar.MaximumProperty, new Binding(nameof(vm.AddingFilesProgressMax)) { Source = vm });
         progressBar.Bind(ProgressBar.ValueProperty, new Binding(nameof(vm.AddingFilesProgressValue)) { Source = vm });
+        // A folder scan has no known total (the tree is being walked) - show a marquee for it.
+        progressBar.Bind(ProgressBar.IsIndeterminateProperty, new Binding(nameof(vm.IsScanningFolder)) { Source = vm });
 
         var cancelButton = UiUtil.MakeButtonCancel(vm.CancelAddFilesCommand);
         cancelButton.HorizontalAlignment = HorizontalAlignment.Center;
@@ -508,6 +541,8 @@ public class BatchConvertWindow : Window
             },
         });
         TableViewExtras.BindSelectedItem(dataGrid, vm, nameof(vm.SelectedBatchFunction));
+        // The "N actions selected" label above is empty until something is ticked, so a static name (#12087).
+        dataGrid.WithAccessibleName(Se.Language.General.Options);
         // The DataGrid-era CheckboxMultiSelect helper is replaced by native selection,
         // AddSpaceToggle (Space toggles the checkbox) and a SelectionChanged hook that
         // shows the selected function's settings view (was onFocusedItemChanged).
@@ -525,6 +560,7 @@ public class BatchConvertWindow : Window
         {
             Focusable = false,
             [!ToggleButton.IsCheckedProperty] = new Binding(nameof(BatchConvertFunction.IsSelected)),
+            [!AutomationProperties.NameProperty] = new Binding(nameof(BatchConvertFunction.Name)),
             HorizontalAlignment = HorizontalAlignment.Center,
             Margin = new Thickness(5, 0, 0, 0),
         };
@@ -553,6 +589,16 @@ public class BatchConvertWindow : Window
             Padding = new Thickness(5),
         };
         vm.FunctionContainer = scrollViewer;
+
+        // The function views are swapped in after the window has opened, so the one-time
+        // label pass in InitializeWindow never sees them; label each view as it is shown (#12087).
+        scrollViewer.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == ContentControl.ContentProperty && scrollViewer.Content is Control view)
+            {
+                AccessibleLabels.Apply(view);
+            }
+        };
 
         return UiUtil.MakeBorderForControl(scrollViewer);
     }

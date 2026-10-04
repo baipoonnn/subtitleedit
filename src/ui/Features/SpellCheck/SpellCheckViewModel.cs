@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Input;
 using Avalonia.Media;
@@ -62,11 +62,15 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
     [ObservableProperty] private bool _areSuggestionsAvailable;
     [ObservableProperty] private bool _isPrompting;
     [ObservableProperty] private ObservableCollection<SubtitleLineViewModel> _paragraphs;
-    [ObservableProperty] private SubtitleLineViewModel? _selectedParagraph;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(PlayCurrentLineCommand))]
+    private SubtitleLineViewModel? _selectedParagraph;
     [ObservableProperty] private Bitmap? _sourceImage;
     [ObservableProperty] private bool _hasSourceImage;
     [ObservableProperty] private bool _isUndoVisible;
     [ObservableProperty] private string _undoText;
+    [ObservableProperty] private bool _isPlayVisible;
 
     public Window? Window { get; set; }
     public int TotalChangedWords { get; set; }
@@ -89,7 +93,7 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
     private readonly IFileHelper _fileHelper;
     private readonly IBluRayHelper _bluRayHelper;
     private readonly IOcrImageSourceHolder _ocrImageSourceHolder;
-    private readonly IThaiSpellDownloadService _thaiSpellDownloadService;
+    private readonly IThaiSpellDownloadService? _thaiSpellDownloadService;
     private IFocusSubtitleLine? _focusSubtitleLine;
 
     // Optional source image (Blu-ray .sup) loaded via the context menu so the original
@@ -113,7 +117,12 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
     // "continue spell check from current line?" has something to continue from.
     private bool _sessionInProgress;
 
-    public SpellCheckViewModel(ISpellCheckManager spellCheckManager, IWindowService windowService, IFileHelper fileHelper, IBluRayHelper bluRayHelper, IOcrImageSourceHolder ocrImageSourceHolder, IThaiSpellDownloadService thaiSpellDownloadService)
+    // Video preview hooks handed in by the caller; null when no video is loaded.
+    private Action<SubtitleLineViewModel>? _playLine;
+    private Action? _stopPlayback;
+    private bool _hasPlayed;
+
+    public SpellCheckViewModel(ISpellCheckManager spellCheckManager, IWindowService windowService, IFileHelper fileHelper, IBluRayHelper bluRayHelper, IOcrImageSourceHolder ocrImageSourceHolder, IThaiSpellDownloadService? thaiSpellDownloadService = null)
     {
         _spellCheckManager = spellCheckManager;
         _fileHelper = fileHelper;
@@ -218,7 +227,7 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
 
     private async Task OnThaiWordBreakChangedAsync(ThaiWordBreakDisplay? value)
     {
-        if (value == null || Window == null)
+        if (value == null || Window == null || _thaiSpellDownloadService == null)
         {
             return;
         }
@@ -455,7 +464,7 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
                 }
 
                 var subtitles = tsParser.GetDvbSubtitles(tsParser.SubtitlePacketIds[0]);
-                return subtitles.Count > 0 ? new OcrSubtitleTransportStream(tsParser, subtitles, fileName) : null;
+                return subtitles.Count > 0 ? new OcrSubtitleTransportStream(subtitles) : null;
 
             case ".mkv":
             case ".mks":
@@ -536,11 +545,22 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
         previous?.Dispose();
     }
 
+    /// <summary>
+    /// Starts the spell check. <paramref name="playLine"/> plays a line in the main video player
+    /// and pauses at its end, so a word can be checked against the audio - the reason to have it
+    /// here is STT output, where only the audio says what the word should be (issue #14145). Pass
+    /// null (no video loaded) to hide the play button. <paramref name="stopPlayback"/> stops such
+    /// a preview when the window closes - only ever called when this window started playback.
+    /// </summary>
     public void Initialize(ObservableCollection<SubtitleLineViewModel> paragraphs, int? selectedSubtitleIndex,
-        IFocusSubtitleLine focusSubtitleLine, SpellCheckDictionaryDisplay? spellCheckDictionary, bool sessionInProgress = false)
+        IFocusSubtitleLine focusSubtitleLine, SpellCheckDictionaryDisplay? spellCheckDictionary, bool sessionInProgress = false,
+        Action<SubtitleLineViewModel>? playLine = null, Action? stopPlayback = null)
     {
         _focusSubtitleLine = focusSubtitleLine;
         _sessionInProgress = sessionInProgress;
+        _playLine = playLine;
+        _stopPlayback = stopPlayback;
+        IsPlayVisible = playLine != null;
         Paragraphs.Clear();
         Paragraphs.AddRange(paragraphs);
         SetLanguage(spellCheckDictionary);
@@ -1027,6 +1047,36 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
         Dispatcher.UIThread.Invoke(() => { Window?.Close(); });
     }
 
+    /// <summary>
+    /// Plays the line the current word belongs to in the main video player and pauses at its end,
+    /// so an unknown word can be judged by ear without leaving the spell check (issue #14145).
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanPlayCurrentLine))]
+    private void PlayCurrentLine()
+    {
+        var paragraph = SelectedParagraph;
+        if (paragraph == null || _playLine == null)
+        {
+            return;
+        }
+
+        _hasPlayed = true;
+        _playLine(paragraph);
+    }
+
+    private bool CanPlayCurrentLine() => SelectedParagraph != null;
+
+    /// <summary>
+    /// True when the pressed keys match the user's main-window "play selected lines" (default F5)
+    /// or second play/pause (default Ctrl/Cmd+Space) binding. Bare Space is deliberately not
+    /// included - it types a space in the word text box.
+    /// </summary>
+    private static bool MatchesPlayShortcut(KeyEventArgs e)
+    {
+        return MainShortcutKeys.Matches(e, nameof(MainViewModel.PlaySelectedLinesWithoutLoopCommand), [nameof(Key.F5)]) ||
+               MainShortcutKeys.Matches(e, nameof(MainViewModel.TogglePlayPause2Command), [MainShortcutKeys.CtrlOrCmd, nameof(Key.Space)]);
+    }
+
     internal void OnKeyDown(KeyEventArgs e)
     {
         if (e.Key == Key.Escape)
@@ -1038,6 +1088,11 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
         {
             e.Handled = true;
             UiUtil.ShowHelp("features/spell-check");
+        }
+        else if (IsPlayVisible && MatchesPlayShortcut(e))
+        {
+            e.Handled = true;
+            PlayCurrentLine();
         }
     }
 
@@ -1221,7 +1276,7 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
         var fontName = Se.Settings.Appearance.SubtitleTextBoxAndGridFontName;
         if (!string.IsNullOrEmpty(fontName))
         {
-            textBlock.FontFamily = new FontFamily(fontName);
+            textBlock.FontFamily = FontFamilyHelper.Make(fontName);
         }
         var idx = word.Index;
         if (idx > 0)
@@ -1229,7 +1284,7 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
             var run = new Run(paragraph.Text.Substring(0, idx));
             if (!string.IsNullOrEmpty(fontName))
             {
-                run.FontFamily = new FontFamily(fontName);
+                run.FontFamily = FontFamilyHelper.Make(fontName);
             }
             textBlock.Inlines!.Add(run);
         }
@@ -1238,11 +1293,11 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
         {
             Text = word.Text,
             FontWeight = FontWeight.Bold,
-            Foreground = Brushes.Red
+            Foreground = new SolidColorBrush(Se.Settings.Appearance.SpellCheckHighlightColor.FromHexToColor())
         };
         if (!string.IsNullOrEmpty(fontName))
         {
-            highlightRun.FontFamily = new FontFamily(fontName);
+            highlightRun.FontFamily = FontFamilyHelper.Make(fontName);
         }
         textBlock.Inlines!.Add(highlightRun);
 
@@ -1251,7 +1306,7 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
             var run = new Run(paragraph.Text.Substring(idx + word.Text.Length));
             if (!string.IsNullOrEmpty(fontName))
             {
-                run.FontFamily = new FontFamily(fontName);
+                run.FontFamily = FontFamilyHelper.Make(fontName);
             }
             textBlock.Inlines!.Add(run);
         }
@@ -1276,6 +1331,13 @@ public partial class SpellCheckViewModel : ObservableObject, IClosingCleanup
     {
         _statusTimer?.StopAndDispose(StatusTimerElapsed);
         _statusTimer = null;
+
+        // Only stop what this window started - a video the user left playing before opening the
+        // spell check should keep playing.
+        if (_hasPlayed)
+        {
+            _stopPlayback?.Invoke();
+        }
     }
 
     private void StatusTimerElapsed(object? sender, System.Timers.ElapsedEventArgs e)

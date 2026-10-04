@@ -25,6 +25,15 @@ public class ExportHandlerDCinemaSmpte2014Png : IExportHandler
         _width = imageParameter.ScreenWidth;
         _height = imageParameter.ScreenHeight;
 
+        // Nothing sets the FrameRate property, so it stayed at the 23.976 default and every
+        // index.xml declared EditRate/TimeCodeRate 23 - not a valid D-Cinema rate, and out of step
+        // with the TimeIn/TimeOut values, which come from the real current frame rate. The Dost and
+        // FCP handlers already take it from the image parameters; this one was missed.
+        if (imageParameter.FramesPerSecond > 0)
+        {
+            FrameRate = imageParameter.FramesPerSecond;
+        }
+
         _folderName = fileOrFolderName;
         if (!Directory.Exists(_folderName))
         {
@@ -97,16 +106,17 @@ public class ExportHandlerDCinemaSmpte2014Png : IExportHandler
 
         _sb.AppendLine("<Subtitle SpotNumber=\"" + _imagesSavedCount + "\" FadeUpTime=\"" + "00:00:00:00" + "\" FadeDownTime=\"" + "00:00:00:00" + "\" TimeIn=\"" +
                       new TimeCode(param.StartTime).ToHHMMSSFF() + "\" TimeOut=\"" + new TimeCode( param.EndTime).ToHHMMSSFF() + "\">");
-        // if (param.Depth3D == 0)
+        // The export's 3D depth: stereoscopic cinema places the image in depth by its Z-position.
+        if (param.Depth3D == 0)
         {
             _sb.AppendLine("<Image Vposition=\"" + vPos + "\" Hposition=\"" + hPos + "\" Valign=\"" + verticalAlignment + "\" Halign=\"" + horizontalAlignment + "\">urn:uuid:" +
                           uuidString + "</Image>");
         }
-        // else
-        // {
-        //     _sb.AppendLine("<Image Vposition=\"" + vPos + "\" Hposition=\"" + hPos + "\" Zposition=\"" + param.Depth3D + "\" Valign=\"" + verticalAlignment + "\" Halign=\"" +
-        //                   horizontalAlignment + "\">urn:uuid:" + uuidString + "</Image>");
-        // }
+        else
+        {
+            _sb.AppendLine("<Image Vposition=\"" + vPos + "\" Hposition=\"" + hPos + "\" Zposition=\"" + param.Depth3D.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                          "\" Valign=\"" + verticalAlignment + "\" Halign=\"" + horizontalAlignment + "\">urn:uuid:" + uuidString + "</Image>");
+        }
 
        _sb.AppendLine("</Subtitle>");
     }
@@ -131,7 +141,8 @@ public class ExportHandlerDCinemaSmpte2014Png : IExportHandler
             "  </SubtitleList>" + Environment.NewLine +
             "</SubtitleReel>";
 
-        xml = xml.Replace("[FRAMERATE]", ((int)FrameRate).ToString(CultureInfo.InvariantCulture));
+        // Round, do not truncate: (int)23.976 is 23, which no D-Cinema player accepts.
+        xml = xml.Replace("[FRAMERATE]", ((int)Math.Round(FrameRate, MidpointRounding.AwayFromZero)).ToString(CultureInfo.InvariantCulture));
 
         doc.LoadXml(xml);
         var fName = Path.Combine(_folderName, "index.xml");

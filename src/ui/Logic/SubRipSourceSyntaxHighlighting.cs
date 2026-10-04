@@ -5,14 +5,24 @@ using System.Text.RegularExpressions;
 namespace Nikse.SubtitleEdit.Logic;
 
 /// <summary>
-/// Syntax highlighting for SubRip (.srt) and WebVTT (.vtt) subtitle formats
+/// Syntax highlighting for SubRip (.srt) - WebVTT has its own, see WebVttSourceSyntaxHighlighting
 /// </summary>
-public partial class SubRipSourceSyntaxHighlighting : ISourceSyntaxHighlighter
+public partial class SubRipSourceSyntaxHighlighting : ISourceSyntaxPreviousLineHighlighter
 {
-    // SubRip-specific colors
-    private static readonly Color NumberColor = Color.FromRgb(140, 170, 0);
-    private static readonly Color TimeColor = Color.FromArgb(128, 80, 160, 210); // half transparent, so it reads as softer
-    private static readonly Color TimeSeparatorColor = Color.FromRgb(170, 110, 180);
+    // SubRip-specific colors. Unlike the tag pastels below these mark the structure of the file,
+    // not de-emphasized markup, so they get a darker variant for a white background: the
+    // half-transparent time code was barely there in light mode (#14457).
+    private static readonly Color NumberColorDark = Color.FromRgb(140, 170, 0);
+    private static readonly Color NumberColorLight = Color.FromRgb(96, 128, 0);
+    private static readonly Color TimeColorDark = Color.FromArgb(128, 80, 160, 210); // half transparent, so it reads as softer
+    private static readonly Color TimeColorLight = Color.FromRgb(36, 110, 168);
+    private static readonly Color TimeSeparatorColorDark = Color.FromRgb(170, 110, 180);
+    private static readonly Color TimeSeparatorColorLight = Color.FromRgb(140, 70, 150);
+
+    // Resolved per use so a theme switch is picked up
+    internal static Color NumberColor => UiTheme.IsDarkThemeEnabled() ? NumberColorDark : NumberColorLight;
+    internal static Color TimeColor => UiTheme.IsDarkThemeEnabled() ? TimeColorDark : TimeColorLight;
+    internal static Color TimeSeparatorColor => UiTheme.IsDarkThemeEnabled() ? TimeSeparatorColorDark : TimeSeparatorColorLight;
 
     // HTML/ASS syntax highlighting colors (the shared, theme-dependent scheme from
     // SubtitleSyntaxTokenizer) - resolved per use so a theme switch is picked up.
@@ -31,15 +41,22 @@ public partial class SubRipSourceSyntaxHighlighting : ISourceSyntaxHighlighter
     [GeneratedRegex(@"\d{2}:\d{2}:\d{2}[,\.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,\.]\d{3}")]
     private static partial Regex SubRipTimecodeRegex();
 
-    public void HighlightLine(string lineText, SourceSyntaxLineStyler styler)
+    /// <summary>Without the line above, a line holding only a number is taken as a cue number.</summary>
+    public void HighlightLine(string lineText, SourceSyntaxLineStyler styler) => HighlightLine(lineText, string.Empty, styler);
+
+    public void HighlightLine(string lineText, string? previousLine, SourceSyntaxLineStyler styler)
     {
         if (string.IsNullOrEmpty(lineText))
         {
             return;
         }
 
+        // A cue number starts a block: it follows a blank line or opens the file. A number-only
+        // line under a time code or text is subtitle text ("1984") and gets the text rules.
+        var canBeCueNumber = string.IsNullOrWhiteSpace(previousLine);
+
         // First, colorize SubRip-specific elements (numbers and timecodes)
-        if (ColorizeSubRipFormat(lineText, styler))
+        if (ColorizeSubRipFormat(lineText, canBeCueNumber, styler))
         {
             return; // This line is a number or timecode, skip HTML coloring
         }
@@ -48,13 +65,13 @@ public partial class SubRipSourceSyntaxHighlighting : ISourceSyntaxHighlighter
         ColorizeHtmlAndAssTags(lineText, styler);
     }
 
-    private static bool ColorizeSubRipFormat(string lineText, SourceSyntaxLineStyler styler)
+    private static bool ColorizeSubRipFormat(string lineText, bool canBeCueNumber, SourceSyntaxLineStyler styler)
     {
         // Colorize SubRip sequence numbers
         var numberMatch = SubRipNumberRegex().Match(lineText);
-        if (numberMatch.Success && numberMatch.Value == lineText.Trim())
+        if (canBeCueNumber && numberMatch.Success && numberMatch.Value == lineText.Trim())
         {
-            styler.Apply(0, lineText.Length, NumberColor, bold: true);
+            styler.Apply(0, lineText.Length, NumberColor, bold: true, defaultFont: true);
             return true;
         }
 
@@ -68,7 +85,7 @@ public partial class SubRipSourceSyntaxHighlighting : ISourceSyntaxHighlighter
             if (separatorIndex >= 0)
             {
                 // Colorize the start timecode (before "-->")
-                styler.Apply(timecodeMatch.Index, separatorIndex, TimeColor, bold: true);
+                styler.Apply(timecodeMatch.Index, separatorIndex, TimeColor, bold: true, defaultFont: true);
 
                 // Colorize the separator "-->" with a different color
                 var separatorStart = timecodeMatch.Index + separatorIndex;
@@ -86,19 +103,19 @@ public partial class SubRipSourceSyntaxHighlighting : ISourceSyntaxHighlighter
                     separatorEnd++;
                 }
 
-                styler.Apply(separatorStart, separatorEnd - separatorStart, TimeSeparatorColor, bold: true);
+                styler.Apply(separatorStart, separatorEnd - separatorStart, TimeSeparatorColor, bold: true, defaultFont: true);
 
                 // Colorize the end timecode (after "-->")
                 var endTimecodeEnd = timecodeMatch.Index + timecodeMatch.Length;
                 if (endTimecodeEnd > separatorEnd)
                 {
-                    styler.Apply(separatorEnd, endTimecodeEnd - separatorEnd, TimeColor, bold: true);
+                    styler.Apply(separatorEnd, endTimecodeEnd - separatorEnd, TimeColor, bold: true, defaultFont: true);
                 }
             }
             else
             {
                 // Fallback: colorize the entire match as timecode
-                styler.Apply(timecodeMatch.Index, timecodeMatch.Length, TimeColor, bold: true);
+                styler.Apply(timecodeMatch.Index, timecodeMatch.Length, TimeColor, bold: true, defaultFont: true);
             }
 
             return true;
@@ -107,7 +124,7 @@ public partial class SubRipSourceSyntaxHighlighting : ISourceSyntaxHighlighter
         return false;
     }
 
-    private static void ColorizeHtmlAndAssTags(string lineText, SourceSyntaxLineStyler styler)
+    internal static void ColorizeHtmlAndAssTags(string lineText, SourceSyntaxLineStyler styler)
     {
         var inComment = false;
         var inHtmlTag = false;
@@ -258,7 +275,13 @@ public partial class SubRipSourceSyntaxHighlighting : ISourceSyntaxHighlighter
                     styler.Apply(valueStart, 1, CharsColor);
 
                     // Color the value content (check for style attribute)
-                    var hasColon = lineText.IndexOf(':', i + 1, valueEnd - i - 2) != -1;
+                    // Clamp the span, as SubtitleSyntaxTokenizer does: with the opening quote as
+                    // the last character of the line (typing '<font color="') valueEnd lands on
+                    // Length and the count goes to -1, throwing out of Render.
+                    var contentStart = i + 1;
+                    var contentEnd = Math.Max(contentStart, valueEnd - 1);
+                    var hasColon = contentEnd > contentStart &&
+                                   lineText.IndexOf(':', contentStart, contentEnd - contentStart) != -1;
                     var valueColor = hasColon ? StyleColor : ValuesColor;
 
                     if (valueEnd > valueStart + 1)

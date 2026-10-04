@@ -10,7 +10,7 @@ Convert multiple subtitle files between formats and apply various transformation
 ## How to Use
 
 1. Open **Tools → Batch convert...**
-2. Add subtitle files (drag and drop or use the Add button)
+2. Add subtitle files (drag and drop, or use the Add button). The folder button adds every subtitle file in a folder — drag and drop works with folders too. Turn on **Include subfolders when adding a folder** in the settings (gear button) to scan the whole tree; a scan of a large tree or a network share can be cancelled while it runs.
 3. Select the output format
 4. Optionally add conversion functions (fixes, adjustments)
 5. Choose an output folder
@@ -28,11 +28,24 @@ You can chain multiple conversion functions:
 - Adjust duration
 - Change speed/frame rate
 - Beautify time codes — align cues to frames and apply the [Beautify time codes](beautify-time-codes.md) profile rules; frame rate and shot changes are read from a video file with the same name as the subtitle file, if one is found
+- Snap all times to frames — round every start and end time to the nearest frame, using the frame rate of a video file with the same name as the subtitle file or a fixed frame rate you choose
+- Convert colors to dialog — turn a color change inside a cue into a dash-prefixed dialog, optionally removing the color tags, adding new lines and re-breaking the lines
 - Bridge gaps
 - Apply minimum gap
+- Apply duration limits
 - Merge lines with same text
 - Merge lines with same time codes
+- Merge short lines
 - Split/break long lines
+- Unbreak lines — join a cue's lines into one, optionally only for short ones
+- Auto-balance lines
+- Fix right-to-left
+- Sort by
+- Change resolution — the [ASSA resolution resampler](assa-resolution-resampler.md) applied to every file
+- Change style — swap one ASSA style for another, or import styles from a file, optionally trimming unused ones
+- Change style properties — set font, size, colors, outline and other properties of the ASSA styles in every file
+- Embed fonts — embed the fonts an ASSA file uses as attachments, optionally [trimmed](assa-attachments.md) to the characters actually used
+- Adjust image brightness/alpha/color — for image-based subtitles
 - Auto translate
 - Delete lines
 
@@ -41,9 +54,11 @@ You can chain multiple conversion functions:
 Batch Convert can machine-translate files as part of the conversion. Supported engines:
 
 - Ollama
+- Ollama advanced (local LLM) — the batch/context engine described in [Advanced local engines](auto-translate-advanced.md), talking to Ollama's OpenAI-compatible endpoint
 - LibreTranslate
 - LM Studio
 - llama.cpp — fully managed: Batch Convert reuses an already-running local `llama-server`, or downloads llama.cpp plus a curated translation model (e.g. TranslateGemma) and starts the server for you. Point it at your own server via the remote-server option in [Auto-translate](auto-translate.md) settings.
+- llama.cpp advanced (local LLM) — the batch/context engine described in [Advanced local engines](auto-translate-advanced.md); it gets the context size configured there
 - NLLB (nllb-serve and nllb-api)
 - DeepL (API key required)
 - CrispASR MADLAD
@@ -60,10 +75,36 @@ Supported OCR engines in Batch Convert:
 - BinaryOcr
 - Tesseract
 - Ollama
-- llama.cpp (curated OCR vision models — GLM-OCR, LightOnOCR, PaddleOCR-VL; a local `llama-server` is started automatically)
+- llama.cpp (curated OCR vision models, best-first — GLM-OCR, LFM2.5-VL 3B, PaddleOCR-VL, HunyuanOCR 1.5, LightOnOCR; a local `llama-server` is started automatically)
+- CrispEmbed (local, multiple model backends — see [OCR](ocr.md#crispembed))
 - PaddleOCR (Windows and Linux only)
+- Apple Vision (macOS only — pick a language, nothing to download)
 
 Subtitle Edit 5 can auto-detect language and pixels-are-space settings for nOcr/BinaryOcr in many batch workflows. This reduces the amount of manual setup needed when converting many image-based subtitle files with similar fonts.
+
+### OCR language per file
+
+A batch often holds the tracks of one disc in several languages. For the engines that take a language (Tesseract, PaddleOCR, Apple Vision, Ollama and llama.cpp), the language the source declares wins over the language chosen in the batch settings:
+
+- the track language of a Matroska/MP4/transport stream track
+- the language of a VobSub `.idx` file that holds a single language
+- a language tag in the file name, e.g. `Movie [fra].sup`, `Movie [ron].sup` or `movie.it.sup` (two- or three-letter ISO 639 codes)
+
+The language from the batch settings is used when the source declares nothing, or when the engine does not have the language - for Tesseract that means the language model is not installed.
+
+## Transport Stream Input
+
+A transport stream (`.ts`, `.m2ts`, `.mts`, or `.mpg`/`.mpeg` containing one) is listed as one item, and every subtitle track in it is converted: each DVB image track, every teletext page on every PID - one PID can carry several pages, e.g. 888 and 889 for a second language, and each page becomes its own output file - and ARIB STD-B24 caption tracks. Each output is named from the source file plus the file name ending template below, e.g. `movie.en.srt`; a track without a language code in the stream gets its PID or teletext page number instead, so two language-less tracks never collide.
+
+When a transport stream is in the list, a **Transport Stream settings...** button appears:
+
+- **Override original X position** - replace the DVB subtitle's own horizontal position with an alignment (left, center, right) and a left/right margin in percent of the screen width
+- **Override original Y position** - replace the vertical position with a bottom margin in percent of the screen height
+- **Override original video size** - scale the screen size, bitmaps and positions to the width and height you enter (**Get size from video...** reads them from a video file)
+- **File name ending** - text added before the extension for every extracted track, with placeholders for the two- or three-letter language code in lowercase or uppercase; the default is `.{two-letter-country-code}`. Leave it empty to use the regular language post fix instead
+- **Only teletext** - skip the DVB image tracks and convert only the teletext (and other text) tracks
+
+Position and video size only affect DVB image tracks exported to an image-based format.
 
 ## Speech to Text in Batch Mode
 
@@ -75,5 +116,7 @@ Speech-to-text batch mode can transcribe multiple media files and save the resul
 - **Output folder** — Where converted files are saved
 - **Overwrite existing** — Whether to overwrite files
 - **Encoding** — Text encoding for output files
+- **Keep source file timestamp** — Give the output file the modification time of the source file
+- **Language post fix** — Append the detected language code (2- or 3-letter) to the output file name, e.g. `movie.en.srt`
 
 For headless batch conversion, see [Command Line (seconv)](../reference/command-line.md).

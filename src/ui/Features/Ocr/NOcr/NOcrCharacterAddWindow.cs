@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Data;
 using Avalonia.Media;
+using Nikse.SubtitleEdit.Controls;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
 
@@ -45,10 +46,19 @@ public class NOcrCharacterAddWindow : Window
         var image = new Image
         {
             Stretch = Stretch.Uniform,
-            Margin = new Thickness(0, 0, 0, 10),
             MaxHeight = 350,
         };
         image.Bind(Image.SourceProperty, new Binding(nameof(vm.SentenceBitmap)));
+
+        // subtitle bitmaps are light or dark text on transparent pixels, so without a backdrop they
+        // vanish into the window - white text on the light theme (#15111)
+        var imageBackdrop = new Border
+        {
+            Background = ImagePreviewBackground.CreateBrush(),
+            Child = image,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+            Margin = new Thickness(0, 0, 0, 10),
+        };
 
         var controlsView = MakeControlsView(vm);
 
@@ -60,7 +70,7 @@ public class NOcrCharacterAddWindow : Window
         var buttonCancel = UiUtil.MakeButtonCancel(vm.AbortCommand).WithBindIsVisible(nameof(vm.ShowCancel));
         var buttonBar = UiUtil.MakeButtonBar(buttonOk, buttonInspectAdditions, buttonUseOnce, buttonSkip, buttonAbort, buttonCancel);
 
-        grid.Add(image, 0, 0);
+        grid.Add(imageBackdrop, 0, 0);
         grid.Add(controlsView, 1, 0);
         grid.Add(buttonBar, 2, 0);
 
@@ -73,10 +83,10 @@ public class NOcrCharacterAddWindow : Window
         CharactersFlyoutMenuHelper.MakeFlyoutLetters(menuFlyout, vm.InsertSpecialCharacterCommand);
         vm.TextBoxNew.ContextFlyout = menuFlyout;
 
-        Activated += delegate
+        UiUtil.FocusOnFirstActivation(this, () =>
         {
             vm.TextBoxNew.Focus(); // hack to make OnKeyDown work
-        };
+        });
         Loaded += vm.Onloaded;
         Closing += vm.OnClosing;
         PointerWheelChanged += vm.PointerWheelChanged;
@@ -103,10 +113,10 @@ public class NOcrCharacterAddWindow : Window
             Width = double.NaN,
         };
 
-        vm.TextBoxNew = UiUtil.MakeTextBox(100, vm, nameof(vm.NewText));
+        vm.TextBoxNew = UiUtil.MakeTextBox(100, vm, nameof(vm.NewText)).WithAccessibleName(Se.Language.General.Text);
         if (!string.IsNullOrEmpty(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName))
         {
-            vm.TextBoxNew.FontFamily = new FontFamily(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName);
+            vm.TextBoxNew.FontFamily = FontFamilyHelper.Make(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName);
         }
         vm.TextBoxNew.FontStyle = vm.IsNewTextItalic ? FontStyle.Italic : FontStyle.Normal;
 
@@ -124,7 +134,7 @@ public class NOcrCharacterAddWindow : Window
 
         var panelCurrentImage = new StackPanel
         {
-            Background = new SolidColorBrush(Colors.LightGray),
+            Background = ImagePreviewBackground.CreateBrush(),
             Children = { image },
             HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
             Margin = new Thickness(5, 2, 0, 5),
@@ -226,7 +236,7 @@ public class NOcrCharacterAddWindow : Window
         var comboBoxAlgorithm = UiUtil.MakeComboBox(vm.LineAlgorithms, vm, nameof(vm.SelectedLineAlgorithm));
         ToolTip.SetTip(comboBoxAlgorithm, "Algorithm used by Auto-draw to generate foreground/background lines");
 
-        var buttonClear = new SplitButton
+        var buttonClear = new SeSplitButton
         {
             Content = Se.Language.General.Clear,
             Command = vm.ClearDrawCommand,

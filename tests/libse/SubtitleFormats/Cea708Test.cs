@@ -240,4 +240,272 @@ public class Cea708Test
 
         return bytes;
     }
+    /// <summary>
+    /// Roll-up captions (as upconverted from CEA-608): every line starts with CR, then re-defines a
+    /// visible window and writes its text. No Hide/Clear/Delete command ever comes, so the CR must
+    /// end the line on screen - it used to be decoded as a lone "\r" and every line of the stream
+    /// ran into one cue.
+    /// </summary>
+    [Fact]
+    public void DecodeRollUpCarriageReturnEndsTheLine()
+    {
+        byte[] Line(string text) => new byte[] { 0x0D, 0x98, 0x3B, 0x80, 0x0F, 0x01, 0x1F, 0x11, 0x92, 0x01, 0x00 }
+            .Concat(System.Text.Encoding.ASCII.GetBytes(text)).ToArray();
+
+        var state = new CommandState();
+        Assert.Equal(string.Empty, Nikse.SubtitleEdit.Core.Cea708.Cea708.Decode(0, Line("Line one"), state, false));
+
+        Assert.Equal("Line one", Nikse.SubtitleEdit.Core.Cea708.Cea708.Decode(1, Line("Line two"), state, false));
+        Assert.Equal(0, state.StartLineIndex);
+
+        Assert.Equal("Line two", Nikse.SubtitleEdit.Core.Cea708.Cea708.Decode(2, new byte[] { 0x0D }, state, false));
+        Assert.Equal(1, state.StartLineIndex);
+    }
+
+    /// <summary>
+    /// A pop-on caption is built in a hidden window - a CR there is a line break inside the caption.
+    /// </summary>
+    [Fact]
+    public void DecodePopOnCarriageReturnIsLineBreak()
+    {
+        var bytes = new byte[] { 0x98, 0x1B, 0x80, 0x0F, 0x01, 0x1F, 0x11, 0x4F, 0x6E, 0x65, 0x0D, 0x54, 0x77, 0x6F, 0x8B, 0x01, 0x8A, 0x01 };
+
+        var text = Nikse.SubtitleEdit.Core.Cea708.Cea708.Decode(0, bytes, new CommandState(), false);
+
+        Assert.Equal("One" + Environment.NewLine + "Two", text);
+    }
+    // DefineWindow 0: hidden (pop-on being built) or visible (roll-up/paint-on)
+    private static readonly byte[] HiddenWindow = { 0x98, 0x1B, 0x80, 0x0F, 0x01, 0x1F, 0x11 };
+    private static readonly byte[] VisibleWindow = { 0x98, 0x3B, 0x80, 0x0F, 0x01, 0x1F, 0x11 };
+
+    // ToggleWindows + HideWindows: the caption is displayed and removed in one packet, the way
+    // SE's own MCC writer ends a caption - it keeps the time it was written
+    private static string DecodeWithHideWindows(params byte[][] parts)
+    {
+        var bytes = parts.SelectMany(p => p).Concat(new byte[] { 0x8B, 0x01, 0x8A, 0x01 }).ToArray();
+        return Nikse.SubtitleEdit.Core.Cea708.Cea708.Decode(0, bytes, new CommandState(), false);
+    }
+
+    private static byte[] Ascii(string text) => System.Text.Encoding.ASCII.GetBytes(text);
+
+    /// <summary>
+    /// SetPenLocation skipping columns on the same row leaves blank cells - a space in the text
+    /// (a CEA-608 upconvert places words after mid-row codes this way).
+    /// </summary>
+    [Fact]
+    public void DecodePenLocationSkippingColumnsIsSpace()
+    {
+        Assert.Equal("you were", DecodeWithHideWindows(HiddenWindow, Ascii("you"), new byte[] { 0x92, 0x00, 0x04 }, Ascii("were")));
+    }
+
+    [Fact]
+    public void DecodePenLocationRightAfterTextAddsNoSpace()
+    {
+        Assert.Equal("youwere", DecodeWithHideWindows(HiddenWindow, Ascii("you"), new byte[] { 0x92, 0x00, 0x03 }, Ascii("were")));
+    }
+
+    [Fact]
+    public void DecodeBackspaceErasesLastChar()
+    {
+        Assert.Equal("Cat", DecodeWithHideWindows(HiddenWindow, Ascii("Cax"), new byte[] { 0x08 }, Ascii("t")));
+    }
+
+    [Fact]
+    public void DecodeHorizontalCarriageReturnErasesCurrentRowOnly()
+    {
+        Assert.Equal("One" + Environment.NewLine + "Two",
+            DecodeWithHideWindows(HiddenWindow, Ascii("One"), new byte[] { 0x0D }, Ascii("Tw0"), new byte[] { 0x0E }, Ascii("Two")));
+    }
+
+    [Fact]
+    public void DecodeFormFeedInHiddenWindowDiscardsCaption()
+    {
+        Assert.Equal("New", DecodeWithHideWindows(HiddenWindow, Ascii("Old"), new byte[] { 0x0C }, Ascii("New")));
+    }
+
+    /// <summary>
+    /// FF erases a visible window - the caption on screen ends there.
+    /// </summary>
+    [Fact]
+    public void DecodeFormFeedInVisibleWindowEndsCaption()
+    {
+        var state = new CommandState();
+        var decode = new Func<int, byte[], string>((lineIndex, bytes) => Nikse.SubtitleEdit.Core.Cea708.Cea708.Decode(lineIndex, bytes, state, false));
+
+        Assert.Equal(string.Empty, decode(0, VisibleWindow.Concat(Ascii("First")).ToArray()));
+        Assert.Equal("First", decode(1, new byte[] { 0x0C }.Concat(Ascii("Second")).ToArray()));
+        Assert.Equal(0, state.StartLineIndex);
+    }
+
+    /// <summary>
+    /// Two roll-up lines each ended by CR in one packet are two captions - they used to run
+    /// together as "ABCD".
+    /// </summary>
+    [Fact]
+    public void DecodeTwoCarriageReturnsInOnePacketGiveTwoCaptions()
+    {
+        var state = new CommandState();
+        var bytes = VisibleWindow.Concat(Ascii("AB")).Concat(new byte[] { 0x0D }).Concat(Ascii("CD")).Concat(new byte[] { 0x0D }).ToArray();
+
+        var text = Nikse.SubtitleEdit.Core.Cea708.Cea708.Decode(0, bytes, state, false);
+
+        Assert.Equal("AB" + Environment.NewLine + "CD", text);
+        Assert.Equal(new[] { "AB", "CD" }, state.FlushedTexts.Select(p => p.Value));
+
+        var decoder = new DtvccServiceDecoder();
+        AddDtvccPacket(decoder, bytes, 1000);
+        var paragraphs = Assert.Single(decoder.Finish(2000)).Value;
+        Assert.Equal(new[] { "AB", "CD" }, paragraphs.Select(p => p.Text));
+    }
+
+    /// <summary>
+    /// Text still on screen at the end of the stream ends at the given end time (the end of the
+    /// last video frame, like CEA-608) - not at its own start.
+    /// </summary>
+    [Fact]
+    public void DtvccFinishEndsLastCaptionAtEndTime()
+    {
+        var decoder = new DtvccServiceDecoder();
+        AddDtvccPacket(decoder, VisibleWindow.Concat(Ascii("HI")).ToArray(), 1000);
+
+        var paragraph = Assert.Single(Assert.Single(decoder.Finish(1033)).Value);
+
+        Assert.Equal("HI", paragraph.Text);
+        Assert.Equal(1000, paragraph.StartTime.TotalMilliseconds);
+        Assert.Equal(1033, paragraph.EndTime.TotalMilliseconds);
+    }
+
+    /// <summary>
+    /// Korean broadcasters send P16 characters as EUC-KR (KS X 1001) - "금방" is B1DD B9E6. Read
+    /// as UTF-16 that was nonsense Hangul ("뇝맦").
+    /// </summary>
+    [Fact]
+    public void DecodeP16EucKr()
+    {
+        Assert.Equal("금방", DecodeWithHideWindows(HiddenWindow, new byte[] { 0x18, 0xB1, 0xDD, 0x18, 0xB9, 0xE6 }));
+    }
+
+    /// <summary>
+    /// P16 characters outside the EUC-KR range stay UTF-16.
+    /// </summary>
+    [Fact]
+    public void DecodeP16Unicode()
+    {
+        Assert.Equal("é가", DecodeWithHideWindows(HiddenWindow, new byte[] { 0x18, 0x00, 0xE9, 0x18, 0xAC, 0x00 }));
+    }
+
+    /// <summary>
+    /// A roll-up line stays on screen after its CR - it ends when the next line starts, or when
+    /// the window is cleared. It used to end at its own CR, so every cue lasted about one frame.
+    /// </summary>
+    [Fact]
+    public void DtvccRollUpLineStaysOnScreenUntilNextLineOrClear()
+    {
+        var decoder = new DtvccServiceDecoder();
+        AddDtvccPacket(decoder, VisibleWindow.Concat(Ascii("One")).Concat(new byte[] { 0x0D }).ToArray(), 1000);
+        AddDtvccPacket(decoder, Ascii("Two").Concat(new byte[] { 0x0D }).ToArray(), 3000);
+        AddDtvccPacket(decoder, new byte[] { 0x88, 0x01 }, 5000); // ClearWindows: window 0
+
+        var paragraphs = Assert.Single(decoder.Finish(9000)).Value;
+
+        Assert.Equal(new[] { "One", "Two" }, paragraphs.Select(p => p.Text));
+        Assert.Equal(new double[] { 1000, 3000 }, paragraphs.Select(p => p.StartTime.TotalMilliseconds));
+        Assert.Equal(new double[] { 3000, 5000 }, paragraphs.Select(p => p.EndTime.TotalMilliseconds));
+    }
+
+    /// <summary>
+    /// A roll-up line still on screen at the end of the stream ends at the end time.
+    /// </summary>
+    [Fact]
+    public void DtvccRollUpLineOnScreenAtEndOfStreamEndsAtEndTime()
+    {
+        var decoder = new DtvccServiceDecoder();
+        AddDtvccPacket(decoder, VisibleWindow.Concat(Ascii("Last")).Concat(new byte[] { 0x0D }).ToArray(), 1000);
+
+        var paragraph = Assert.Single(Assert.Single(decoder.Finish(4000)).Value);
+
+        Assert.Equal("Last", paragraph.Text);
+        Assert.Equal(4000, paragraph.EndTime.TotalMilliseconds);
+    }
+
+    // One DTVCC packet with one service 1 block
+    /// <summary>
+    /// A pop-on caption is built in a hidden window and shown by DisplayWindows - it starts there,
+    /// not when its text was written (a whole caption early, as the next one is built while the
+    /// current one shows). Hiding or deleting other windows must not end it.
+    /// </summary>
+    [Fact]
+    public void DtvccPopOnCaptionStartsWhenDisplayed()
+    {
+        byte[] HiddenWindowN(int n) => new byte[] { (byte)(0x98 + n), 0x1B, 0x80, 0x0F, 0x01, 0x1F, 0x11 };
+        var decoder = new DtvccServiceDecoder();
+        AddDtvccPacket(decoder, HiddenWindowN(1).Concat(Ascii("First")).ToArray(), 1000);
+        AddDtvccPacket(decoder, new byte[] { 0x8A, 0xFF, 0x89, 0x02 }, 3000); // hide all, display 1
+        AddDtvccPacket(decoder, new byte[] { 0x8C, 0xFD }.Concat(HiddenWindowN(2)).Concat(Ascii("Second")).ToArray(), 3100); // delete all but 1
+        AddDtvccPacket(decoder, new byte[] { 0x8A, 0xFF, 0x89, 0x04 }, 5000); // hide all, display 2
+
+        var paragraphs = Assert.Single(decoder.Finish(7000)).Value;
+
+        Assert.Equal(new[] { "First", "Second" }, paragraphs.Select(p => p.Text));
+        Assert.Equal(new double[] { 3000, 5000 }, paragraphs.Select(p => p.StartTime.TotalMilliseconds));
+        Assert.Equal(new double[] { 5000, 7000 }, paragraphs.Select(p => p.EndTime.TotalMilliseconds));
+    }
+
+    /// <summary>
+    /// ToggleWindows swaps the hidden caption in and the shown one out.
+    /// </summary>
+    [Fact]
+    public void DtvccPopOnCaptionShownByToggleWindows()
+    {
+        byte[] HiddenWindowN(int n) => new byte[] { (byte)(0x98 + n), 0x1B, 0x80, 0x0F, 0x01, 0x1F, 0x11 };
+        var decoder = new DtvccServiceDecoder();
+        AddDtvccPacket(decoder, HiddenWindowN(0).Concat(Ascii("First")).ToArray(), 1000);
+        AddDtvccPacket(decoder, new byte[] { 0x8B, 0x01 }, 2000); // toggle 0: shown
+        AddDtvccPacket(decoder, HiddenWindowN(1).Concat(Ascii("Second")).ToArray(), 2500);
+        AddDtvccPacket(decoder, new byte[] { 0x8B, 0x03 }, 4000); // toggle 0 + 1: 0 hidden, 1 shown
+        AddDtvccPacket(decoder, new byte[] { 0x8C, 0xFF }, 6000); // delete all
+
+        var paragraphs = Assert.Single(decoder.Finish(9000)).Value;
+
+        Assert.Equal(new[] { "First", "Second" }, paragraphs.Select(p => p.Text));
+        Assert.Equal(new double[] { 2000, 4000 }, paragraphs.Select(p => p.StartTime.TotalMilliseconds));
+        Assert.Equal(new double[] { 4000, 6000 }, paragraphs.Select(p => p.EndTime.TotalMilliseconds));
+    }
+
+    /// <summary>
+    /// Redefining the displayed window as hidden hides it - the caption shown there ends, and is
+    /// not lost when the next caption built in the same window is displayed.
+    /// </summary>
+    [Fact]
+    public void DtvccRedefiningShownWindowAsHiddenEndsCaption()
+    {
+        var decoder = new DtvccServiceDecoder();
+        AddDtvccPacket(decoder, HiddenWindow.Concat(Ascii("First")).ToArray(), 1000);
+        AddDtvccPacket(decoder, new byte[] { 0x89, 0x01 }, 2000); // display 0
+        AddDtvccPacket(decoder, HiddenWindow.Concat(Ascii("Second")).ToArray(), 4000); // redefine 0 hidden
+        AddDtvccPacket(decoder, new byte[] { 0x89, 0x01 }, 5000); // display 0
+        AddDtvccPacket(decoder, new byte[] { 0x8C, 0xFF }, 7000); // delete all
+
+        var paragraphs = Assert.Single(decoder.Finish(9000)).Value;
+
+        Assert.Equal(new[] { "First", "Second" }, paragraphs.Select(p => p.Text));
+        Assert.Equal(new double[] { 2000, 5000 }, paragraphs.Select(p => p.StartTime.TotalMilliseconds));
+        Assert.Equal(new double[] { 4000, 7000 }, paragraphs.Select(p => p.EndTime.TotalMilliseconds));
+    }
+
+    private static void AddDtvccPacket(DtvccServiceDecoder decoder, byte[] serviceData, double timeMs)
+    {
+        var content = new List<byte> { (byte)((1 << 5) | serviceData.Length) };
+        content.AddRange(serviceData);
+        if ((content.Count + 1) % 2 != 0)
+        {
+            content.Add(0); // padding (null service block)
+        }
+
+        decoder.Add(3, (content.Count + 1) / 2, content[0], timeMs);
+        for (var i = 1; i < content.Count; i += 2)
+        {
+            decoder.Add(2, content[i], content[i + 1], timeMs);
+        }
+    }
 }

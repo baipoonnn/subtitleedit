@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -19,9 +19,9 @@ public class AiReviewWindow : Window
     {
         UiUtil.InitializeWindow(this, GetType().Name);
         Title = UiUtil.MakeWindowTitle(Se.Language.Tools.AiReview.Title);
-        Width = 1024;
+        Width = 1200;
         Height = 720;
-        MinWidth = 800;
+        MinWidth = 900;
         MinHeight = 500;
         CanResize = true;
         vm.Window = this;
@@ -85,14 +85,22 @@ public class AiReviewWindow : Window
             .WithAccessibleName(Se.Language.General.Model);
         // Shared dot template, so the install colours here match auto-translate and the engine
         // settings dialog rather than this window's former bespoke green/grey pair.
-        comboLlamaCppModel.ItemTemplate = StatusDots.ComboItemTemplate<Features.Translate.LlamaCppModelDisplay>(
-            m => m.Model.DisplayName,
-            m => string.IsNullOrEmpty(m.Model.Url)
-                ? (string.IsNullOrEmpty(m.Model.Size) ? Se.Language.General.Custom : $"{Se.Language.General.Custom}, {m.Model.Size}")
-                : (string.IsNullOrEmpty(m.Model.Size) ? null : m.Model.Size),
-            m => m.IsInstalled ? DownloadDotStatus.UpToDate : DownloadDotStatus.NotInstalled);
+        comboLlamaCppModel.ItemTemplate = Features.Translate.AutoTranslateCombos.LlamaCppModelItemTemplate();
 
-        comboLlamaCppModel.Bind(IsVisibleProperty, new Binding(nameof(vm.IsLlamaCppVisible)));
+        // Start/Stop server, as in auto-translate/OCR: without it an idle llama-server (and the
+        // model's VRAM) could only be released by closing Subtitle Edit (#13969).
+        var buttonLlamaCppServer = UiUtil.MakeButton(string.Empty, vm.ToggleLlamaCppServerCommand);
+        buttonLlamaCppServer.Bind(Button.ContentProperty, new Binding(nameof(vm.LlamaCppServerButtonText)));
+        buttonLlamaCppServer.Bind(IsEnabledProperty, new Binding("!" + nameof(vm.IsReviewing)));
+
+        var panelLlamaCpp = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 5,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children = { comboLlamaCppModel, buttonLlamaCppServer },
+        };
+        panelLlamaCpp.Bind(IsVisibleProperty, new Binding(nameof(vm.IsLlamaCppVisible)));
 
         var buttonLlamaCppEngineSettings = UiUtil.MakeButton(vm.ShowLlamaCppEngineSettingsCommand, IconNames.Settings)
             .WithAccessibleName(Se.Language.General.LlamaCppEngineSettings);
@@ -142,7 +150,7 @@ public class AiReviewWindow : Window
         toolbar.Add(labelEngine, 0, 0);
         toolbar.Add(panelEngine, 0, 1);
         toolbar.Add(panelOllama, 0, 2);
-        toolbar.Add(comboLlamaCppModel, 0, 3);
+        toolbar.Add(panelLlamaCpp, 0, 3);
         toolbar.Add(panelOpenAiCompatible, 0, 4);
         toolbar.Add(languageChip, 0, 5);
         toolbar.Add(buttonEditPrompt, 0, 7);
@@ -288,7 +296,7 @@ public class AiReviewWindow : Window
                                         new TextBlock
                                         {
                                             Text = item.CategoryDisplay,
-                                            FontSize = 12,
+                                            FontSize = UiUtil.ScaledFontSize(12),
                                             Foreground = item.CategoryBrush,
                                             VerticalAlignment = VerticalAlignment.Center,
                                         },
@@ -322,20 +330,7 @@ public class AiReviewWindow : Window
                     CellTheme = UiUtil.TableViewNoPaddingCellTheme,
                     HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
                     CellTemplate = new FuncDataTemplate<ReviewSuggestionItem>((item, _) =>
-                    {
-                        if (item == null)
-                        {
-                            return new Border();
-                        }
-
-                        var (beforeBlock, _) = TextDiffHighlighter.CompareReplacement(item.Before, item.After);
-                        return new Border
-                        {
-                            Background = Brushes.Transparent,
-                            Padding = new Thickness(4),
-                            Child = beforeBlock,
-                        };
-                    }),
+                        item == null ? new Border() : MakeDiffCell(item, isAfter: false, dataGrid)),
                     Width = new GridLength(1, GridUnitType.Star),
                 },
                 new SeTableViewColumn
@@ -344,20 +339,7 @@ public class AiReviewWindow : Window
                     CellTheme = UiUtil.TableViewNoPaddingCellTheme,
                     HeaderTheme = UiUtil.TableViewColumnHeaderTheme,
                     CellTemplate = new FuncDataTemplate<ReviewSuggestionItem>((item, _) =>
-                    {
-                        if (item == null)
-                        {
-                            return new Border();
-                        }
-
-                        var (_, afterBlock) = TextDiffHighlighter.CompareReplacement(item.Before, item.After);
-                        return new Border
-                        {
-                            Background = Brushes.Transparent,
-                            Padding = new Thickness(4),
-                            Child = afterBlock,
-                        };
-                    }),
+                        item == null ? new Border() : MakeDiffCell(item, isAfter: true, dataGrid)),
                     Width = new GridLength(1, GridUnitType.Star),
                 },
         });
@@ -365,6 +347,7 @@ public class AiReviewWindow : Window
         dataGrid.Bind(TableView.SelectedItemProperty, new Binding(nameof(vm.SelectedSuggestion)));
         TableViewExtras.AddSpaceToggle<ReviewSuggestionItem>(dataGrid,
             item => item.IsSelected, (item, v) => item.IsSelected = v);
+        dataGrid.DoubleTapped += (_, _) => vm.OnSuggestionsGridDoubleTapped();
 
         var borderGrid = UiUtil.MakeBorderForControlNoPadding(dataGrid);
 
@@ -376,6 +359,9 @@ public class AiReviewWindow : Window
             Height = 6,
             VerticalAlignment = VerticalAlignment.Center,
             [!RangeBase.ValueProperty] = new Binding(nameof(vm.ProgressValue)),
+            // Only meaningful while a review is running - a full bar sitting under a
+            // finished review just looks stuck.
+            [!Visual.IsVisibleProperty] = new Binding(nameof(vm.IsReviewing)),
         };
         var statusText = MakeBoundTextBlock(nameof(vm.StatusText));
         statusText.VerticalAlignment = VerticalAlignment.Center;
@@ -420,10 +406,60 @@ public class AiReviewWindow : Window
         };
         reasonText.Bind(IsVisibleProperty, new Binding(nameof(vm.HasReason)));
 
+        // ---------- context strip ----------
+        // The lines before and after the selected suggestion, so a casing/punctuation fix can be
+        // judged against its neighbors without leaving the window (issue #14619).
+        var contextGrid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*"),
+            RowDefinitions = new RowDefinitions("Auto,Auto"),
+            ColumnSpacing = 7,
+            RowSpacing = 2,
+        };
+        contextGrid.Add(new Optris.Icons.Avalonia.Icon
+        {
+            Value = "mdi-arrow-up-thin",
+            FontSize = 14,
+            Opacity = 0.7,
+            VerticalAlignment = VerticalAlignment.Center,
+        }, 0, 0);
+        contextGrid.Add(new Optris.Icons.Avalonia.Icon
+        {
+            Value = "mdi-arrow-down-thin",
+            FontSize = 14,
+            Opacity = 0.7,
+            VerticalAlignment = VerticalAlignment.Center,
+        }, 1, 0);
+        var contextPreviousLabel = MakeBoundTextBlock(nameof(vm.ContextPreviousLabel));
+        contextPreviousLabel.Opacity = 0.6;
+        var contextNextLabel = MakeBoundTextBlock(nameof(vm.ContextNextLabel));
+        contextNextLabel.Opacity = 0.6;
+        var contextPreviousText = MakeBoundTextBlock(nameof(vm.ContextPreviousText));
+        contextPreviousText.Opacity = 0.8;
+        contextPreviousText.TextWrapping = TextWrapping.Wrap;
+        var contextNextText = MakeBoundTextBlock(nameof(vm.ContextNextText));
+        contextNextText.Opacity = 0.8;
+        contextNextText.TextWrapping = TextWrapping.Wrap;
+        contextGrid.Add(contextPreviousLabel, 0, 1);
+        contextGrid.Add(contextPreviousText, 0, 2);
+        contextGrid.Add(contextNextLabel, 1, 1);
+        contextGrid.Add(contextNextText, 1, 2);
+        contextGrid.Bind(IsVisibleProperty, new Binding(nameof(vm.HasContext)));
+
         // ---------- bottom bar ----------
         var summaryText = MakeBoundTextBlock(nameof(vm.SummaryText));
         summaryText.VerticalAlignment = VerticalAlignment.Center;
         summaryText.Opacity = 0.8;
+
+        // Plays the selected suggestion's line in the main window's video player - hidden when no
+        // video is loaded (the view model gets no play hook then).
+        var buttonPlay = UiUtil.MakeButton(Se.Language.General.PlayCurrent, vm.PlayCurrentLineCommand)
+            .WithIconLeft("fa-solid fa-play");
+        buttonPlay.Bind(IsVisibleProperty, new Binding(nameof(vm.IsPlayVisible)));
+        if (Se.Settings.Appearance.ShowHints)
+        {
+            ToolTip.SetTip(buttonPlay, l.PlayCurrentLineHint);
+        }
 
         var leftButtons = new StackPanel
         {
@@ -431,24 +467,34 @@ public class AiReviewWindow : Window
             Spacing = 5,
             Children =
             {
+                buttonPlay.WithMarginRight(10),
                 summaryText.WithMarginRight(10),
                 UiUtil.MakeButton(Se.Language.General.SelectAll, vm.SelectAllCommand),
+                UiUtil.MakeButton(Se.Language.General.SelectNone, vm.SelectNoneCommand),
                 UiUtil.MakeButton(Se.Language.General.InvertSelection, vm.InvertSelectionCommand),
             },
         };
 
         var buttonReview = UiUtil.MakeButton(l.Review, vm.ReviewCommand)
             .WithIconLeft("fa-solid fa-robot");
-        buttonReview.Bind(IsVisibleProperty, new Binding(nameof(vm.IsNotReviewing)));
+        buttonReview.Bind(IsVisibleProperty, new Binding("!" + nameof(vm.IsReviewing)));
 
         var buttonStop = UiUtil.MakeButton(Se.Language.General.Stop, vm.StopReviewCommand)
             .WithIconLeft("fa-solid fa-stop");
         buttonStop.Bind(IsVisibleProperty, new Binding(nameof(vm.IsReviewing)));
 
-        var buttonApply = UiUtil.MakeButton(string.Empty, vm.OkCommand);
-        buttonApply.Bind(ContentControl.ContentProperty, new Binding(nameof(vm.ApplyButtonText)));
-        buttonApply.WithIconLeft("fa-solid fa-check");
+        // Apply/Ok/Cancel, the same shape as Multiple replace: Apply writes the checked fixes and
+        // keeps the window open so the review can be worked through in passes (issue #13807), Ok
+        // writes them and closes, Cancel closes and leaves the unapplied ones behind. Apply is
+        // hidden for callers without a live target - they have nowhere to receive a pass.
+        // WithIconLeft assigns Content, so setting it after binding ContentProperty replaced the
+        // bound text with the bare icon (and binding after WithIconLeft would drop the icon).
+        // WithIconLeftBindText builds the icon+bound-text panel once, which is what was wanted.
+        var buttonApply = UiUtil.MakeButton(string.Empty, vm.ApplyCommand)
+            .WithBindIsVisible(nameof(vm.IsApplyVisible))
+            .WithIconLeftBindText("fa-solid fa-check", nameof(vm.ApplyButtonText));
 
+        var buttonOk = UiUtil.MakeButtonOk(vm.OkCommand);
         var buttonCancel = UiUtil.MakeButtonCancel(vm.CancelCommand);
 
         var bottomBar = new Grid
@@ -456,7 +502,7 @@ public class AiReviewWindow : Window
             ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
         };
         bottomBar.Add(leftButtons, 0, 0);
-        bottomBar.Add(UiUtil.MakeButtonBar(buttonReview, buttonStop, buttonApply, buttonCancel), 0, 2);
+        bottomBar.Add(UiUtil.MakeButtonBar(buttonReview, buttonStop, buttonApply, buttonOk, buttonCancel), 0, 2);
 
         // ---------- layout ----------
         var grid = new Grid
@@ -466,6 +512,7 @@ public class AiReviewWindow : Window
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Star) },
+                new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
@@ -484,7 +531,8 @@ public class AiReviewWindow : Window
         grid.Add(borderGrid, 2, 0);
         grid.Add(progressRow, 3, 0);
         grid.Add(reasonText, 4, 0);
-        grid.Add(bottomBar, 5, 0);
+        grid.Add(contextGrid, 5, 0);
+        grid.Add(bottomBar, 6, 0);
 
         Content = grid;
 
@@ -495,6 +543,60 @@ public class AiReviewWindow : Window
         };
         Closing += delegate { vm.OnClosing(); };
         KeyDown += (_, e) => vm.OnKeyDown(e);
+    }
+
+    /// <summary>
+    /// A Before/After cell showing the word-level diff of the suggestion. Both cells re-render
+    /// when <see cref="ReviewSuggestionItem.After"/> changes; the After cell can also be edited
+    /// in place (<see cref="TableViewInlineTextEditor"/>), so a nearly-right fix is corrected
+    /// here instead of being declined and retyped in the main window.
+    /// </summary>
+    private static Border MakeDiffCell(ReviewSuggestionItem item, bool isAfter, TableView grid)
+    {
+        var cell = new Border
+        {
+            Background = Brushes.Transparent,
+            Padding = new Thickness(4),
+        };
+
+        Control MakeDisplay()
+        {
+            var (beforeBlock, afterBlock) = TextDiffHighlighter.CompareReplacement(item.Before, item.After);
+            return isAfter ? afterBlock : beforeBlock;
+        }
+
+        TableViewInlineTextEditor? editor = null;
+        if (isAfter)
+        {
+            editor = new TableViewInlineTextEditor(cell, grid, () => item.After, text => item.After = text, MakeDisplay,
+                hint: Se.Language.Tools.AiReview.EditAfterHint);
+        }
+        else
+        {
+            cell.Child = MakeDisplay();
+        }
+
+        void OnItemChanged(object? _, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName != nameof(ReviewSuggestionItem.After))
+            {
+                return;
+            }
+
+            if (editor != null)
+            {
+                editor.Refresh();
+            }
+            else
+            {
+                cell.Child = MakeDisplay();
+            }
+        }
+
+        // The template is rebuilt per row, so the subscription must not outlive the cell.
+        cell.AttachedToVisualTree += (_, _) => item.PropertyChanged += OnItemChanged;
+        cell.DetachedFromVisualTree += (_, _) => item.PropertyChanged -= OnItemChanged;
+        return cell;
     }
 
     private static IBrush GetCategoryBrush(ReviewCategory category)

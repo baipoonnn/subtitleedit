@@ -14,9 +14,10 @@ using Nikse.SubtitleEdit.UiLogic.Http;
 
 namespace Nikse.SubtitleEdit.UiLogic.AutoTranslate
 {
-    public class ChatGptTranslate : IAutoTranslator, IDisposable
+    public class ChatGptTranslate : IAutoTranslator, ILineBreakPreservingTranslator, IDisposable
     {
         private static readonly Regex UnicodeRegex = new Regex(@"\\u([0-9a-fA-F]{4})", RegexOptions.Compiled);
+        private static readonly Regex PreambleRegex = new Regex(@"^(Here is|Here's) [a-zA-Z ,]+:", RegexOptions.Compiled);
 
         private HttpClient _httpClient = null!;
 
@@ -37,6 +38,7 @@ namespace Nikse.SubtitleEdit.UiLogic.AutoTranslate
         // gpt-oss-120b is an open-weights model not hosted on api.openai.com at all.
         public static string[] Models => new[]
         {
+            "gpt-6-astra",
             "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
             "gpt-5.5",
             "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano",
@@ -48,21 +50,35 @@ namespace Nikse.SubtitleEdit.UiLogic.AutoTranslate
 
         public static string RemovePreamble(string original, string input)
         {
-            if (original.Contains(":") && input.IndexOf("<think>") < 0)
-            {
-                return input;
-            }
-
             var translation = input;
             var indexOfStartThink = translation.IndexOf("<think>");
             var indexOfEndThink = translation.IndexOf("</think>");
-            if (indexOfStartThink >= 0 && indexOfEndThink > indexOfStartThink)
+            if (indexOfStartThink >= 0)
             {
-                translation = translation.Remove(indexOfStartThink, indexOfEndThink - indexOfStartThink + 8).Trim();
+                if (indexOfEndThink > indexOfStartThink)
+                {
+                    translation = translation.Remove(indexOfStartThink, indexOfEndThink - indexOfStartThink + 8).Trim();
+                }
+                else
+                {
+                    // The model started reasoning but the response was cut off (hit its token
+                    // budget) before closing the tag, so everything after "<think>" is raw
+                    // internal monologue, not a translation. Empty triggers the caller's
+                    // retry-on-no-progress logic (DoAutoTranslate) instead of shipping it.
+                    return string.Empty;
+                }
             }
 
-            var regex = new Regex(@"^(Here is|Here's) [a-zA-Z ,]+:");
-            var match = regex.Match(translation);
+            // The colon guard has to be applied to the text left AFTER the think block is removed.
+            // It used to be "&&"-ed with "there is no <think>", so a reasoning model's answer
+            // skipped it entirely and PreambleRegex ate the real translation up to its first colon
+            // ("Anmerkung: Das ist wichtig." -> "this is important.").
+            if (original.Contains(':'))
+            {
+                return translation;
+            }
+
+            var match = PreambleRegex.Match(translation);
             if (match.Success)
             {
                 var result = translation.Remove(match.Index, match.Value.Length);
@@ -216,6 +232,7 @@ namespace Nikse.SubtitleEdit.UiLogic.AutoTranslate
                 MakePair("Buryat", "bua"),
                 MakePair("Cantonese", "yue"),
                 MakePair("Catalan", "ca"),
+                MakePair("Cebuano", "ceb"),
                 MakePair("Central Kurdish (Sorani)", "ckb"),
                 MakePair("Chakma (Latin script)", "ccp-Latn"),
                 MakePair("Chamorro", "ch"),
@@ -227,6 +244,7 @@ namespace Nikse.SubtitleEdit.UiLogic.AutoTranslate
                 MakePair("Chittagonian", "ctg"),
                 MakePair("Chuukese", "chk"),
                 MakePair("Chuvash", "cv"),
+                MakePair("Corsican", "co"),
                 MakePair("Crimean Tatar", "crh"),
                 MakePair("Crimean Tatar (Latin script)", "crh-Latn"),
                 MakePair("Croatian", "hr"),
@@ -246,13 +264,16 @@ namespace Nikse.SubtitleEdit.UiLogic.AutoTranslate
                 MakePair("Efik", "efi"),
                 MakePair("Egyptian Arabic", "arz"),
                 MakePair("English", "en"),
+                MakePair("Esperanto", "eo"),
                 MakePair("Estonian", "et"),
                 MakePair("Ewe", "ee"),
                 MakePair("Faroese", "fo"),
                 MakePair("Fijian", "fj"),
+                MakePair("Filipino", "tl"),
                 MakePair("Finnish", "fi"),
                 MakePair("Fon", "fon"),
                 MakePair("French", "fr"),
+                MakePair("Frisian", "fy"),
                 MakePair("Friulian", "fur"),
                 MakePair("Fulani", "ff"),
                 MakePair("Ga", "gaa"),
@@ -264,12 +285,15 @@ namespace Nikse.SubtitleEdit.UiLogic.AutoTranslate
                 MakePair("Greek", "el"),
                 MakePair("Guarani", "gn"),
                 MakePair("Gujarati", "gu"),
+                MakePair("Haitian Creole", "ht"),
                 MakePair("Hakha Chin", "cnh"),
                 MakePair("Haryanvi", "bgc"),
                 MakePair("Hausa", "ha"),
+                MakePair("Hawaiian", "haw"),
                 MakePair("Hebrew", "he"),
                 MakePair("Hiligaynon", "hil"),
                 MakePair("Hindi", "hi"),
+                MakePair("Hmong", "hmn"),
                 MakePair("Ho (Warang Chiti script)", "hoc-Wara"),
                 MakePair("Hungarian", "hu"),
                 MakePair("Hunsrik", "hrx"),
@@ -314,7 +338,9 @@ namespace Nikse.SubtitleEdit.UiLogic.AutoTranslate
                 MakePair("Kurukh", "kru"),
                 MakePair("Kyrgyz", "ky"),
                 MakePair("Lahnda Punjabi (Pakistan)", "pa-Arab"),
+                MakePair("Lao", "lo"),
                 MakePair("Latgalian", "ltg"),
+                MakePair("Latin", "la"),
                 MakePair("Latvian", "lv"),
                 MakePair("Lepcha", "lep"),
                 MakePair("Libyan Arabic", "ayl"),
@@ -326,6 +352,7 @@ namespace Nikse.SubtitleEdit.UiLogic.AutoTranslate
                 MakePair("Lombard", "lmo"),
                 MakePair("Luganda", "lg"),
                 MakePair("Luo", "luo"),
+                MakePair("Luxembourgish", "lb"),
                 MakePair("Macedonian", "mk"),
                 MakePair("Madurese", "mad"),
                 MakePair("Magahi", "mag"),
@@ -334,10 +361,12 @@ namespace Nikse.SubtitleEdit.UiLogic.AutoTranslate
                 MakePair("Malagasy", "mg"),
                 MakePair("Malay", "ms"),
                 MakePair("Malay (Jawi Script)", "ms-Arab"),
+                MakePair("Malayalam", "ml"),
                 MakePair("Maltese", "mt"),
                 MakePair("Mam", "mam"),
                 MakePair("Mandeali", "mjl"),
                 MakePair("Manx", "gv"),
+                MakePair("Maori", "mi"),
                 MakePair("Mapudungun", "arn"),
                 MakePair("Marathi", "mr"),
                 MakePair("Marshallese", "mh"),
@@ -387,10 +416,12 @@ namespace Nikse.SubtitleEdit.UiLogic.AutoTranslate
                 MakePair("Rundi", "rn"),
                 MakePair("Russian", "ru"),
                 MakePair("Sambalpuri", "spv"),
+                MakePair("Samoan", "sm"),
                 MakePair("Sango", "sg"),
                 MakePair("Sanskrit", "sa"),
                 MakePair("Santali", "sat-Latn"),
                 MakePair("Saraiki", "skr"),
+                MakePair("Scottish Gaelic", "gd"),
                 MakePair("Sepedi", "nso"),
                 MakePair("Serbian", "sr"),
                 MakePair("Sesotho", "st"),
@@ -411,6 +442,7 @@ namespace Nikse.SubtitleEdit.UiLogic.AutoTranslate
                 MakePair("Spanish", "es"),
                 MakePair("Spanish (Latin America)", "es-419"),
                 MakePair("Sudanese Arabic", "apd"),
+                MakePair("Sundanese", "su"),
                 MakePair("Surgujia", "sgj"),
                 MakePair("Surjapuri", "sjp"),
                 MakePair("Susu", "sus"),
@@ -419,9 +451,12 @@ namespace Nikse.SubtitleEdit.UiLogic.AutoTranslate
                 MakePair("Swedish", "sv"),
                 MakePair("Sylheti", "syl"),
                 MakePair("Tahitian", "ty"),
+                MakePair("Tajik", "tg"),
                 MakePair("Tamazight (Latin Script)", "ber-Latn"),
                 MakePair("Tamazight (Tifinagh Script)", "ber"),
+                MakePair("Tamil", "ta"),
                 MakePair("Tatar", "tt"),
+                MakePair("Telugu", "te"),
                 MakePair("Tetum", "tet"),
                 MakePair("Thai", "th"),
                 MakePair("Tibetan", "bo"),
@@ -435,6 +470,7 @@ namespace Nikse.SubtitleEdit.UiLogic.AutoTranslate
                 MakePair("Tumbuka", "tum"),
                 MakePair("Tunisian Arabic", "aeb"),
                 MakePair("Turkish", "tr"),
+                MakePair("Turkmen", "tk"),
                 MakePair("Tuvan", "tyv"),
                 MakePair("Twi", "ak"),
                 MakePair("Udmurt", "udm"),
@@ -453,9 +489,11 @@ namespace Nikse.SubtitleEdit.UiLogic.AutoTranslate
                 MakePair("Wu Chinese", "wuu"),
                 MakePair("Xhosa", "xh"),
                 MakePair("Yakut", "sah"),
+                MakePair("Yiddish", "yi"),
                 MakePair("Yoruba", "yo"),
                 MakePair("Yucatec Maya", "yua"),
                 MakePair("Zapotec", "zap"),
+                MakePair("Zulu", "zu"),
             };
         }
 

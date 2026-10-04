@@ -126,7 +126,9 @@ public partial class MediaInfoViewViewModel : ObservableObject
             sb.AppendLine($"Codec: MP3");
         }
 
-        var mkvParser = new MatroskaFile(videoFileName);
+        // The ctor opens a FileStream for any file, valid Matroska or not, so this leaked a handle
+        // on every Media info for every video.
+        using var mkvParser = new MatroskaFile(videoFileName);
         if (mkvParser.IsValid)
         {
             sb.AppendLine($"Container: Matroska (mkv/webm)");
@@ -224,6 +226,11 @@ public partial class MediaInfoViewViewModel : ObservableObject
         {
             e.Handled = true;
             Window?.Close();
+        }
+        else if (UiUtil.IsHelp(e))
+        {
+            e.Handled = true;
+            UiUtil.ShowHelp("features/video-player", "video-info");
         }
     }
 

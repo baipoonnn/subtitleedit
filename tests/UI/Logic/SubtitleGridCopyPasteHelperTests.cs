@@ -1,7 +1,10 @@
 using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Core.SubtitleFormats;
+using Nikse.SubtitleEdit.Features.Main;
 using Nikse.SubtitleEdit.Logic;
+using Nikse.SubtitleEdit.Logic.Config;
 using System;
+using System.Collections.ObjectModel;
 using System.Linq;
 using Xunit;
 
@@ -115,5 +118,196 @@ public class SubtitleGridCopyPasteHelperTests
         Assert.All(payload.SplitToLines(), l => Assert.True(
             l.TrimStart().StartsWith("Dialogue:", StringComparison.OrdinalIgnoreCase) ||
             l.TrimStart().StartsWith("Comment:", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    // The pasted lines are what the grid selects and scrolls to afterwards (#13705), so the
+    // paste has to hand them back - in grid order, and as the very objects it inserted.
+    [Fact]
+    public void PasteText_ReturnsInsertedLines_ForSubtitleFormatText()
+    {
+        var format = new SubRip();
+        var subtitles = new ObservableCollection<SubtitleLineViewModel>
+        {
+            new(new Paragraph("Existing one", 1000, 2000), format),
+            new(new Paragraph("Existing two", 3000, 4000), format),
+        };
+
+        var clipboard = format.ToText(BuildSubtitle(("Pasted one", 10000, 11000), ("Pasted two", 12000, 13000)), string.Empty);
+
+        var inserted = SubtitleGridCopyPasteHelper.PasteText(subtitles, 0, format, clipboard);
+
+        Assert.Equal(2, inserted.Count);
+        Assert.Equal(4, subtitles.Count);
+        // Pasted below the selected line, contiguous and in the same order as returned.
+        Assert.Same(subtitles[1], inserted[0]);
+        Assert.Same(subtitles[2], inserted[1]);
+        Assert.Equal("Pasted one", inserted[0].Text);
+        Assert.Equal("Pasted two", inserted[1].Text);
+    }
+
+    [Fact]
+    public void PasteText_ReturnsInsertedLines_ForPlainText()
+    {
+        var format = new SubRip();
+        var subtitles = new ObservableCollection<SubtitleLineViewModel>
+        {
+            new(new Paragraph("Existing one", 1000, 2000), format),
+        };
+
+        var inserted = SubtitleGridCopyPasteHelper.PasteText(subtitles, 0, format, "Hello" + Environment.NewLine + "World");
+
+        Assert.Equal(2, inserted.Count);
+        Assert.Same(subtitles[1], inserted[0]);
+        Assert.Same(subtitles[2], inserted[1]);
+        Assert.Equal("Hello", inserted[0].Text);
+        Assert.Equal("World", inserted[1].Text);
+    }
+
+    // Appending with no selection (index == Count) must still report the appended lines, or
+    // the grid would keep the old selection after a paste into an empty/unselected grid.
+    [Fact]
+    public void PasteText_AppendsAndReturnsInsertedLines_WhenIndexIsCount()
+    {
+        var format = new SubRip();
+        var subtitles = new ObservableCollection<SubtitleLineViewModel>
+        {
+            new(new Paragraph("Existing one", 1000, 2000), format),
+        };
+
+        var clipboard = format.ToText(BuildSubtitle(("Pasted one", 10000, 11000)), string.Empty);
+
+        var inserted = SubtitleGridCopyPasteHelper.PasteText(subtitles, subtitles.Count, format, clipboard);
+
+        var single = Assert.Single(inserted);
+        Assert.Same(subtitles[^1], single);
+        Assert.Equal("Pasted one", single.Text);
+    }
+
+    [Fact]
+    public void PasteText_ReturnsEmpty_ForEmptyClipboard()
+    {
+        var format = new SubRip();
+        var subtitles = new ObservableCollection<SubtitleLineViewModel>
+        {
+            new(new Paragraph("Existing one", 1000, 2000), format),
+        };
+
+        Assert.Empty(SubtitleGridCopyPasteHelper.PasteText(subtitles, 0, format, string.Empty));
+        Assert.Empty(SubtitleGridCopyPasteHelper.PasteText(subtitles, 0, format, null));
+        Assert.Single(subtitles);
+    }
+
+    [Fact]
+    public void PasteText_ShiftsCopiedLineBelowSelectedLine_InsteadOfOverlapping()
+    {
+        // #14667: Ctrl+C / Ctrl+V on a line must not paste a duplicate on top of it in time.
+        var format = new SubRip();
+        var gap = Se.Settings.General.MinimumBetweenLines.GetMilliseconds();
+        var subtitles = new ObservableCollection<SubtitleLineViewModel>
+        {
+            new(new Paragraph("One", 1000, 2000), format),
+            new(new Paragraph("Two", 3000, 4000), format),
+        };
+
+        var clipboard = format.ToText(BuildSubtitle(("One", 1000, 2000)), string.Empty);
+
+        var inserted = SubtitleGridCopyPasteHelper.PasteText(subtitles, 0, format, clipboard);
+
+        Assert.Single(inserted);
+        Assert.Same(subtitles[1], inserted[0]);
+        Assert.Equal(2000 + gap, inserted[0].StartTime.TotalMilliseconds);
+        Assert.Equal(3000 + gap, inserted[0].EndTime.TotalMilliseconds);
+    }
+
+    [Fact]
+    public void PasteText_ShiftsWholeBlockByOneDelta_KeepingSpacingInsideBlock()
+    {
+        // An SRT block pasted from a text editor lands after the selected line as one unit (#14667).
+        var format = new SubRip();
+        var gap = Se.Settings.General.MinimumBetweenLines.GetMilliseconds();
+        var subtitles = new ObservableCollection<SubtitleLineViewModel>
+        {
+            new(new Paragraph("Last", 100000, 105000), format),
+        };
+
+        var clipboard = format.ToText(BuildSubtitle(("Credit one", 1000, 6000), ("Credit two", 6300, 11300)), string.Empty);
+
+        var inserted = SubtitleGridCopyPasteHelper.PasteText(subtitles, 0, format, clipboard);
+
+        Assert.Equal(2, inserted.Count);
+        var delta = 105000 - 1000 + gap;
+        Assert.Equal(1000 + delta, inserted[0].StartTime.TotalMilliseconds);
+        Assert.Equal(6000 + delta, inserted[0].EndTime.TotalMilliseconds);
+        Assert.Equal(6300 + delta, inserted[1].StartTime.TotalMilliseconds);
+        Assert.Equal(11300 + delta, inserted[1].EndTime.TotalMilliseconds);
+    }
+
+    [Fact]
+    public void PasteText_KeepsTimeCodes_WhenPastedLinesDoNotOverlap()
+    {
+        var format = new SubRip();
+        var subtitles = new ObservableCollection<SubtitleLineViewModel>
+        {
+            new(new Paragraph("One", 1000, 2000), format),
+            new(new Paragraph("Two", 9000, 10000), format),
+        };
+
+        var clipboard = format.ToText(BuildSubtitle(("Fits", 4000, 5000)), string.Empty);
+
+        var inserted = SubtitleGridCopyPasteHelper.PasteText(subtitles, 0, format, clipboard);
+
+        Assert.Single(inserted);
+        Assert.Equal(4000, inserted[0].StartTime.TotalMilliseconds);
+        Assert.Equal(5000, inserted[0].EndTime.TotalMilliseconds);
+    }
+
+    [Fact]
+    public void PasteText_ShiftsPastedLine_WhenItStartsAfterNextLine()
+    {
+        var format = new SubRip();
+        var gap = Se.Settings.General.MinimumBetweenLines.GetMilliseconds();
+        var subtitles = new ObservableCollection<SubtitleLineViewModel>
+        {
+            new(new Paragraph("One", 1000, 2000), format),
+            new(new Paragraph("Two", 3000, 4000), format),
+        };
+
+        // Starts after "One" ends, but also after "Two" starts, so it would land out of time
+        // order between them - SE4 moved this right after "One" too.
+        var clipboard = format.ToText(BuildSubtitle(("Late", 3500, 4500)), string.Empty);
+
+        var inserted = SubtitleGridCopyPasteHelper.PasteText(subtitles, 0, format, clipboard);
+
+        Assert.Single(inserted);
+        Assert.Equal(2000 + gap, inserted[0].StartTime.TotalMilliseconds);
+    }
+
+    [Fact]
+    public void PasteText_KeepsTimeCodes_ForAssaIntoAssa()
+    {
+        var format = new AdvancedSubStationAlpha();
+        var subtitles = new ObservableCollection<SubtitleLineViewModel>
+        {
+            new(new Paragraph("One", 1000, 2000), format),
+        };
+
+        var clipboard = SubtitleGridCopyPasteHelper.GetClipboardText(format, BuildSubtitle(("One", 1000, 2000)));
+
+        var inserted = SubtitleGridCopyPasteHelper.PasteText(subtitles, 0, format, clipboard);
+
+        Assert.Single(inserted);
+        Assert.Equal(1000, inserted[0].StartTime.TotalMilliseconds);
+        Assert.Equal(2000, inserted[0].EndTime.TotalMilliseconds);
+    }
+
+    private static Subtitle BuildSubtitle(params (string Text, int Start, int End)[] paragraphs)
+    {
+        var subtitle = new Subtitle();
+        foreach (var (text, start, end) in paragraphs)
+        {
+            subtitle.Paragraphs.Add(new Paragraph(text, start, end));
+        }
+
+        return subtitle;
     }
 }

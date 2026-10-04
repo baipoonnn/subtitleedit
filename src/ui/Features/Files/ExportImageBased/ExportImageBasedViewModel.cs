@@ -1,4 +1,4 @@
-using Nikse.SubtitleEdit.UiLogic.Export;
+﻿using Nikse.SubtitleEdit.UiLogic.Export;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -10,6 +10,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Nikse.SubtitleEdit.Core.BluRaySup;
 using Nikse.SubtitleEdit.Core.Common;
+using Nikse.SubtitleEdit.Core.SubtitleFormats;
 using Nikse.SubtitleEdit.Features.Main;
 using Nikse.SubtitleEdit.Features.Shared;
 using Nikse.SubtitleEdit.Features.Shared.PromptFileSaved;
@@ -22,6 +23,7 @@ using SkiaSharp.HarfBuzz;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -87,6 +89,22 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
     [ObservableProperty] private bool _isFullFrame;
     [ObservableProperty] private Color _fullFrameBackgroundColor;
     [ObservableProperty] private bool _isFullFrameVisible;
+    [ObservableProperty] private ObservableCollection<Export3DModeDisplay> _modes3D = null!;
+    [ObservableProperty] private Export3DModeDisplay _selectedMode3D = null!;
+    [ObservableProperty] private ObservableCollection<int> _depths3D = null!;
+    [ObservableProperty] private int _selectedDepth3D;
+    [ObservableProperty] private bool _isMode3DVisible = true;
+    [ObservableProperty] private bool _isDepth3DEnabled;
+    [ObservableProperty] private string _depth3DText = string.Empty;
+    [ObservableProperty] private string _plane3DText = string.Empty;
+    [ObservableProperty] private bool _isPlane3DLoaded;
+    [ObservableProperty] private ObservableCollection<TextEffectDisplayItem> _textEffectItems = null!;
+    [ObservableProperty] private TextEffectDisplayItem? _selectedTextEffect;
+    [ObservableProperty] private bool _isTextEffectEnabled;
+    [ObservableProperty] private int _textEffectStrength = 100;
+    [ObservableProperty] private int _textEffectLetterSpacing;
+    [ObservableProperty] private int _textEffectArcBend;
+    [ObservableProperty] private int _textEffectWave;
     public ObservableCollection<int> BoxPaddingValues { get; } = new ObservableCollection<int>(Enumerable.Range(0, 100));
 
     private string _outlineColorText = string.Empty;
@@ -115,7 +133,20 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
     public TableView SubtitleGrid { get; set; }
 
     private List<SubtitleLineViewModel>? _selectedSubtitles;
+
+    // The profile whose frame rate UseVideoFrameRate replaced for this export, its own frame
+    // rate, and the video's - so closing the dialog doesn't write the video's rate into it.
+    private SeExportImagesProfile? _videoFrameRateProfile;
+    private double _videoFrameRateProfileValue;
+    private double _videoFrameRate;
+    // PlayResX/PlayResY from the subtitle's own header - "\pos" coordinates and
+    // "\bord"/"\shad" widths are relative to those, not to the export canvas. (0,0) when
+    // there is no header, which keeps everything at scale 1.0.
+    private int _scriptWidth;
+    private int _scriptHeight;
     private bool _dirty;
+    private bool _removeAssaCommentBlocks;
+    private Stereo3DPlane? _plane3D;
     private readonly Lock _generateLock;
     private bool _isCtrlDown;
     private IExportHandler? _exportImageHandler;
@@ -190,6 +221,13 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
         };
         SelectedBoxType = BoxTypes[0];
         UpdateBoxTypeLabels();
+        TextEffectItems = new ObservableCollection<TextEffectDisplayItem>(TextEffectDisplayItem.GetItems());
+        SelectedTextEffect = TextEffectItems[0];
+        Modes3D = new ObservableCollection<Export3DModeDisplay>(Export3DModeDisplay.GetItems());
+        SelectedMode3D = Modes3D[0];
+        Depths3D = new ObservableCollection<int>(Enumerable.Range(Stereo3DImage.MinDepth, Stereo3DImage.MaxDepth - Stereo3DImage.MinDepth + 1));
+        SelectedDepth3D = 0;
+        Depth3DText = Se.Language.File.Export.Depth3D;
 
         _generateLock = new Lock();
         _cancellationTokenSource = new CancellationTokenSource();
@@ -426,8 +464,11 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
 
                 var ip = imageParameters[i];
                 ip.Bitmap = GenerateBitmap(ip);
-                // "{\pos(x,y)}" anchors the rendered text, so it needs the bitmap size.
-                ExportTextTags.ApplyPositionTag(ip, Subtitles[i].Text);
+                // "{\pos(x,y)}" anchors the rendered text, so it needs the bitmap size - and
+                // the coordinates are in the script's own resolution, not the export canvas.
+                ExportTextTags.ApplyPositionTag(ip, Subtitles[i].Text, _scriptWidth, _scriptHeight);
+                // 3D goes last: each eye's copy is placed where the flat subtitle ended up.
+                Stereo3DImage.Apply(ip);
                 _exportImageHandler.CreateParagraph(ip);
 
                 lock (_generateLock)
@@ -527,9 +568,16 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
             PaddingLeftRight = SelectedPaddingLeftRight,
             PaddingTopBottom = SelectedPaddingTopBottom,
             Index = i,
-            Text = ExportTextTags.ToRenderableText(subtitle.Text),
+            // ASSA renderers never draw a {comment} block, so neither does the image (#15584).
+            Text = ExportTextTags.ToRenderableText(_removeAssaCommentBlocks
+                ? AdvancedSubStationAlpha.RemoveCommentBlocks(subtitle.Text)
+                : subtitle.Text),
             StartTime = subtitle.StartTime,
             EndTime = subtitle.EndTime,
+            // Carry the forced flag through: BDN XML writes it as Forced="..." and the
+            // Blu-ray sup writer puts it in the display set, so dropping it here silently
+            // un-forces every cue of a forced-caption track on export.
+            IsForced = subtitle.Forced,
             FontColor = FontColor.ToSKColor(),
             FontName = SelectedFontFamily ?? FontFamilies.First(),
             FontSize = SelectedFontSize,
@@ -559,7 +607,29 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
             FramesPerSecond = SelectedFrameRate,
             IsFullFrame = IsFullFrameVisible && IsFullFrame,
             FullFrameBackgroundColor = FullFrameBackgroundColor.ToSKColor(),
+            // D-Cinema has no 3D mode (see IsMode3DVisible), only the depth - its Z-position.
+            Mode3D = IsMode3DVisible ? SelectedMode3D?.Mode ?? Export3DMode.None : Export3DMode.None,
+            Depth3D = IsDepth3DEnabled ? SelectedDepth3D : 0,
+            Plane3D = IsMode3DVisible ? _plane3D : null,
+            TextEffects = TextEffectPresetFactory.Create(
+                IsTextEffectEnabled,
+                SelectedTextEffect?.Preset ?? TextEffectPreset.SoftShadow,
+                SelectedFontSize,
+                FontColor.ToSKColor(),
+                OutlineColor.ToSKColor(),
+                ShadowColor.ToSKColor(),
+                TextEffectStrength,
+                TextEffectLetterSpacing,
+                TextEffectArcBend,
+                TextEffectWave),
         };
+
+        // "{\3c..}"/"{\4c..}"/"{\bord..}"/"{\shad..}", "{\fad(..)}" and "{\alpha&H..&}"
+        // change what is drawn, so unlike the position tag they have to be read before the
+        // bitmap is rendered - overrides first, the transparencies fade whatever colours are
+        // on the parameter. The widths are in the script's own resolution, like "\pos".
+        ExportTextTags.ApplyStyleOverrideTags(imageParameter, subtitle.Text, _scriptHeight);
+        ExportTextTags.ApplyTransparencyTags(imageParameter, subtitle.Text);
 
         return imageParameter;
     }
@@ -614,11 +684,11 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
             vm =>
             {
                 var ip = GetImageParameter(Subtitles.IndexOf(SelectedSubtitle));
-                var bitmap = GenerateBitmap(ip);
-                ip.Bitmap = bitmap;
-                ExportTextTags.ApplyPositionTag(ip, SelectedSubtitle.Text);
-                var position = CalculatePosition(ip, bitmap.Width, bitmap.Height);
-                vm.Initialize(bitmap, ip.ScreenWidth, ip.ScreenHeight, position.X, position.Y);
+                ip.Bitmap = GenerateBitmap(ip);
+                ExportTextTags.ApplyPositionTag(ip, SelectedSubtitle.Text, _scriptWidth, _scriptHeight);
+                Stereo3DImage.Apply(ip);
+                var position = CalculatePosition(ip, ip.Bitmap.Width, ip.Bitmap.Height);
+                vm.Initialize(ip.Bitmap, ip.ScreenWidth, ip.ScreenHeight, position.X, position.Y);
             });
     }
 
@@ -637,13 +707,17 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
         ObservableCollection<SubtitleLineViewModel> subtitles,
         string? subtitleFileName,
         string? videoFileName,
-        bool hideExportButton = false)
+        string? subtitleHeader = null,
+        bool hideExportButton = false,
+        bool removeAssaCommentBlocks = false)
     {
         Subtitles.Clear();
         Subtitles.AddRange(subtitles);
+        _removeAssaCommentBlocks = removeAssaCommentBlocks;
         IsExportButtonVisible = !hideExportButton;
         _exportImageHandler = exportHandler;
         _subtitleFileName = subtitleFileName;
+        (_scriptWidth, _scriptHeight) = ExportTextTags.GetScriptResolution(subtitleHeader);
         Title = exportHandler.Title;
 
         // Only the formats that can carry a frame-sized image: the editing timelines the images
@@ -651,7 +725,21 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
         // other formats position the subtitle themselves from its own bitmap size.
         IsFullFrameVisible = exportHandler.ExportImageType is ExportImageType.Fcp or ExportImageType.BluRaySup;
 
+        // D-Cinema has no packed 3D frame to draw into; like SE4 it keeps only the depth, which it
+        // writes as the Z-position of each image.
+        IsMode3DVisible = Stereo3DImage.IsModeSupported(exportHandler.ExportImageType);
+        Depth3DText = IsMode3DVisible ? Se.Language.File.Export.Depth3D : Se.Language.File.PropertiesDCinema.ZPosition;
+        UpdateDepth3DEnabled();
+
         SelectedSubtitle = Subtitles.FirstOrDefault();
+
+        // A Blu-ray sup's cue times are snapped to the frame grid of the frame rate, so the
+        // profile's rate (25 by default) would move 23.976 cues up to half a frame. With a video
+        // open, the main window's frame rate is the video's - use it for this export.
+        if (exportHandler.ExportImageType == ExportImageType.BluRaySup && !string.IsNullOrEmpty(videoFileName))
+        {
+            UseVideoFrameRate(Se.Settings.General.CurrentFrameRate);
+        }
 
         if (!string.IsNullOrEmpty(videoFileName))
         {
@@ -676,6 +764,25 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
         }
     }
 
+    /// <summary>
+    /// Selects the video's frame rate when it is one of <see cref="FrameRates"/>, for this export
+    /// only: the active profile keeps its own frame rate unless the user changes the combo box,
+    /// and picking another profile selects that profile's frame rate.
+    /// </summary>
+    internal void UseVideoFrameRate(double videoFrameRate)
+    {
+        var match = FrameRates.Where(fr => Math.Abs(fr - videoFrameRate) < 0.01).ToList();
+        if (match.Count == 0)
+        {
+            return;
+        }
+
+        _videoFrameRateProfile = SelectedProfile;
+        _videoFrameRateProfileValue = SelectedFrameRate;
+        _videoFrameRate = match[0];
+        SelectedFrameRate = match[0];
+    }
+
     private void SubtitleLineChanged()
     {
         var selected = SelectedSubtitle;
@@ -694,8 +801,10 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
         var idx = Subtitles.IndexOf(selected);
         var ip = GetImageParameter(idx);
         ip.Bitmap = GenerateBitmap(ip);
+        ExportTextTags.ApplyPositionTag(ip, text, _scriptWidth, _scriptHeight);
+        // Preview what gets exported - with 3D on, both eyes' copies.
+        Stereo3DImage.Apply(ip);
         BitmapPreview = ip.Bitmap.ToAvaloniaBitmap();
-        ExportTextTags.ApplyPositionTag(ip, text);
         var position = CalculatePosition(ip, BitmapPreview.Size.Width, BitmapPreview.Size.Height);
 
         // With "full frame image" the exported png is the size of the video frame, not of the
@@ -767,6 +876,101 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
     }
 
     partial void OnFontColorChanged(Color value) => _dirty = true;
+    partial void OnSelectedTextEffectChanged(TextEffectDisplayItem? value) => _dirty = true;
+    partial void OnIsTextEffectEnabledChanged(bool value) => _dirty = true;
+    partial void OnTextEffectStrengthChanged(int value) => _dirty = true;
+    partial void OnTextEffectLetterSpacingChanged(int value) => _dirty = true;
+    partial void OnTextEffectArcBendChanged(int value) => _dirty = true;
+    partial void OnTextEffectWaveChanged(int value) => _dirty = true;
+    partial void OnSelectedDepth3DChanged(int value) => _dirty = true;
+
+    partial void OnSelectedMode3DChanged(Export3DModeDisplay value)
+    {
+        UpdateDepth3DEnabled();
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// The depth moves the two eyes' copies apart, so it needs a 3D mode - except in D-Cinema,
+    /// which has no mode and writes the depth as the Z-position.
+    /// </summary>
+    private void UpdateDepth3DEnabled()
+    {
+        IsDepth3DEnabled = !IsMode3DVisible || SelectedMode3D?.Mode is not (null or Export3DMode.None);
+    }
+
+    /// <summary>
+    /// A 3D Blu-ray's depth for every frame (an OFS file), so each subtitle stands where the disc
+    /// put it instead of all at one depth. Belongs to one movie, so it is not kept in the profile.
+    /// </summary>
+    [RelayCommand]
+    private async Task BrowsePlane3D()
+    {
+        if (Window == null)
+        {
+            return;
+        }
+
+        var fileName = await _fileHelper.PickOpenFile(Window, Se.Language.File.Export.OpenPlane3DTitle, "3D-Plane", ".ofs");
+        if (string.IsNullOrEmpty(fileName))
+        {
+            return;
+        }
+
+        try
+        {
+            _plane3D = Stereo3DPlane.Load(fileName);
+        }
+        catch (Exception exception)
+        {
+            await MessageBox.Show(
+                Window,
+                Se.Language.General.Error,
+                string.Format(Se.Language.File.Export.UnableToLoadPlane3DX, exception.Message),
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            return;
+        }
+
+        var range = _plane3D.GetDepthRange();
+        Plane3DText = range.HasValue
+            ? string.Format(Se.Language.File.Export.Plane3DXDepthYToZ, Path.GetFileName(fileName), range.Value.Min, range.Value.Max)
+            : string.Format(Se.Language.File.Export.Plane3DXNoDepth, Path.GetFileName(fileName));
+        IsPlane3DLoaded = true;
+        _dirty = true;
+    }
+
+    [RelayCommand]
+    private void ClearPlane3D()
+    {
+        _plane3D = null;
+        Plane3DText = string.Empty;
+        IsPlane3DLoaded = false;
+        _dirty = true;
+    }
+
+    [RelayCommand]
+    private async Task ShowTextEffectSettings()
+    {
+        if (Window == null)
+        {
+            return;
+        }
+
+        // Turn the effect on while tuning so the preview shows what the sliders do; put it
+        // back on cancel. The settings window writes straight into this view model, so the
+        // preview underneath follows every change live.
+        var wasEnabled = IsTextEffectEnabled;
+        IsTextEffectEnabled = true;
+
+        var result = await _windowService.ShowDialogAsync<TextEffectWindow, TextEffectViewModel>(Window,
+            vm => vm.Initialize(this));
+
+        if (!result.OkPressed)
+        {
+            IsTextEffectEnabled = wasEnabled;
+        }
+    }
     partial void OnOutlineColorChanged(Color value) => _dirty = true;
     partial void OnShadowColorChanged(Color value) => _dirty = true;
     partial void OnBoxColorChanged(Color value) => _dirty = true;
@@ -884,6 +1088,7 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
     {
         if (v is SeExportImagesProfile profile)
         {
+            _videoFrameRateProfile = null;
             SelectedFontSize = (int)profile.FontSize;
             SelectedResolution = EnsureResolutionItem(profile.ScreenWidth, profile.ScreenHeight)
                                  ?? Resolutions.FirstOrDefault(r => r.Width == 1920);
@@ -929,6 +1134,15 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
             SelectedFrameRate = FrameRates.Contains(profile.FramesPerSecond) ? profile.FramesPerSecond : 25;
             IsFullFrame = profile.IsFullFrame;
             FullFrameBackgroundColor = profile.FullFrameBackgroundColor.FromHex().ToAvaloniaColor();
+            SelectedMode3D = Modes3D.FirstOrDefault(m => m.Mode == profile.Mode3D) ?? Modes3D[0];
+            SelectedDepth3D = Math.Clamp(profile.Depth3D, Stereo3DImage.MinDepth, Stereo3DImage.MaxDepth);
+            SelectedTextEffect = TextEffectItems.FirstOrDefault(t => t.Preset.ToString() == profile.TextEffect)
+                                 ?? TextEffectItems[0];
+            IsTextEffectEnabled = profile.TextEffectEnabled;
+            TextEffectStrength = profile.TextEffectStrength <= 0 ? 100 : profile.TextEffectStrength;
+            TextEffectLetterSpacing = profile.TextEffectLetterSpacing;
+            TextEffectArcBend = profile.TextEffectArcBend;
+            TextEffectWave = profile.TextEffectWave;
         }
     }
 
@@ -960,9 +1174,19 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
             profile.PaddingLeftRight = SelectedPaddingLeftRight;
             profile.PaddingTopBottom = SelectedPaddingTopBottom;
             profile.LineSpacingPercent = SelectedLineSpacing;
-            profile.FramesPerSecond = SelectedFrameRate;
+            profile.FramesPerSecond = ReferenceEquals(profile, _videoFrameRateProfile) && SelectedFrameRate == _videoFrameRate
+                ? _videoFrameRateProfileValue
+                : SelectedFrameRate;
             profile.IsFullFrame = IsFullFrame;
             profile.FullFrameBackgroundColor = FullFrameBackgroundColor.FromColorToHex(true);
+            profile.Mode3D = SelectedMode3D?.Mode ?? Export3DMode.None;
+            profile.Depth3D = SelectedDepth3D;
+            profile.TextEffect = SelectedTextEffect?.Preset.ToString() ?? string.Empty;
+            profile.TextEffectEnabled = IsTextEffectEnabled;
+            profile.TextEffectStrength = TextEffectStrength;
+            profile.TextEffectLetterSpacing = TextEffectLetterSpacing;
+            profile.TextEffectArcBend = TextEffectArcBend;
+            profile.TextEffectWave = TextEffectWave;
         }
     }
 
@@ -972,6 +1196,11 @@ public partial class ExportImageBasedViewModel : ObservableObject, IClosingClean
         {
             e.Handled = true;
             Close();
+        }
+        else if (UiUtil.IsHelp(e))
+        {
+            e.Handled = true;
+            UiUtil.ShowHelp("features/file", "export-image-based");
         }
         else if (e.Key == Key.LeftCtrl || e.Key == Key.RightCtrl)
         {

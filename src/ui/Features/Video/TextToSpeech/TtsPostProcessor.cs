@@ -29,7 +29,12 @@ public static class TtsPostProcessor
             if (doProChain)
             {
                 var proChainOutput = Path.Combine(waveFolder, $"pro_{Guid.NewGuid()}.wav");
-                var proProcess = FfmpegGenerator.ApplyProAudioChain(currentFile, proChainOutput);
+                // The chain's noise gate opens relative to the clip's peak, not at a fixed
+                // -40 dBFS that gated the word endings of quiet voice-clone output (#14480).
+                var peakDbfs = await TtsSilenceThreshold.MeasurePeakDbfsAsync(currentFile, cancellationToken);
+                // One ffmpeg per stage per LINE - a 900-line dub with every stage on created
+                // thousands of undisposed processes. PerLineVoiceClone uses "using var" too.
+                using var proProcess = FfmpegGenerator.ApplyProAudioChain(currentFile, proChainOutput, TtsSilenceThreshold.Amplitude(peakDbfs));
                 await proProcess.StartAndWaitAsync(cancellationToken);
 
                 currentFile = AdoptStageOutput(currentFile, proChainOutput, "pro audio chain");
@@ -43,11 +48,11 @@ public static class TtsPostProcessor
             if (silencePaddingMs > 0)
             {
                 var silenceFile = Path.Combine(waveFolder, $"pad_{Guid.NewGuid()}.wav");
-                var silenceProcess = FfmpegGenerator.GenerateSilence(silenceFile, silencePaddingMs);
+                using var silenceProcess = FfmpegGenerator.GenerateSilence(silenceFile, silencePaddingMs);
                 await silenceProcess.StartAndWaitAsync(cancellationToken);
 
                 var paddedOutput = Path.Combine(waveFolder, $"padded_{Guid.NewGuid()}.wav");
-                var concatProcess = FfmpegGenerator.ConcatAudio(currentFile, silenceFile, paddedOutput);
+                using var concatProcess = FfmpegGenerator.ConcatAudio(currentFile, silenceFile, paddedOutput);
                 await concatProcess.StartAndWaitAsync(cancellationToken);
 
                 SafeDelete(silenceFile);
@@ -62,7 +67,7 @@ public static class TtsPostProcessor
             if (outputSampleRate > 0)
             {
                 var resampledOutput = Path.Combine(waveFolder, $"sr_{Guid.NewGuid()}.wav");
-                var srProcess = FfmpegGenerator.ChangeSampleRate(currentFile, resampledOutput, outputSampleRate);
+                using var srProcess = FfmpegGenerator.ChangeSampleRate(currentFile, resampledOutput, outputSampleRate);
                 await srProcess.StartAndWaitAsync(cancellationToken);
 
                 currentFile = AdoptStageOutput(currentFile, resampledOutput, "sample rate conversion");

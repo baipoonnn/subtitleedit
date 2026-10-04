@@ -14,6 +14,7 @@ using Nikse.SubtitleEdit.Features.Shared.TextBoxUtils;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -45,6 +46,14 @@ public partial class SourceViewViewModel : ObservableObject, IClosingCleanup
     public bool OkPressed { get; private set; }
     public Subtitle Subtitle { get; private set; }
 
+    /// <summary>
+    /// True when the source opened with a header (footer) and the user deleted it. An empty
+    /// <see cref="Subtitle"/> header otherwise means "unchanged", so the caller needs this to
+    /// clear its own instead of keeping the old one.
+    /// </summary>
+    public bool HeaderRemoved { get; private set; }
+    public bool FooterRemoved { get; private set; }
+
     public SubtitleFormat _subtitleFormat { get; private set; }
     public ITextBoxWrapper SourceViewTextBox { get; set; }
     public IRelayCommand CutCommand { get; }
@@ -72,6 +81,15 @@ public partial class SourceViewViewModel : ObservableObject, IClosingCleanup
     /// <summary>Set once the user confirmed the discard, so the second Close() goes through.</summary>
     private bool _discardConfirmed;
 
+    /// <summary>
+    /// Whether the source had a header / footer when the dialog opened - taken from the first
+    /// validation, which parses the unedited text. Stays false above the validation size limit,
+    /// where a removed header is then kept as before.
+    /// </summary>
+    private bool _hadHeader;
+    private bool _hadFooter;
+    private bool _baselineTaken;
+
     public SourceViewViewModel(IWindowService windowService)
     {
         _windowService = windowService;
@@ -96,6 +114,8 @@ public partial class SourceViewViewModel : ObservableObject, IClosingCleanup
         MoveLineDownCommand = new RelayCommand(() => _editor?.MoveSelectedLines(1));
         DuplicateLineCommand = new RelayCommand(() => _editor?.DuplicateSelectedLines());
         DeleteLineCommand = new RelayCommand(() => _editor?.DeleteSelectedLines());
+
+        ConfirmUseOtherFormat = ConfirmUseOtherFormatWithMessageBox;
 
         _validationTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
         _validationTimer.Tick += ValidationTimerTick;
@@ -274,23 +294,24 @@ public partial class SourceViewViewModel : ObservableObject, IClosingCleanup
             return;
         }
 
-        var subtitle = new Subtitle();
-
         // A few formats pick the frame rate up from the source header. Validation runs on every
         // idle tick, so it must not leave that behind in the global settings.
         var oldFrameRate = Configuration.Settings.General.CurrentFrameRate;
+        Subtitle subtitle;
         try
         {
-            _subtitleFormat.LoadSubtitle(subtitle, source.SplitToLines(), string.Empty);
-        }
-        catch
-        {
-            // A format that throws on malformed input is just an unparsable source here.
-            subtitle.Paragraphs.Clear();
+            subtitle = LoadWithCurrentFormat(source.SplitToLines());
         }
         finally
         {
             Configuration.Settings.General.CurrentFrameRate = oldFrameRate;
+        }
+
+        if (!_baselineTaken)
+        {
+            _baselineTaken = true;
+            _hadHeader = !string.IsNullOrWhiteSpace(subtitle.Header);
+            _hadFooter = !string.IsNullOrWhiteSpace(subtitle.Footer);
         }
 
         if (subtitle.Paragraphs.Count == 0)
@@ -649,28 +670,97 @@ public partial class SourceViewViewModel : ObservableObject, IClosingCleanup
         }
 
         var lines = sourceText.SplitToLines();
-        var subtitle = new Subtitle();
-        _subtitleFormat.LoadSubtitle(subtitle, lines, string.Empty);
+        var subtitle = LoadWithCurrentFormat(lines);
         if (subtitle.Paragraphs.Count > 0)
         {
-            Subtitle.Paragraphs.Clear();
-            Subtitle.Paragraphs.AddRange(subtitle.Paragraphs);
+            ApplyParsedSubtitle(subtitle, parsedWithCurrentFormat: true);
             OkPressed = true;
             Window?.Close();
             return;
         }
 
-        subtitle = Subtitle.Parse(lines, ".srt");
-        if (subtitle.Paragraphs.Count > 0)
+        // Parse returns NULL when no format matches - typing prose into the source view and
+        // pressing OK threw a NullReferenceException instead of reaching the message below.
+        Subtitle? other = null;
+        try
         {
-            Subtitle.Paragraphs.Clear();
-            Subtitle.Paragraphs.AddRange(subtitle.Paragraphs);
+            other = Subtitle.Parse(lines, ".srt");
+        }
+        catch
+        {
+            // A format that throws on this input is just one that does not match.
+        }
+
+        if (other != null && other.Paragraphs.Count > 0)
+        {
+            var otherFormat = other.OriginalFormat;
+            if (otherFormat != null && otherFormat.Name != _subtitleFormat.Name)
+            {
+                // The lines are read as another format but will be saved as the current one, so
+                // say so instead of converting silently.
+                if (!await ConfirmUseOtherFormat(otherFormat))
+                {
+                    return;
+                }
+
+                // A header or footer of the other format (an ASSA [Script Info] pasted into an
+                // .srt) means nothing to the current format.
+                other.Header = string.Empty;
+                other.Footer = string.Empty;
+            }
+
+            ApplyParsedSubtitle(other, parsedWithCurrentFormat: otherFormat == null || otherFormat.Name == _subtitleFormat.Name);
             OkPressed = true;
             Window?.Close();
             return;
         }
 
         await MessageBox.Show(Window, Se.Language.General.Error, Se.Language.General.NoSubtitlesFound, MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
+
+    /// <summary>
+    /// Parses with the dialog's format. A format that throws on malformed input counts as "no
+    /// subtitles" - validation already reported such a source as unparsable, and Ok must then fall
+    /// through to the other formats and the error message instead of crashing.
+    /// </summary>
+    private Subtitle LoadWithCurrentFormat(List<string> lines)
+    {
+        var subtitle = new Subtitle();
+        try
+        {
+            _subtitleFormat.LoadSubtitle(subtitle, lines, string.Empty);
+        }
+        catch
+        {
+            subtitle.Paragraphs.Clear();
+        }
+
+        return subtitle;
+    }
+
+    /// <summary>
+    /// Copies the parsed result back over the subtitle the caller holds - header and footer
+    /// included. Copying only the paragraphs silently discarded any edit the user made to an
+    /// ASSA [Script Info] / [V4+ Styles] block while accepting their dialogue edits.
+    /// A header gone from a source read with the dialog's own format was deleted by the user; one
+    /// missing because the lines were read as another format says nothing about the old header.
+    /// </summary>
+    private void ApplyParsedSubtitle(Subtitle parsed, bool parsedWithCurrentFormat)
+    {
+        HeaderRemoved = parsedWithCurrentFormat && _hadHeader && string.IsNullOrWhiteSpace(parsed.Header);
+        FooterRemoved = parsedWithCurrentFormat && _hadFooter && string.IsNullOrWhiteSpace(parsed.Footer);
+
+        Subtitle.Paragraphs.Clear();
+        Subtitle.Paragraphs.AddRange(parsed.Paragraphs);
+        if (!string.IsNullOrEmpty(parsed.Header))
+        {
+            Subtitle.Header = parsed.Header;
+        }
+
+        if (!string.IsNullOrEmpty(parsed.Footer))
+        {
+            Subtitle.Footer = parsed.Footer;
+        }
     }
 
     private static string TrimJunk(string text)
@@ -708,6 +798,29 @@ public partial class SourceViewViewModel : ObservableObject, IClosingCleanup
         }
 
         return text[start..(end + 1)].Trim();
+    }
+
+    /// <summary>
+    /// Asks whether to accept a source that only parses as another format. A seam so tests can
+    /// answer without a message box.
+    /// </summary>
+    internal Func<SubtitleFormat, Task<bool>> ConfirmUseOtherFormat { get; set; }
+
+    private async Task<bool> ConfirmUseOtherFormatWithMessageBox(SubtitleFormat otherFormat)
+    {
+        if (Window == null)
+        {
+            return false;
+        }
+
+        var result = await MessageBox.Show(
+            Window,
+            Se.Language.General.Warning,
+            string.Format(Se.Language.SourceView.ReadAsXUseAsY, otherFormat.Name, _subtitleFormat.Name),
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+
+        return result == MessageBoxResult.Yes;
     }
 
     [RelayCommand]

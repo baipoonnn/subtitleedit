@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Nikse.SubtitleEdit.Logic;
 
 namespace Nikse.SubtitleEdit.Features.Edit.MultipleReplace;
 
@@ -10,9 +11,14 @@ public partial class EditRuleViewModel : ObservableObject
     [ObservableProperty] private string _findWhat;
     [ObservableProperty] private string _replaceWith;
     [ObservableProperty] private string _description;
-    [ObservableProperty] private bool _isRegularExpression;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsWholeWordEnabled))]
+    private bool _isRegularExpression;
     [ObservableProperty] private bool _isCaseSensitive;
     [ObservableProperty] private bool _isCaseInsensitive;
+    [ObservableProperty] private bool _isWholeWord;
+
+    public bool IsWholeWordEnabled => !IsRegularExpression;
 
     public Window? Window { get; set; }
 
@@ -35,6 +41,7 @@ public partial class EditRuleViewModel : ObservableObject
         FindWhat = node.Find;
         ReplaceWith = node.ReplaceWith;
         Description = node.Description;
+        IsWholeWord = node.WholeWord;
         if (node.Type == MultipleReplaceType.RegularExpression)
         {
             IsRegularExpression = true;
@@ -68,6 +75,11 @@ public partial class EditRuleViewModel : ObservableObject
         {
             e.Handled = true;
             Window?.Close();
+        }
+        else if (UiUtil.IsHelp(e))
+        {
+            e.Handled = true;
+            UiUtil.ShowHelp("features/edit", "multiple-replace");
         }
         else if (e.Key == Key.Enter || e.Key == Key.Return)
         {

@@ -46,6 +46,8 @@ public static class MultipleReplaceLoader
         public string SearchType { get; set; } = SearchTypeNormal;
         [XmlElement("Description")]
         public string? Description { get; set; }
+        [XmlElement("WholeWord")]
+        public bool WholeWord { get; set; }
     }
 
     /// <summary>
@@ -163,6 +165,7 @@ public static class MultipleReplaceLoader
                     ReplaceWith = rule.ReplaceWith ?? string.Empty,
                     Description = rule.Description,
                     SearchType = MapSearchType(rule.Type),
+                    WholeWord = rule.WholeWord,
                 });
             }
         }
@@ -188,7 +191,7 @@ public static class MultipleReplaceLoader
     }
 
     // CSV reader for the SE5 "Multiple replace > export" CSV
-    // (columns: Category,Find,ReplaceWith,Description,Active,Type). Ported from the UI's
+    // (columns: Category,Find,ReplaceWith,Description,Active,Type[,WholeWord]). Ported from the UI's
     // CsvImporter so a CSV exported from the GUI produces the same rules here.
     private static class CsvRules
     {
@@ -223,6 +226,7 @@ public static class MultipleReplaceLoader
             var descIdx = hasHeader ? Col("Description", 3) : 3;
             var activeIdx = hasHeader ? Col("Active", 4) : 4;
             var typeIdx = hasHeader ? Col("Type", 5) : 5;
+            var wholeWordIdx = hasHeader ? Col("WholeWord", -1) : 6; // optional - older exports have no such column
 
             var byCategory = new Dictionary<string, CategoryImportExport.Category>(StringComparer.Ordinal);
             var order = new List<string>();
@@ -263,6 +267,7 @@ public static class MultipleReplaceLoader
                     Description = Get(descIdx),
                     IsActive = ParseBool(Get(activeIdx)),
                     Type = Get(typeIdx).Trim(),
+                    WholeWord = ParseBool(Get(wholeWordIdx)),
                 });
             }
 
@@ -375,6 +380,7 @@ public static class MultipleReplaceLoader
             public string? Description { get; set; }
             public bool IsActive { get; set; }
             public string Type { get; set; } = string.Empty;
+            public bool WholeWord { get; set; }
         }
     }
 
@@ -398,26 +404,53 @@ public static class MultipleReplaceLoader
             return 0;
         }
 
-        // Pre-compile rule patterns once (not per-paragraph):
-        //  - RegularExpression rules use the user pattern with RegexOptions.Multiline so ^/$
-        //    anchors match at every line boundary, matching the UI (MultipleReplaceViewModel
-        //    compiles with Compiled | Multiline).
-        //  - Normal (case-insensitive literal) rules compile an escaped, IgnoreCase pattern
-        //    so the per-paragraph loop no longer re-escapes and re-parses on every line.
-        // A rule with an invalid/empty pattern is left out here so it's skipped entirely.
-        var compiledRegex = new Dictionary<Rule, Regex>();
+        // Resolve every rule once into the shape the per-paragraph loop needs, so that loop only
+        // switches on an enum. Previously it re-compared each rule's SearchType string three
+        // times and re-escaped its replacement text for every single paragraph — with 60 rules
+        // over a 5000-cue file that is 300k string comparisons and 300k throwaway strings.
+        // A rule with an invalid/empty pattern is dropped here so it is skipped entirely.
+        var compiled = new List<CompiledRule>(rules.Count);
         foreach (var rule in rules)
         {
             try
             {
                 if (string.Equals(rule.SearchType, SearchTypeRegularExpression, StringComparison.OrdinalIgnoreCase))
                 {
-                    compiledRegex[rule] = new Regex(rule.FindWhat, RegexOptions.Compiled | RegexOptions.Multiline);
+                    // RegexOptions.Multiline so ^/$ anchors match at every line boundary, and the
+                    // same match timeout the UI uses (MultipleReplaceViewModel.TryGetRunnableRegex,
+                    // #13534). Without it a user pattern that backtracks catastrophically never
+                    // returns: `^(a|aa)+$` against 46 'a's followed by '!' hung a conversion
+                    // indefinitely, with no output and no error.
+                    compiled.Add(new CompiledRule(
+                        RuleKind.Regex,
+                        new Regex(rule.FindWhat, RegexOptions.Compiled | RegexOptions.Multiline, RegexUtils.UserPatternMatchTimeout),
+                        rule.FindWhat,
+                        rule.ReplaceWith));
                 }
-                else if (!string.Equals(rule.SearchType, SearchTypeCaseSensitive, StringComparison.OrdinalIgnoreCase)
-                         && !string.IsNullOrEmpty(rule.FindWhat))
+                else if (rule.WholeWord && !string.IsNullOrEmpty(rule.FindWhat))
                 {
-                    compiledRegex[rule] = new Regex(Regex.Escape(rule.FindWhat), RegexOptions.Compiled | RegexOptions.IgnoreCase);
+                    // "Whole word" (#15510): the escaped literal between word boundaries, so "Zeyn"
+                    // no longer matches inside "Zeynep" - the same pattern the GUI uses.
+                    var caseSensitive = string.Equals(rule.SearchType, SearchTypeCaseSensitive, StringComparison.OrdinalIgnoreCase);
+                    compiled.Add(new CompiledRule(
+                        RuleKind.WholeWord,
+                        new Regex(RegexUtils.BuildWholeWordPattern(rule.FindWhat),
+                            caseSensitive ? RegexOptions.CultureInvariant : RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+                            RegexUtils.UserPatternMatchTimeout),
+                        rule.FindWhat,
+                        rule.ReplaceWith));
+                }
+                else if (string.Equals(rule.SearchType, SearchTypeCaseSensitive, StringComparison.OrdinalIgnoreCase))
+                {
+                    compiled.Add(new CompiledRule(RuleKind.CaseSensitive, null, rule.FindWhat, rule.ReplaceWith));
+                }
+                else if (!string.IsNullOrEmpty(rule.FindWhat))
+                {
+                    // Normal = case-insensitive literal, matched ordinally — the same comparison
+                    // the GUI's MultipleReplaceViewModel uses (IndexOf + Remove/Insert), so the
+                    // same rules file gives the same result in both. The empty check is load
+                    // bearing: string.Replace rejects an empty oldValue.
+                    compiled.Add(new CompiledRule(RuleKind.Literal, null, rule.FindWhat, rule.ReplaceWith));
                 }
             }
             catch
@@ -426,32 +459,48 @@ public static class MultipleReplaceLoader
             }
         }
 
+        var activeRules = compiled.ToArray();
+
+        // A pattern the match timeout stops is retired for the rest of the run, mirroring the UI:
+        // the expression list was built before the timeout, so without this every remaining
+        // paragraph pays the full five seconds again. Only allocated once something times out.
+        bool[]? retired = null;
+
         var modified = 0;
         foreach (var paragraph in subtitle.Paragraphs)
         {
             var newText = paragraph.Text ?? string.Empty;
-            foreach (var rule in rules)
+            for (var i = 0; i < activeRules.Length; i++)
             {
-                if (string.Equals(rule.SearchType, SearchTypeCaseSensitive, StringComparison.OrdinalIgnoreCase))
+                if (retired?[i] == true)
                 {
-                    newText = newText.Replace(rule.FindWhat, rule.ReplaceWith);
+                    continue;
                 }
-                else if (string.Equals(rule.SearchType, SearchTypeRegularExpression, StringComparison.OrdinalIgnoreCase))
+
+                var rule = activeRules[i];
+                try
                 {
-                    if (compiledRegex.TryGetValue(rule, out var regex))
+                    newText = rule.Kind switch
                     {
-                        newText = RegexUtils.ReplaceNewLineSafe(regex, newText, rule.ReplaceWith);
-                    }
+                        RuleKind.CaseSensitive => newText.Replace(rule.Find, rule.Replace, StringComparison.Ordinal),
+                        RuleKind.Regex => RegexUtils.ReplaceNewLineSafe(rule.Regex!, newText, rule.Replace),
+                        RuleKind.WholeWord => ReplaceLiteral(rule.Regex!, newText, rule.Replace),
+                        _ => newText.Replace(rule.Find, rule.Replace, StringComparison.OrdinalIgnoreCase),
+                    };
                 }
-                else // Normal — case-insensitive literal replace (empty FindWhat = no-op, not compiled)
+                catch (RegexMatchTimeoutException)
                 {
-                    if (compiledRegex.TryGetValue(rule, out var regex))
-                    {
-                        // Escape '$' so the replacement is treated literally (no $1/$& expansion).
-                        newText = regex.Replace(newText, rule.ReplaceWith.Replace("$", "$$"));
-                    }
+                    (retired ??= new bool[activeRules.Length])[i] = true;
+
+                    // Stderr, not stdout: a --json run must keep stdout parseable. A rule that is
+                    // too slow to run has to say so — silently dropping it looks identical to a
+                    // rule that simply matched nothing.
+                    Console.Error.WriteLine(
+                        $"warning: multiple-replace rule '{rule.Find}' took longer than " +
+                        $"{RegexUtils.UserPatternMatchTimeout.TotalSeconds:0} seconds on one line and was skipped for the rest of this file.");
                 }
             }
+
             if (newText != paragraph.Text)
             {
                 paragraph.Text = newText;
@@ -461,4 +510,24 @@ public static class MultipleReplaceLoader
 
         return modified;
     }
+
+    private enum RuleKind
+    {
+        /// <summary>Case-insensitive literal (the XML's "Normal" and the SE5 GUI's "CaseInsensitive").</summary>
+        Literal,
+        CaseSensitive,
+        Regex,
+
+        /// <summary>A literal (either case setting) that only matches whole words.</summary>
+        WholeWord,
+    }
+
+    // An evaluator so the replacement is inserted as typed - a "$" in it is not a group reference.
+    private static string ReplaceLiteral(Regex regex, string text, string replacement)
+    {
+        return regex.Replace(text, _ => replacement);
+    }
+
+    /// <summary>A rule with its search kind resolved and its pattern compiled, ready to apply.</summary>
+    private readonly record struct CompiledRule(RuleKind Kind, Regex? Regex, string Find, string Replace);
 }

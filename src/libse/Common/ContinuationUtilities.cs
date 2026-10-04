@@ -56,6 +56,7 @@ namespace Nikse.SubtitleEdit.Core.Common
         // const (not static readonly) so MusicSymbolRegexes above can reference it from its
         // field initializer regardless of declaration order.
         private const string MusicSymbols = "♪♫#*¶";
+        private static readonly char[] MusicSymbolChars = MusicSymbols.ToCharArray();
         private static readonly string ExplanationQuotes = "'\"“”‘’«»‹›";
 
         private static readonly List<string> LanguagesWithoutCaseDistinction = new List<string>
@@ -92,13 +93,30 @@ namespace Nikse.SubtitleEdit.Core.Common
                 return input;
             }
 
+            // Each pattern needs its opening character; most lines have none of them, so a
+            // char probe skips the regex scan (Regex.Replace returns the input unchanged then).
             var checkString = input;
-            checkString = HtmlTagRegex.Replace(checkString, string.Empty);
-            checkString = ParenthesesRegex.Replace(checkString, string.Empty);
-            checkString = SquareBracketsRegex.Replace(checkString, string.Empty);
-            checkString = CurlyBracesRegex.Replace(checkString, string.Empty);
+            if (checkString.Contains('<'))
+            {
+                checkString = HtmlTagRegex.Replace(checkString, string.Empty);
+            }
 
-            if (Configuration.Settings.General.FixContinuationStyleIgnoreLyrics)
+            if (checkString.Contains('('))
+            {
+                checkString = ParenthesesRegex.Replace(checkString, string.Empty);
+            }
+
+            if (checkString.Contains('['))
+            {
+                checkString = SquareBracketsRegex.Replace(checkString, string.Empty);
+            }
+
+            if (checkString.Contains('{'))
+            {
+                checkString = CurlyBracesRegex.Replace(checkString, string.Empty);
+            }
+
+            if (Configuration.Settings.General.FixContinuationStyleIgnoreLyrics && checkString.IndexOfAny(MusicSymbolChars) >= 0)
             {
                 foreach (var regex in MusicSymbolRegexes)
                 {
@@ -224,7 +242,11 @@ namespace Nikse.SubtitleEdit.Core.Common
         public static string ExtractParagraphOnly(string input, bool removeDashes)
         {
             var checkString = input;
-            checkString = CurlyBracesRegex.Replace(checkString, string.Empty);
+            if (checkString.Contains('{'))
+            {
+                checkString = CurlyBracesRegex.Replace(checkString, string.Empty);
+            }
+
             checkString = checkString.Trim();
 
             // Remove string elevation
@@ -708,7 +730,9 @@ namespace Nikse.SubtitleEdit.Core.Common
 
             foreach (var prefix in Prefixes)
             {
-                if (newFirstWord.StartsWith(prefix, StringComparison.Ordinal) && !newFirstWord.EndsWith(prefix + Environment.NewLine, StringComparison.Ordinal))
+                // EndsWith cannot express "the prefix is followed by a line break" - the prefix was
+                // just matched at the START. HasPrefix below is the correct twin of this test.
+                if (newFirstWord.StartsWith(prefix, StringComparison.Ordinal) && !newFirstWord.StartsWith(prefix + Environment.NewLine, StringComparison.Ordinal))
                 {
                     newFirstWord = newFirstWord.Substring(prefix.Length);
                 }
@@ -911,7 +935,9 @@ namespace Nikse.SubtitleEdit.Core.Common
             while (input.IndexOf("<b>", StringComparison.Ordinal) >= 0)
             {
                 var startIndex = input.IndexOf("<b>", StringComparison.Ordinal);
-                var endIndex = input.IndexOf("</b>", StringComparison.Ordinal);
+                // From startIndex, as IsItalic does: searching from 0 found a stray leading
+                // "</b>" and produced a negative Substring length, throwing on ordinary text.
+                var endIndex = input.IndexOf("</b>", startIndex, StringComparison.Ordinal);
                 var textToRemove = endIndex >= 0 ? input.Substring(startIndex, (endIndex + 4) - startIndex) : input.Substring(startIndex);
                 input = input.Replace(textToRemove, string.Empty);
             }
@@ -960,15 +986,15 @@ namespace Nikse.SubtitleEdit.Core.Common
             var endIndex = input.LastIndexOf("</", StringComparison.Ordinal);
             if (endIndex >= 0)
             {
+                // A truncated closing tag ("</i" with no '>') made IndexOf return -1, and the +1
+                // turned that into 0 - a negative Substring length below, which threw.
+                var closeIndex = input.IndexOf('>', endIndex);
                 if (startIndex == endIndex)
                 {
                     startIndex = 0;
-                    endIndex = input.IndexOf('>', endIndex) + 1;
                 }
-                else
-                {
-                    endIndex = input.IndexOf('>', endIndex) + 1;
-                }
+
+                endIndex = closeIndex >= 0 ? closeIndex + 1 : input.Length;
             }
             else
             {
@@ -1002,8 +1028,16 @@ namespace Nikse.SubtitleEdit.Core.Common
                 return false;
             }
 
-            // Shift index if needed after deleting { } tags
+            // Shift index if needed after deleting { } tags. IndexOf only finds the shift when
+            // the removed block sat at the very start - with a tag in the middle, input is not a
+            // contiguous substring of originalInput and no shift happened at all, leaving
+            // position past the end of input.
             position -= Math.Max(0, originalInput.IndexOf(input, StringComparison.Ordinal));
+            position = Math.Min(position, input.Length - 1);
+            if (position < 0)
+            {
+                return false;
+            }
 
             var startIndex = position;
             var endIndex = position;
@@ -1152,7 +1186,7 @@ namespace Nikse.SubtitleEdit.Core.Common
                 return true;
             }
 
-            if (profile.UseDifferentStyleGap && profile.GapSuffix.Length > 0 && input.EndsWith(profile.GapSuffix) && !input.EndsWith(Environment.NewLine + profile.GapSuffix, StringComparison.Ordinal))
+            if (profile.UseDifferentStyleGap && profile.GapSuffix.Length > 0 && input.EndsWith(profile.GapSuffix, StringComparison.Ordinal) && !input.EndsWith(Environment.NewLine + profile.GapSuffix, StringComparison.Ordinal))
             {
                 return true;
             }

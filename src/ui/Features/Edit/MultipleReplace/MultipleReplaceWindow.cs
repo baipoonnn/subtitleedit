@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
@@ -7,6 +8,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Styling;
 using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Features.Files.Compare;
 using Nikse.SubtitleEdit.Logic;
@@ -94,7 +96,7 @@ public class MultipleReplaceWindow : Window
 
         Content = grid;
 
-        Activated += delegate { rulesTreeView.Focus(); }; // initial focus on an input, not an action button - a focused button clicks on bare Space
+        UiUtil.FocusOnFirstActivation(this, rulesTreeView); // initial focus on an input, not an action button - a focused button clicks on bare Space
         Closing += (_, _) => vm.OnClosing();
         Loaded += (_, _) => vm.OnLoaded();
         KeyDown += vm.OnKeyDown;
@@ -107,6 +109,19 @@ public class MultipleReplaceWindow : Window
             SelectionMode = SelectionMode.Single,
             DataContext = vm,
             MinWidth = 300,
+
+            // Expanded/collapsed lives on the node, not on the container: the containers only
+            // exist while they are realized, so reading the expansion state back off them at save
+            // time would record any category the tree had not realized as collapsed.
+            ItemContainerTheme = new ControlTheme(typeof(TreeViewItem))
+            {
+                BasedOn = Application.Current?.FindResource(typeof(TreeViewItem)) as ControlTheme,
+                Setters =
+                {
+                    new Setter(TreeViewItem.IsExpandedProperty,
+                        new Binding(nameof(RuleTreeNode.IsExpanded)) { Mode = BindingMode.TwoWay }),
+                },
+            },
         };
 
         treeView[!ItemsControl.ItemsSourceProperty] = new Binding(nameof(vm.Nodes));
@@ -129,6 +144,9 @@ public class MultipleReplaceWindow : Window
                 Source = node,
             });
             checkBox.IsCheckedChanged += vm.OnActiveChanged;
+            // The row text lives in separate labels; name the box after the category or rule (#12087).
+            checkBox.Bind(AutomationProperties.NameProperty,
+                new Binding(node.IsCategory ? nameof(RuleTreeNode.CategoryName) : nameof(RuleTreeNode.Find)) { Source = node });
 
             if (node.IsCategory)
             {
@@ -153,6 +171,7 @@ public class MultipleReplaceWindow : Window
                 };
                 buttonCategoryActions.Bind(Button.IsVisibleProperty, new Binding(nameof(vm.IsMultipleReplaceDotDotDotButtonsVisible)));
                 Attached.SetIcon(buttonCategoryActions, IconNames.DotsVertical);
+                AutomationProperties.SetName(buttonCategoryActions, Se.Language.General.More);
 
                 var panelCategory = new DockPanel
                 {
@@ -250,6 +269,7 @@ public class MultipleReplaceWindow : Window
             };
             buttonActions.Bind(Button.IsVisibleProperty, new Binding(nameof(vm.IsMultipleReplaceDotDotDotButtonsVisible)));
             Attached.SetIcon(buttonActions, IconNames.DotsVertical);
+            AutomationProperties.SetName(buttonActions, Se.Language.General.More);
 
             var labelDescription = UiUtil.MakeLabel().WithBindText(node, nameof(RuleTreeNode.Description));
             labelDescription.Opacity = 0.6;
@@ -358,6 +378,7 @@ public class MultipleReplaceWindow : Window
                 new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) },
                 new ColumnDefinition { Width = new GridLength(1, GridUnitType.Auto) },
                 new ColumnDefinition { Width = new GridLength(1, GridUnitType.Auto) },
+                new ColumnDefinition { Width = new GridLength(1, GridUnitType.Auto) },
             },
             Margin = new Thickness(0, 0, 0, 10),
             HorizontalAlignment = HorizontalAlignment.Stretch,
@@ -397,6 +418,15 @@ public class MultipleReplaceWindow : Window
         };
         // no event handler needed; binding to SelectedRuleType updates RuleTreeNode.Type
 
+        var checkBoxWholeWord = new CheckBox
+        {
+            Content = Se.Language.Edit.Find.WholeWord,
+            VerticalAlignment = VerticalAlignment.Center,
+            [!ToggleButton.IsCheckedProperty] = new Binding(nameof(vm.SelectedNode) + "." + nameof(RuleTreeNode.WholeWord)) { Source = vm, Mode = BindingMode.TwoWay },
+            [!InputElement.IsEnabledProperty] = new Binding(nameof(vm.SelectedNode) + "." + nameof(RuleTreeNode.CanUseWholeWord)) { Source = vm },
+        };
+        checkBoxWholeWord.IsCheckedChanged += vm.OnActiveChanged;
+
         editGrid.Add(labelFind, 0, 0);
         editGrid.Add(textBoxFind, 1, 0);
 
@@ -406,10 +436,14 @@ public class MultipleReplaceWindow : Window
         editGrid.Add(labelType, 0, 2);
         editGrid.Add(comboBoxType, 1, 2);
 
+        editGrid.Add(checkBoxWholeWord, 1, 3);
+
         // No header sorting (the DataGrid's CanUserSortColumns is not carried over):
         // this is a fix preview in subtitle order, and the replace rules themselves run
         // in list order - reordering the backing collection would scramble the preview.
-        var dataGrid = TableViewExtras.MakeTableView(multiSelect: false);
+        // Multi-select so a range picked with Shift+click can have its "Apply" checkbox flipped
+        // in one go with Space (#13502); the fix detail panel below still follows SelectedItem.
+        var dataGrid = TableViewExtras.MakeTableView();
         dataGrid.DataContext = vm;
         dataGrid.ItemsSource = vm.Fixes;
         dataGrid.Columns.AddRange(new TableViewColumn[]
@@ -477,6 +511,21 @@ public class MultipleReplaceWindow : Window
             },
         });
         dataGrid.Bind(TableView.SelectedItemProperty, new Binding(nameof(vm.SelectedFix)) { Source = vm });
+
+        TableViewExtras.AddSpaceToggle<MultipleReplaceFix>(dataGrid,
+            item => item.Apply, (item, v) => item.Apply = v);
+
+        dataGrid.ContextMenu = MakeFixesContextMenu(vm);
+
+        // Tunneling: the TableView (a ListBox) would otherwise take Ctrl+A as "select all rows",
+        // and the window's key handler takes Ctrl+D as "duplicate rule" (#13502).
+        dataGrid.AddHandler(InputElement.KeyDownEvent, (object? _, KeyEventArgs e) =>
+        {
+            if (vm.HandleFixesSelectionKey(e))
+            {
+                e.Handled = true;
+            }
+        }, RoutingStrategies.Tunnel);
 
         var hitsItemsControl = new ItemsControl
         {
@@ -614,5 +663,40 @@ public class MultipleReplaceWindow : Window
         };
 
         return border;
+    }
+
+    // A preview with one row per changed line is far too long to untick by hand, so offer
+    // tick all / untick all / invert with the gestures the sibling lists advertise (#13502).
+    private static ContextMenu MakeFixesContextMenu(MultipleReplaceViewModel vm)
+    {
+        var commandModifier = System.OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control;
+
+        return new ContextMenu
+        {
+            Items =
+            {
+                new Avalonia.Controls.MenuItem
+                {
+                    Header = Se.Language.General.SelectAll,
+                    DataContext = vm,
+                    Command = vm.SelectAllFixesCommand,
+                    InputGesture = new KeyGesture(Key.A, commandModifier),
+                },
+                new Avalonia.Controls.MenuItem
+                {
+                    Header = Se.Language.General.SelectNone,
+                    DataContext = vm,
+                    Command = vm.SelectNoFixesCommand,
+                    InputGesture = new KeyGesture(Key.D, commandModifier),
+                },
+                new Avalonia.Controls.MenuItem
+                {
+                    Header = Se.Language.General.InvertSelection,
+                    DataContext = vm,
+                    Command = vm.InvertFixesSelectionCommand,
+                    InputGesture = new KeyGesture(Key.I, commandModifier | KeyModifiers.Shift),
+                },
+            },
+        };
     }
 }

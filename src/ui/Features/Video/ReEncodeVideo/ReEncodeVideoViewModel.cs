@@ -49,6 +49,7 @@ public partial class ReEncodeVideoViewModel : ObservableObject
 
     private Subtitle _subtitle = new();
     private readonly StringBuilder _log;
+    private readonly TempSubtitleFiles _tempSubtitleFiles = new();
     private long _startTicks;
     private long _processedFrames;
     private Process? _ffmpegProcess;
@@ -74,11 +75,12 @@ public partial class ReEncodeVideoViewModel : ObservableObject
         FrameRates = new ObservableCollection<double> { 23.976, 24, 25, 29.97, 30, 50, 59.94, 60 };
         SelectedFrameRate = FrameRates[0];
 
+        // No .webm: this always encodes libx264, and the WebM muxer takes only VP8/VP9/AV1, so
+        // picking it could only ever end in "Output video file not generated".
         VideoExtensions = new ObservableCollection<string>
         {
             ".mkv",
             ".mp4",
-            ".webm",
         };
         SelectedVideoExtension = VideoExtensions[0];
 
@@ -133,6 +135,16 @@ public partial class ReEncodeVideoViewModel : ObservableObject
                         VideoHeight = (int)(mediaInfo.Dimension.Height * scaleFactor);
                         UseSourceResolution = false;
                     }
+                    else if (mediaInfo.Dimension.Width > 0 && mediaInfo.Dimension.Height > 0)
+                    {
+                        // A source that is already small keeps its size. Only the wide ones were
+                        // handled, so 1280x536 or 640x480 stayed on the constructor's 1280x720 and
+                        // came out stretched to 16:9 - and the small one upscaled, the opposite of
+                        // what this dialog is for.
+                        VideoWidth = mediaInfo.Dimension.Width;
+                        VideoHeight = mediaInfo.Dimension.Height;
+                        UseSourceResolution = false;
+                    }
                 });
             });
         }
@@ -148,9 +160,21 @@ public partial class ReEncodeVideoViewModel : ObservableObject
         if (_doAbort)
         {
             _timerGenerate.Stop();
+            try
+            {
 #pragma warning disable CA1416
-            _ffmpegProcess.Kill(true);
+                _ffmpegProcess.Kill(true);
 #pragma warning restore CA1416
+
+                // The half-written file is of no use, and left behind it made the next run
+                // suggest a "_2" name next to it.
+                _ffmpegProcess.WaitForExit(3000);
+                File.Delete(JobItems[_jobItemIndex].OutputVideoFileName);
+            }
+            catch
+            {
+                // ignore
+            }
 
             IsGenerating = false;
             return;
@@ -185,7 +209,12 @@ public partial class ReEncodeVideoViewModel : ObservableObject
 
         var jobItem = JobItems[_jobItemIndex];
 
-        if (!File.Exists(jobItem.OutputVideoFileName))
+        // The exit code counts too: ffmpeg leaves a 0-byte stub behind when it gives up (TrueHD
+        // audio copied into .mp4, exit code 88), and an overwritten file is still there after
+        // any failure - both used to be reported as "video file generated".
+        if (_ffmpegProcess.ExitCode != 0 ||
+            !File.Exists(jobItem.OutputVideoFileName) ||
+            new FileInfo(jobItem.OutputVideoFileName).Length == 0)
         {
             SeLogger.Error("Output video file not found: " + jobItem.OutputVideoFileName + Environment.NewLine +
                            "ffmpeg: " + _ffmpegProcess.StartInfo.FileName + Environment.NewLine +
@@ -203,14 +232,14 @@ public partial class ReEncodeVideoViewModel : ObservableObject
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
 
-                IsGenerating = true;
+                IsGenerating = false;
                 ProgressValue = 0;
             });
 
             return;
         }
 
-        JobItems[_jobItemIndex].Status = Se.Language.General.Done;
+        JobItems[_jobItemIndex].Status = UiUtil.RemoveAccessKey(Se.Language.General.Done);
 
         Dispatcher.UIThread.Invoke(async () =>
         {
@@ -261,8 +290,18 @@ public partial class ReEncodeVideoViewModel : ObservableObject
         var mediaInfo = FfmpegMediaInfo.Parse(jobItem.InputVideoFileName);
         jobItem.TotalFrames = mediaInfo.GetTotalFrames();
         jobItem.TotalSeconds = mediaInfo.Duration.TotalSeconds;
-        jobItem.Width = mediaInfo.Dimension.Width;
-        jobItem.Height = mediaInfo.Dimension.Height;
+
+        // Only adopt the source size when the user asked for it. This dialog exists to produce a
+        // SMALLER file ("high resolutions make subtitling slow"), and Initialize scales large
+        // sources down to 1280 wide - unconditionally overwriting both here threw that away, so
+        // every re-encode ran at the source resolution and the resolution picker did nothing.
+        // The burn-in dialog was fixed the same way.
+        if (mediaInfo.Dimension.Width > 0 && mediaInfo.Dimension.Height > 0 &&
+            (UseSourceResolution || jobItem.Width <= 0 || jobItem.Height <= 0))
+        {
+            jobItem.Width = mediaInfo.Dimension.Width;
+            jobItem.Height = mediaInfo.Dimension.Height;
+        }
         jobItem.UseTargetFileSize = false;
         jobItem.Status = Se.Language.General.Generating;
 
@@ -340,18 +379,12 @@ public partial class ReEncodeVideoViewModel : ObservableObject
     {
         var subtitle = new Subtitle(_subtitle);
 
-        var srt = new SubRip();
-        var subtitleFileName = Path.Combine(Path.GetTempFileName() + srt.Extension);
-        if (_subtitleFormat is { Name: AdvancedSubStationAlpha.NameOfFormat })
-        {
-            var assa = new AdvancedSubStationAlpha();
-            subtitleFileName = Path.Combine(Path.GetTempFileName() + assa.Extension);
-            File.WriteAllText(subtitleFileName, assa.ToText(subtitle, string.Empty));
-        }
-        else
-        {
-            File.WriteAllText(subtitleFileName, srt.ToText(subtitle, string.Empty));
-        }
+        // Tracked so the file is swept when the window closes - and not GetTempFileName() plus an
+        // extension, which leaked the empty tmpXXXX.tmp it creates on top of the file written
+        // (#13332).
+        var subtitleFileName = _subtitleFormat is { Name: AdvancedSubStationAlpha.NameOfFormat }
+            ? _tempSubtitleFiles.Write(subtitle, new AdvancedSubStationAlpha())
+            : _tempSubtitleFiles.Write(subtitle, new SubRip());
 
         var jobItem = new BurnInJobItem(string.Empty, VideoWidth, VideoHeight)
         {
@@ -408,13 +441,50 @@ public partial class ReEncodeVideoViewModel : ObservableObject
         PromptForFfmpegParameters = false;
     }
 
+    /// <summary>
+    /// A distinct output name beside the source: "<name>_reencoded<ext>", with a collision
+    /// counter, mirroring the cut-video dialog. Never returns the input path.
+    /// </summary>
+    private string MakeOutputFileName(string videoFileName)
+    {
+        var nameNoExt = Path.GetFileNameWithoutExtension(videoFileName);
+        var folder = Path.GetDirectoryName(videoFileName) ?? Path.GetTempPath();
+        var fileName = Path.Combine(folder, nameNoExt + "_reencoded" + SelectedVideoExtension);
+
+        var i = 2;
+        while (File.Exists(fileName))
+        {
+            fileName = Path.Combine(folder, nameNoExt + "_reencoded_" + i.ToString(CultureInfo.InvariantCulture) + SelectedVideoExtension);
+            i++;
+        }
+
+        return fileName;
+    }
+
     [RelayCommand]
     private async Task Generate()
     {
-        var outputVideoFileName = Path.ChangeExtension(VideoFileName, SelectedVideoExtension);
+        // Suggest a DISTINCT name: ChangeExtension on an .mkv input with the default .mkv output
+        // handed the save dialog the input path itself, so accepting the suggestion pointed
+        // ffmpeg at the file it was reading and destroyed the user's video. The cut-video and
+        // embedded-subtitles dialogs both build a suffixed name with a collision counter.
+        var outputVideoFileName = MakeOutputFileName(VideoFileName);
         outputVideoFileName = await _fileHelper.PickSaveFile(Window!, SelectedVideoExtension, outputVideoFileName, Se.Language.General.SaveVideoAsVideoTitle);
         if (string.IsNullOrEmpty(outputVideoFileName))
         {
+            return;
+        }
+
+        // ...and refuse it outright if the user still picks the input, as the write-chapters
+        // dialog does: ffmpeg reads the input while writing the output.
+        if (string.Equals(Path.GetFullPath(outputVideoFileName), Path.GetFullPath(VideoFileName), StringComparison.OrdinalIgnoreCase))
+        {
+            await MessageBox.Show(
+                Window!,
+                Se.Language.General.Error,
+                Se.Language.General.OutputFileCannotBeTheInputFile,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
             return;
         }
 
@@ -478,12 +548,39 @@ public partial class ReEncodeVideoViewModel : ObservableObject
         Window?.Close();
     }
 
+    internal void OnClosing()
+    {
+        // The subtitle files handed to ffmpeg live as long as the window does - nothing else
+        // removes them, and they used to pile up in the temp folder run after run (#13332).
+        _tempSubtitleFiles.Delete();
+
+        // Stop the poll timer and any still-running encode - closing the window used to leave the
+        // ffmpeg process encoding to completion in the background, with the timer still firing
+        // into a closed window. Same fix as the blank-video and embedded-subtitles dialogs.
+        _timerGenerate.StopAndDispose(TimerGenerateElapsed);
+        if (_ffmpegProcess != null && !_ffmpegProcess.HasExited)
+        {
+            try
+            {
+#pragma warning disable CA1416
+                _ffmpegProcess.Kill(true);
+#pragma warning restore CA1416
+            }
+            catch
+            {
+                // ignore - it may have exited in between
+            }
+        }
+    }
+
     internal void OnKeyDown(KeyEventArgs e)
     {
         if (e.Key == Key.Escape)
         {
             e.Handled = true;
-            Window?.Close();
+            // Route through Cancel so Escape during generation aborts the encode
+            // instead of closing the window over a running ffmpeg.
+            Cancel();
         }
         else if (UiUtil.IsHelp(e))
         {

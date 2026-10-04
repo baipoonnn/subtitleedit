@@ -89,7 +89,7 @@ public partial class ProfilesViewModel : ObservableObject
 
         var export = new ProfileImportExport(toExport);
         var json = JsonSerializer.Serialize(export, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
-        System.IO.File.WriteAllText(fileName, json);
+        await System.IO.File.WriteAllTextAsync(fileName, json);
 
         await MessageBox.Show(
             Window!,
@@ -218,7 +218,9 @@ public partial class ProfilesViewModel : ObservableObject
         var newProfile = new ProfileDisplay(SelectedProfile);
         var idx = Profiles.IndexOf(SelectedProfile);
 
-        newProfile.Name = SelectedProfile.Name + " 2";
+        // Profiles are looked up by name, so a duplicate makes the second one unreachable and
+        // sends its rule edits to the first. New() already goes through this helper.
+        newProfile.Name = GetUniqueProfileName(SelectedProfile.Name + " 2");
         Profiles.Insert(idx + 1, newProfile);
     }
 
@@ -271,6 +273,11 @@ public partial class ProfilesViewModel : ObservableObject
         {
             e.Handled = true;
             Window?.Close();
+        }
+        else if (UiUtil.IsHelp(e))
+        {
+            e.Handled = true;
+            UiUtil.ShowHelp("features/settings", "rules");
         }
     }
 }

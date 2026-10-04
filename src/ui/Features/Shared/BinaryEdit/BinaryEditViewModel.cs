@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
@@ -9,16 +9,24 @@ using CommunityToolkit.Mvvm.Input;
 using Nikse.SubtitleEdit.Controls.VideoPlayer;
 using Nikse.SubtitleEdit.Core.BluRaySup;
 using Nikse.SubtitleEdit.Core.Common;
+using Nikse.SubtitleEdit.Core.ContainerFormats;
 using Nikse.SubtitleEdit.Core.ContainerFormats.Matroska;
+using Nikse.SubtitleEdit.Core.ContainerFormats.Mp4;
+using Nikse.SubtitleEdit.Core.ContainerFormats.Mp4.Boxes;
 using Nikse.SubtitleEdit.Core.ContainerFormats.TransportStream;
+using Nikse.SubtitleEdit.Core.Interfaces;
 using Nikse.SubtitleEdit.Core.VobSub;
 using Nikse.SubtitleEdit.Features.Ocr;
 using Nikse.SubtitleEdit.Features.Ocr.OcrSubtitle;
+using Nikse.SubtitleEdit.Features.Shared;
 using Nikse.SubtitleEdit.Features.Shared.BinaryEdit.BinaryAdjustAllTimes;
 using Nikse.SubtitleEdit.Features.Shared.BinaryEdit.BinaryApplyDurationLimits;
 using Nikse.SubtitleEdit.Features.Shared.PickMatroskaTrack;
+using Nikse.SubtitleEdit.Features.Shared.PickMp4Track;
+using Nikse.SubtitleEdit.Features.Shared.PickTsTrack;
 using Nikse.SubtitleEdit.Features.Sync.ChangeFrameRate;
 using Nikse.SubtitleEdit.Features.Sync.ChangeSpeed;
+using Nikse.SubtitleEdit.Features.Video.BurnIn;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
 using Nikse.SubtitleEdit.Logic.Media;
@@ -30,6 +38,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -46,6 +55,8 @@ public partial class BinaryEditViewModel : ObservableObject
     [ObservableProperty] private int _screenWidth;
     [ObservableProperty] private int _screenHeight;
     [ObservableProperty] private string _statusText;
+    [ObservableProperty] private string _selectedFrameRate;
+    [ObservableProperty] private string _frameRateHint;
     [ObservableProperty] private string _currentPosition;
     [ObservableProperty] private string _currentSize;
     [ObservableProperty] private bool _hasSelection;
@@ -86,11 +97,26 @@ public partial class BinaryEditViewModel : ObservableObject
     private readonly IFileHelper _fileHelper;
     private readonly IFolderHelper _folderHelper;
     private readonly IWindowService _windowService;
+
+    /// <summary>For the shared image-preview background menu item (#14328).</summary>
+    internal IWindowService WindowService => _windowService;
     private readonly IShortcutManager _shortcutManager;
     private readonly IBluRayHelper _bluRayHelper;
 
     private string _loadFileName = string.Empty;
     private string _sourceFileName = string.Empty;
+
+    /// <summary>
+    /// Frame rate choices for the bottom bar combo box (invariant strings, like the main toolbar's).
+    /// </summary>
+    public ObservableCollection<string> FrameRates { get; }
+
+    /// <summary>
+    /// Where <see cref="SelectedFrameRate"/> came from - shown as its tooltip, and a rate the user
+    /// or the file chose is only replaced by a video's after asking (issue #15549).
+    /// </summary>
+    private BinaryEditFrameRateSource _frameRateSource;
+    private bool _isSettingFrameRate;
     private int _lastPlaybackSubtitleIndex = -2;
     private bool _isDirty;
     private bool _dirtyTrackingActive;
@@ -106,6 +132,20 @@ public partial class BinaryEditViewModel : ObservableObject
         _selectCurrentSubtitleWhilePlaying = Se.Settings.Tools.BinEditSelectCurrentSubtitleWhilePlaying;
         Subtitles = new ObservableCollection<BinarySubtitleItem>();
         StatusText = string.Empty;
+        FrameRates = new ObservableCollection<string>
+        {
+            "23.976",
+            "24",
+            "25",
+            "29.97",
+            "30",
+            "50",
+            "59.94",
+            "60",
+        };
+        _selectedFrameRate = string.Empty;
+        _frameRateHint = string.Empty;
+        SetFrameRate(Se.Settings.General.CurrentFrameRate, BinaryEditFrameRateSource.Current);
         CurrentPosition = string.Empty;
         CurrentSize = string.Empty;
 
@@ -138,6 +178,7 @@ public partial class BinaryEditViewModel : ObservableObject
     {
         _loadFileName = fileName;
         _sourceFileName = fileName;
+        SetFrameRateFromLoadedSubtitle(subtitle);
 
         if (subtitle != null && string.IsNullOrEmpty(fileName) && subtitle.Count > 0)
         {
@@ -467,41 +508,18 @@ public partial class BinaryEditViewModel : ObservableObject
             return;
         }
 
-        // Calculate and update the green rectangle
-        var videoPlayerWidth = VideoPlayerControl.Bounds.Width;
-        var videoPlayerHeight = VideoPlayerControl.Bounds.Height;
-
-        if (videoPlayerWidth <= 0 || videoPlayerHeight <= 0)
+        // The video surface, not the whole control: the player's controls row is Auto-sized, so
+        // its height moves with the UI scale and the platform. This used to subtract a
+        // hard-coded 55 px for it and scale the overlay against the rectangle that came out
+        // (#14328); ContentWidth/ContentHeight are the measured surface.
+        var contentRect = VideoContentRect.Calculate(
+            VideoPlayerControl.ContentWidth, VideoPlayerControl.ContentHeight, ScreenWidth, ScreenHeight);
+        if (contentRect == null)
         {
             return;
         }
 
-        const double controlsHeight = 55;
-        var availableHeight = videoPlayerHeight - controlsHeight;
-        if (availableHeight <= 0)
-        {
-            return;
-        }
-
-        var screenAspect = (double)ScreenWidth / ScreenHeight;
-        var availableAspect = videoPlayerWidth / availableHeight;
-
-        double rectWidth, rectHeight, rectX, rectY;
-
-        if (availableAspect > screenAspect)
-        {
-            rectHeight = availableHeight;
-            rectWidth = availableHeight * screenAspect;
-            rectX = (videoPlayerWidth - rectWidth) / 2;
-            rectY = 0;
-        }
-        else
-        {
-            rectWidth = videoPlayerWidth;
-            rectHeight = videoPlayerWidth / screenAspect;
-            rectX = 0;
-            rectY = (availableHeight - rectHeight) / 2;
-        }
+        var (rectX, rectY, rectWidth, rectHeight) = contentRect.Value;
 
         VideoContentBorder.Width = rectWidth;
         VideoContentBorder.Height = rectHeight;
@@ -553,7 +571,7 @@ public partial class BinaryEditViewModel : ObservableObject
             return;
         }
 
-        var fileName = await _fileHelper.PickOpenFile(Window, Se.Language.General.OpenSubtitleFileTitle, Se.Language.General.ImageBasedSubtitles, "*.sup;*.sub;*.ts;*.xml;*.mkv;*.mks", Se.Language.General.AllFiles, "*.*");
+        var fileName = await _fileHelper.PickOpenFile(Window, Se.Language.General.OpenSubtitleFileTitle, Se.Language.General.ImageBasedSubtitles, "*.sup;*.sub;*.ts;*.m2ts;*.mts;*.rec;*.mkv;*.mks;*.mp4;*.m4v;*.mov;*.3gp;*.avi;*.divx;*.xml;*.ttml;*.dfxp;*.vtt;*.webvtt", Se.Language.General.AllFiles, "*.*");
         if (string.IsNullOrEmpty(fileName))
         {
             return;
@@ -731,13 +749,14 @@ public partial class BinaryEditViewModel : ObservableObject
 
         if (imageSubtitle == null)
         {
-            await MessageBox.Show(Window, Se.Language.General.Error, "Image based subtitle format not found/supported.",
+            await MessageBox.Show(Window, Se.Language.General.Error, Se.Language.Tools.ImageBasedEdit.ImageBasedFormatNotSupported,
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
 
         FileName = fileName;
         OcrSubtitle = imageSubtitle;
+        SetFrameRateFromLoadedSubtitle(imageSubtitle);
 
         Subtitles.Clear();
         List<Ocr.OcrSubtitleItem> list = imageSubtitle.MakeOcrSubtitleItems();
@@ -753,7 +772,7 @@ public partial class BinaryEditViewModel : ObservableObject
             ScreenWidth = Subtitles[0].ScreenSize.Width;
             ScreenHeight = Subtitles[0].ScreenSize.Height;
             RefreshStatusText();
-            Window.Title = string.Format(Se.Language.Tools.ImageBasedEdit.EditImagedBaseSubtitleX, fileName);
+            Window.Title = UiUtil.FormatTitleWithFileName(Se.Language.Tools.ImageBasedEdit.EditImagedBaseSubtitleX, fileName);
         }
 
         RefreshPositionMonitor();
@@ -762,11 +781,14 @@ public partial class BinaryEditViewModel : ObservableObject
         if (ShouldAutoOpenMatchingVideo(Se.Settings.Video.AutoOpen, videoFileName) && VideoPlayerControl != null)
         {
             await VideoPlayerControl.Open(videoFileName!);
+            await OfferVideoFrameRate(videoFileName!);
         }
     }
 
     private async Task<IOcrSubtitle?> LoadImageSubtitle(string fileName)
     {
+        var ext = Path.GetExtension(fileName).ToLowerInvariant();
+
         // Blu-ray SUP
         if (FileUtil.IsBluRaySup(fileName))
         {
@@ -777,6 +799,20 @@ public partial class BinaryEditViewModel : ObservableObject
             }
 
             return null;
+        }
+
+        // DVD SUP (SP packets, e.g. demuxed with SubRip/Subtitle Processor)
+        if (FileUtil.IsSpDvdSup(fileName))
+        {
+            var spDvdSup = new OcrSubtitleSpDvdSupImages(fileName);
+            return spDvdSup.Count > 0 ? spDvdSup : null;
+        }
+
+        // HD-DVD SUP ("SP" packets with 32-bit sizes, e.g. demuxed with EVODemux)
+        if (HdDvdSupParser.IsHdDvdSup(fileName))
+        {
+            var hdDvdSup = new OcrSubtitleHdDvdSup(fileName);
+            return hdDvdSup.Count > 0 ? hdDvdSup : null;
         }
 
         // VobSub (.sub + .idx)
@@ -795,18 +831,11 @@ public partial class BinaryEditViewModel : ObservableObject
             return null;
         }
 
-        // Transport Stream (.ts)
-        if (FileUtil.IsTransportStream(fileName))
+        // Transport Stream (.ts / .m2ts / .mts / .rec)
+        if (FileUtil.IsTransportStream(fileName) ||
+            (ext is ".m2ts" or ".mts" or ".ts" && FileUtil.IsM2TransportStream(fileName)))
         {
-            var tsParser = new TransportStreamParser();
-            tsParser.Parse(fileName, null);
-            var subtitles = tsParser.GetDvbSubtitles(0);
-            if (subtitles.Count > 0)
-            {
-                return new OcrSubtitleTransportStream(tsParser, subtitles, fileName);
-            }
-
-            return null;
+            return await LoadTransportStreamImageSubtitle(fileName);
         }
 
         // Matroska (.mkv / .mks) - PGS / VobSub / DVB tracks
@@ -815,15 +844,180 @@ public partial class BinaryEditViewModel : ObservableObject
             return await LoadMatroskaImageSubtitle(fileName);
         }
 
-        // BDN XML
-        if (fileName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+        // DivX/XSUB image subtitles muxed into .avi/.divx
+        if (ext is ".avi" or ".divx")
         {
-            var bdnXml = new Nikse.SubtitleEdit.Core.SubtitleFormats.BdnXml();
-            var subtitle = new Subtitle();
-            bdnXml.LoadSubtitle(subtitle, File.ReadAllLines(fileName).ToList(), fileName);
-            if (subtitle.Paragraphs.Count > 0)
+            var xSubList = XSubParser.ParseAviSubtitles(fileName);
+            return xSubList.Count > 0 ? new OcrSubtitleDivX(xSubList, fileName) : null;
+        }
+
+        // MP4 with VobSub image track(s)
+        if (ext is ".mp4" or ".m4v" or ".mov" or ".3gp")
+        {
+            return await LoadMp4ImageSubtitle(fileName);
+        }
+
+        // WebVTT with embedded base64 thumbnail images
+        if (ext is ".vtt" or ".webvtt")
+        {
+            var lines = (await File.ReadAllLinesAsync(fileName)).ToList();
+            var webVttThumbnail = new Nikse.SubtitleEdit.Core.SubtitleFormats.WebVttThumbnail();
+            if (webVttThumbnail.IsMine(lines, fileName))
             {
-                return new OcrSubtitleBdn(subtitle, fileName, false);
+                var subtitle = new Subtitle();
+                webVttThumbnail.LoadSubtitle(subtitle, lines, fileName);
+                if (subtitle.Paragraphs.Count > 0)
+                {
+                    return new OcrSubtitleWebVttImages(subtitle, fileName);
+                }
+            }
+
+            return null;
+        }
+
+        // BDN XML, FCP image xmeml, SMPTE-TT/IMSC with base64 images
+        if (ext is ".xml" or ".ttml" or ".dfxp")
+        {
+            return LoadXmlImageSubtitle(fileName);
+        }
+
+        return null;
+    }
+
+    private async Task<IOcrSubtitle?> LoadTransportStreamImageSubtitle(string fileName)
+    {
+        if (Window == null)
+        {
+            return null;
+        }
+
+        var tsParser = new TransportStreamParser();
+        await Task.Run(() => tsParser.Parse(fileName, null));
+        if (tsParser.SubtitlePacketIds.Count == 0)
+        {
+            return null;
+        }
+
+        // The DVB subtitles live under their real packet ids - a fixed id 0 (the PAT) never
+        // matches, so the first/picked id must be used.
+        var packetId = tsParser.SubtitlePacketIds[0];
+        if (tsParser.SubtitlePacketIds.Count > 1)
+        {
+            var pickResult = await _windowService.ShowDialogAsync<PickTsTrackWindow, PickTsTrackViewModel>(
+                Window, vm => vm.Initialize(tsParser, fileName));
+            if (!pickResult.OkPressed || pickResult.SelectedTrack == null || pickResult.SelectedTrack.IsTeletext)
+            {
+                return null;
+            }
+
+            packetId = pickResult.SelectedTrack.TrackNumber;
+        }
+
+        var subtitles = tsParser.GetDvbSubtitles(packetId);
+        return subtitles is { Count: > 0 } ? new OcrSubtitleTransportStream(subtitles) : null;
+    }
+
+    private async Task<IOcrSubtitle?> LoadMp4ImageSubtitle(string fileName)
+    {
+        if (Window == null)
+        {
+            return null;
+        }
+
+        var mp4Parser = new MP4Parser(fileName);
+        var vobSubTracks = mp4Parser.GetSubtitleTracks().Where(t => t.Mdia.IsVobSubSubtitle).ToList();
+        if (vobSubTracks.Count == 0)
+        {
+            return null;
+        }
+
+        Trak selectedTrack;
+        if (vobSubTracks.Count == 1)
+        {
+            selectedTrack = vobSubTracks[0];
+        }
+        else
+        {
+            var pickResult = await _windowService.ShowDialogAsync<PickMp4TrackWindow, PickMp4TrackViewModel>(
+                Window, vm => vm.Initialize(vobSubTracks, fileName));
+            if (!pickResult.OkPressed || pickResult.SelectedMatroskaTrack?.Track == null)
+            {
+                return null;
+            }
+
+            selectedTrack = pickResult.SelectedMatroskaTrack.Track;
+        }
+
+        var paragraphs = selectedTrack.Mdia.Minf.Stbl.GetParagraphs();
+        return paragraphs.Count > 0 ? new OcrSubtitleMp4VobSub(selectedTrack, paragraphs) : null;
+    }
+
+    internal static IOcrSubtitle? LoadXmlImageSubtitle(string fileName)
+    {
+        var lines = File.ReadAllLines(fileName).ToList();
+
+        // BDN XML - references png files next to the xml
+        var bdnXml = new Nikse.SubtitleEdit.Core.SubtitleFormats.BdnXml();
+        var bdnSubtitle = new Subtitle();
+        bdnXml.LoadSubtitle(bdnSubtitle, lines, fileName);
+        if (bdnSubtitle.Paragraphs.Count > 0)
+        {
+            return new OcrSubtitleBdn(bdnSubtitle, fileName, false);
+        }
+
+        // Final Cut Pro image xmeml (SE's own "export image based" FCP output) - cheap content
+        // gate first, FinalCutProImage has no fast IsMine of its own.
+        if (lines.Any(l => l.Contains("<xmeml", StringComparison.Ordinal)) &&
+            lines.Any(l => l.Contains("<pathurl>", StringComparison.Ordinal)))
+        {
+            var fcpImage = new Nikse.SubtitleEdit.Core.SubtitleFormats.FinalCutProImage();
+            var fcpSubtitle = new Subtitle();
+            fcpImage.LoadSubtitle(fcpSubtitle, lines, fileName);
+            if (fcpSubtitle.Paragraphs.Count > 0)
+            {
+                return new OcrSubtitleBdn(fcpSubtitle, fileName, false);
+            }
+        }
+
+        // IMSC image profile - png files next to the document, as this window's IMSC image export writes
+        var timedTextImage = new Nikse.SubtitleEdit.Core.SubtitleFormats.TimedTextImage();
+        if (timedTextImage.IsMine(lines, fileName))
+        {
+            var timedTextImageSubtitle = new Subtitle();
+            timedTextImage.LoadSubtitle(timedTextImageSubtitle, lines, fileName);
+            if (timedTextImageSubtitle.Paragraphs.Count > 0)
+            {
+                return new OcrSubtitleBdn(timedTextImageSubtitle, fileName, false);
+            }
+        }
+
+        // SMPTE-TT with base64 png images (<smpte:image>)
+        var base64Format = new Nikse.SubtitleEdit.Core.SubtitleFormats.TimedTextBase64Image();
+        if (base64Format.IsMine(lines, fileName))
+        {
+            var base64Subtitle = new Subtitle();
+            base64Format.LoadSubtitle(base64Subtitle, lines, fileName);
+            IList<IBinaryParagraphWithPosition> list = new List<IBinaryParagraphWithPosition>();
+            foreach (var p in base64Subtitle.Paragraphs)
+            {
+                var image = new Nikse.SubtitleEdit.Core.SubtitleFormats.TimedTextBase64Image.Base64PngImage
+                {
+                    Text = p.Text,
+                    StartTimeCode = p.StartTime,
+                    EndTimeCode = p.EndTime,
+                };
+
+                using var bitmap = image.GetBitmap();
+                var nikseBitmap = new NikseBitmap(bitmap);
+                if (nikseBitmap.GetNonTransparentHeight() > 1)
+                {
+                    list.Add(image);
+                }
+            }
+
+            if (list.Count > 0)
+            {
+                return new OcrSubtitleIBinaryParagraph(list);
             }
         }
 
@@ -933,6 +1127,69 @@ public partial class BinaryEditViewModel : ObservableObject
         await DoExport(new ExportHandlerBluRaySup(), ".sup");
     }
 
+    /// <summary>
+    /// Burns the loaded images into a video. They are written to a temporary Blu-ray sup that the
+    /// burn-in dialog overlays through ffmpeg, so the video gets the exported look - overlapping
+    /// lines included (issue #14456). The text settings mean nothing for bitmaps, so the dialog
+    /// hides them. The video is the one in the player, else the one next to the subtitle, else
+    /// asked for.
+    /// </summary>
+    [RelayCommand]
+    private async Task GenerateBurnIn()
+    {
+        if (Window == null || Subtitles.Count == 0)
+        {
+            return;
+        }
+
+        var ffmpegOk = await FfmpegRequirement.EnsureAsync(
+            Window,
+            async () => (await _windowService.ShowDialogAsync<DownloadFfmpegWindow, DownloadFfmpegViewModel>(Window)).FfmpegFileName);
+        if (!ffmpegOk)
+        {
+            return;
+        }
+
+        var videoFileName = VideoPlayerControl?.VideoPlayer.FileName ?? string.Empty;
+        if (string.IsNullOrEmpty(videoFileName) || !File.Exists(videoFileName))
+        {
+            videoFileName = string.IsNullOrEmpty(_sourceFileName) ? null : TryGetVideoFileName(_sourceFileName);
+        }
+
+        if (string.IsNullOrEmpty(videoFileName))
+        {
+            videoFileName = await _fileHelper.PickOpenVideoFile(Window, Se.Language.General.OpenVideoFileTitle);
+            if (string.IsNullOrEmpty(videoFileName))
+            {
+                return;
+            }
+        }
+
+        var supFileName = Path.Combine(Path.GetTempPath(), "se-sub-" + Guid.NewGuid().ToString("N") + ".sup");
+        try
+        {
+            WriteExport(new ExportHandlerBluRaySup(), supFileName);
+            await _windowService.ShowDialogAsync<BurnInWindow, BurnInViewModel>(Window, vm =>
+            {
+                vm.InitializeImageSubtitle(videoFileName, supFileName);
+            });
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(supFileName))
+                {
+                    File.Delete(supFileName);
+                }
+            }
+            catch (Exception e)
+            {
+                Se.LogError(e, $"Could not delete the temporary subtitle file \"{supFileName}\"");
+            }
+        }
+    }
+
     [RelayCommand]
     private async Task ExportBdnXml()
     {
@@ -949,6 +1206,24 @@ public partial class BinaryEditViewModel : ObservableObject
     private async Task ExportVobSub()
     {
         await DoExport(new ExportHandlerVobSub(), ".sub");
+    }
+
+    [RelayCommand]
+    private async Task ExportDvdSup()
+    {
+        await DoExport(new ExportHandlerDvdSup(), ".sup");
+    }
+
+    [RelayCommand]
+    private async Task ExportDCinemaInteropPng()
+    {
+        await DoExport(new ExportHandlerDCinemaInteropPng(), string.Empty, false);
+    }
+
+    [RelayCommand]
+    private async Task ExportDCinemaSmpte2014Png()
+    {
+        await DoExport(new ExportHandlerDCinemaSmpte2014Png(), string.Empty, false);
     }
 
     [RelayCommand]
@@ -1036,18 +1311,41 @@ public partial class BinaryEditViewModel : ObservableObject
             return false;
         }
 
-        var imageParameter = new ImageParameter()
+        WriteExport(exportHandler, fileOrFolderName);
+        _isDirty = false;
+        return true;
+    }
+
+    private void WriteExport(IExportHandler exportHandler, string fileOrFolderName)
+    {
+        // One parameter object per line, like every other export caller: the Blu-ray sup
+        // handler holds a line back while the next may still overlap it, so a shared object
+        // mutated per line lost the first line and wrote the last twice (issue #14666).
+        ImageParameter MakeImageParameter() => new()
         {
             ScreenWidth = ScreenWidth,
             ScreenHeight = ScreenHeight,
+            // The VobSub and DVD sup writers build their four color CLUT from these two; left at
+            // default(SKColor) every visible pixel quantizes onto the anti-alias index as opaque
+            // black. White text/black outline matches both the export dialog's defaults and what
+            // the loaded bitmaps in practice contain.
+            FontColor = SKColors.White,
+            OutlineColor = SKColors.Black,
+            // The D-Cinema SMPTE handler declares EditRate/TimeCodeRate from this, while the cue
+            // timecodes are converted with Configuration...CurrentFrameRate - read the same value
+            // so header and cues agree. The Dost and FCP handlers take their rate from it too.
+            // The others (a Blu-ray sup goes on its frame grid) use the bottom bar frame rate:
+            // the loaded sup's own, the video's or the user's pick (issues #15478, #15549).
+            FramesPerSecond = GetExportFrameRate(exportHandler, GetFrameRate(), Configuration.Settings.General.CurrentFrameRate),
         };
 
-        exportHandler.WriteHeader(fileOrFolderName, imageParameter);
+        exportHandler.WriteHeader(fileOrFolderName, MakeImageParameter());
         for (var i = 0; i < Subtitles.Count; i++)
         {
             // ToSkBitmap allocates a new SKBitmap each call; dispose it per iteration so the
             // export of a large file doesn't accumulate one undisposed native bitmap per line.
             using var skBitmap = Subtitles[i].Bitmap!.ToSkBitmap();
+            var imageParameter = MakeImageParameter();
             imageParameter.Bitmap = skBitmap;
             imageParameter.Text = Subtitles[i].Text;
             imageParameter.StartTime = Subtitles[i].StartTime;
@@ -1061,8 +1359,6 @@ public partial class BinaryEditViewModel : ObservableObject
         }
 
         exportHandler.WriteFooter();
-        _isDirty = false;
-        return true;
     }
 
     [RelayCommand]
@@ -1350,6 +1646,104 @@ public partial class BinaryEditViewModel : ObservableObject
         }
 
         UpdateOverlayPosition();
+    }
+
+    [RelayCommand]
+    private async Task ChangeResolution()
+    {
+        if (Window == null)
+        {
+            return;
+        }
+
+        if (Subtitles.Count == 0)
+        {
+            await MessageBox.Show(Window, Se.Language.General.Information,
+                Se.Language.Tools.ImageBasedEdit.NoImageSubtitlesLoaded,
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var items = Subtitles.ToList();
+        var fromWidth = ScreenWidth;
+        var fromHeight = ScreenHeight;
+        using var result = await _windowService.ShowDialogAsync<BinaryChangeResolution.BinaryChangeResolutionWindow, BinaryChangeResolution.BinaryChangeResolutionViewModel>(
+            Window, vm => vm.Initialize(items, fromWidth, fromHeight));
+
+        if (!result.OkPressed)
+        {
+            return;
+        }
+
+        // The dialog scaled bitmaps and positions; the canvas size is ours (the setters push
+        // it to every item and refresh the overlay and position monitor).
+        ScreenWidth = result.NewWidth;
+        ScreenHeight = result.NewHeight;
+
+        if (SubtitleGrid != null)
+        {
+            var currentIndex = SubtitleGrid.SelectedIndex;
+            SubtitleGrid.ItemsSource = null;
+            SubtitleGrid.ItemsSource = Subtitles;
+            SubtitleGrid.SelectedIndex = currentIndex;
+        }
+
+        UpdateOverlayPosition();
+        RefreshStatusText();
+    }
+
+    [RelayCommand]
+    private async Task MoveCaptions()
+    {
+        if (Window == null)
+        {
+            return;
+        }
+
+        if (Subtitles.Count == 0)
+        {
+            await MessageBox.Show(Window, Se.Language.General.Information,
+                Se.Language.Tools.ImageBasedEdit.NoImageSubtitlesLoaded,
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        await ShowMoveCaptions(Subtitles.ToList());
+    }
+
+    [RelayCommand]
+    private async Task MoveCaptionsSelectedLines()
+    {
+        if (Window == null)
+        {
+            return;
+        }
+
+        var selectedItems = GetSelectedItems();
+        if (selectedItems.Count == 0)
+        {
+            return;
+        }
+
+        await ShowMoveCaptions(selectedItems);
+        ApplyGridSelection(selectedItems);
+    }
+
+    private async Task ShowMoveCaptions(List<BinarySubtitleItem> items)
+    {
+        // Open on the letterbox the position monitor already shows.
+        var ratioKey = SelectedLetterboxRatio.SettingsKey;
+        var barHeight = _currentLetterboxBarHeight;
+        var result = await _windowService.ShowDialogAsync<BinaryMoveCaptions.BinaryMoveCaptionsWindow, BinaryMoveCaptions.BinaryMoveCaptionsViewModel>(
+            Window!, vm => vm.Initialize(items, ScreenWidth, ScreenHeight, ratioKey, barHeight));
+
+        if (!result.OkPressed)
+        {
+            return;
+        }
+
+        UpdateOverlayPosition();
+        RefreshPositionMonitor();
     }
 
     [RelayCommand]
@@ -1766,7 +2160,20 @@ public partial class BinaryEditViewModel : ObservableObject
             return;
         }
 
-        var result = await _windowService.ShowDialogAsync<ChangeFrameRateWindow, ChangeFrameRateViewModel>(Window, vm => { });
+        // SE 4 parity: the current frame rate is the "from" rate, and the loaded video (if any)
+        // is shown with its detected rate so the user can see where that number came from.
+        var videoFileName = VideoPlayerControl?.VideoPlayer.FileName;
+        var videoFrameRate = 0.0;
+        if (!string.IsNullOrEmpty(videoFileName) && File.Exists(videoFileName))
+        {
+            videoFrameRate = await Task.Run(() => (double)FfmpegMediaInfo2.Parse(videoFileName).FramesRate);
+        }
+
+        // The "from" rate is the one the subtitle is timed at - the bottom bar frame rate, which
+        // for a loaded Blu-ray sup is its own, not the main window's (issue #15549).
+        var currentFrameRate = GetFrameRate();
+        var result = await _windowService.ShowDialogAsync<ChangeFrameRateWindow, ChangeFrameRateViewModel>(Window,
+            vm => { vm.Initialize(videoFileName, videoFrameRate, currentFrameRate); });
 
         if (!result.OkPressed)
         {
@@ -1775,6 +2182,178 @@ public partial class BinaryEditViewModel : ObservableObject
 
         var ratio = ChangeFrameRateViewModel.GetFrameRateRatio(result.SelectedFromFrameRate, result.SelectedToFrameRate);
         ScaleBinarySubtitleTimes(Subtitles, ratio);
+        SetFrameRate(result.SelectedToFrameRate, BinaryEditFrameRateSource.Manual);
+    }
+
+    /// <summary>
+    /// The frame rate in the bottom bar combo box, falling back to the current frame rate.
+    /// </summary>
+    internal double GetFrameRate()
+    {
+        return double.TryParse(SelectedFrameRate, NumberStyles.Float, CultureInfo.InvariantCulture, out var frameRate) && frameRate > 0
+            ? frameRate
+            : Se.Settings.General.CurrentFrameRate;
+    }
+
+    private void SetFrameRate(double frameRate, BinaryEditFrameRateSource source, double declaredFrameRate = 0)
+    {
+        _isSettingFrameRate = true;
+        try
+        {
+            SelectedFrameRate = FrameRateHelper.SelectInList(FrameRates, NormalizeFrameRate(frameRate));
+        }
+        finally
+        {
+            _isSettingFrameRate = false;
+        }
+
+        _frameRateSource = source;
+        FrameRateHint = GetFrameRateHint(source, declaredFrameRate);
+    }
+
+    partial void OnSelectedFrameRateChanged(string value)
+    {
+        if (_isSettingFrameRate || string.IsNullOrEmpty(value))
+        {
+            return;
+        }
+
+        _frameRateSource = BinaryEditFrameRateSource.Manual;
+        FrameRateHint = GetFrameRateHint(BinaryEditFrameRateSource.Manual, 0);
+        if (_dirtyTrackingActive)
+        {
+            _isDirty = true;
+        }
+    }
+
+    /// <summary>
+    /// A Blu-ray sup sets the frame rate its time codes are on (the declared one when they fit
+    /// it); anything else keeps the frame rate there is.
+    /// </summary>
+    private void SetFrameRateFromLoadedSubtitle(IOcrSubtitle? subtitle)
+    {
+        if (subtitle is not OcrSubtitleBluRay bluRay || bluRay.Count == 0)
+        {
+            return;
+        }
+
+        var (frameRate, source) = GetLoadedSupFrameRate(bluRay.FrameRate, bluRay.DeclaredFrameRate, Se.Settings.General.CurrentFrameRate);
+        SetFrameRate(frameRate, source, bluRay.DeclaredFrameRate);
+    }
+
+    /// <summary>
+    /// After a video is opened: use its frame rate, asking first when the current one came from
+    /// the subtitle file or the user and differs (issue #15549).
+    /// </summary>
+    private async Task OfferVideoFrameRate(string videoFileName)
+    {
+        if (Window == null || string.IsNullOrEmpty(videoFileName))
+        {
+            return;
+        }
+
+        double videoFrameRate;
+        try
+        {
+            videoFrameRate = await Task.Run(() => (double)FfmpegMediaInfo2.Parse(videoFileName).FramesRate);
+        }
+        catch
+        {
+            return;
+        }
+
+        var currentFrameRate = GetFrameRate();
+        var action = GetVideoFrameRateAction(_frameRateSource, currentFrameRate, videoFrameRate);
+        if (action == VideoFrameRateAction.Ask)
+        {
+            var message = string.Format(Se.Language.Tools.ImageBasedEdit.UseVideoFrameRateXInsteadOfY,
+                FormatFrameRate(videoFrameRate), FormatFrameRate(currentFrameRate));
+            var answer = await MessageBox.Show(Window, Se.Language.General.FrameRate, message, MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            action = answer == MessageBoxResult.Yes ? VideoFrameRateAction.Use : VideoFrameRateAction.Keep;
+        }
+
+        if (action == VideoFrameRateAction.Use)
+        {
+            SetFrameRate(videoFrameRate, BinaryEditFrameRateSource.Video);
+        }
+    }
+
+    public enum VideoFrameRateAction
+    {
+        Keep,
+        Use,
+        Ask,
+    }
+
+    /// <summary>
+    /// What to do with an opened video's frame rate: nothing when unknown or the same, take it
+    /// when the current one is just the default, ask when the file or the user chose it.
+    /// </summary>
+    internal static VideoFrameRateAction GetVideoFrameRateAction(BinaryEditFrameRateSource source, double currentFrameRate, double videoFrameRate)
+    {
+        if (videoFrameRate <= 0 || Math.Abs(NormalizeFrameRate(videoFrameRate) - NormalizeFrameRate(currentFrameRate)) < 0.01)
+        {
+            return VideoFrameRateAction.Keep;
+        }
+
+        return source == BinaryEditFrameRateSource.Current ? VideoFrameRateAction.Use : VideoFrameRateAction.Ask;
+    }
+
+    /// <summary>
+    /// The frame rate of a loaded Blu-ray sup: the detected one (the declared one when its times
+    /// fit it), else the current frame rate when no rate fits.
+    /// </summary>
+    internal static (double FrameRate, BinaryEditFrameRateSource Source) GetLoadedSupFrameRate(double detectedFrameRate, double declaredFrameRate, double currentFrameRate)
+    {
+        if (detectedFrameRate <= 0)
+        {
+            return (currentFrameRate, BinaryEditFrameRateSource.Current);
+        }
+
+        return Math.Abs(detectedFrameRate - declaredFrameRate) < 0.001
+            ? (detectedFrameRate, BinaryEditFrameRateSource.Declared)
+            : (detectedFrameRate, BinaryEditFrameRateSource.Detected);
+    }
+
+    /// <summary>
+    /// The frame rate an export is written at. D-Cinema SMPTE converts its cue times with the
+    /// global current frame rate, so its header must declare that one too.
+    /// </summary>
+    internal static double GetExportFrameRate(IExportHandler exportHandler, double binaryEditFrameRate, double currentFrameRate)
+    {
+        return exportHandler is ExportHandlerDCinemaSmpte2014Png || binaryEditFrameRate <= 0
+            ? currentFrameRate
+            : binaryEditFrameRate;
+    }
+
+    /// <summary>
+    /// 24000/1001 etc. as the "23.976" the combo box lists - the sup writer maps those back to
+    /// the exact NTSC fractions.
+    /// </summary>
+    internal static double NormalizeFrameRate(double frameRate)
+    {
+        return Math.Round(frameRate, 3);
+    }
+
+    private static string FormatFrameRate(double frameRate)
+    {
+        return NormalizeFrameRate(frameRate).ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static string GetFrameRateHint(BinaryEditFrameRateSource source, double declaredFrameRate)
+    {
+        var l = Se.Language.Tools.ImageBasedEdit;
+        var sourceText = source switch
+        {
+            BinaryEditFrameRateSource.Declared => l.FrameRateDeclaredInFile,
+            BinaryEditFrameRateSource.Detected => string.Format(l.FrameRateDetectedFromTimeCodesX,
+                declaredFrameRate > 0 ? FormatFrameRate(declaredFrameRate) : "?"),
+            BinaryEditFrameRateSource.Video => l.FrameRateFromVideo,
+            BinaryEditFrameRateSource.Manual => l.FrameRateSetManually,
+            _ => l.FrameRateCurrent,
+        };
+
+        return sourceText + Environment.NewLine + Environment.NewLine + l.FrameRateUsageInfo;
     }
 
     [RelayCommand]
@@ -1833,8 +2412,8 @@ public partial class BinaryEditViewModel : ObservableObject
                     continue;
                 }
 
-                s.StartTime = TimeSpan.FromMilliseconds(o.Item1 * factor);
-                s.EndTime = TimeSpan.FromMilliseconds(o.Item2 * factor);
+                s.StartTime = TimeSpanExtensions.FromMillisecondsWholeMilliseconds(o.Item1 * factor);
+                s.EndTime = TimeSpanExtensions.FromMillisecondsWholeMilliseconds(o.Item2 * factor);
             }
         }
 
@@ -1885,6 +2464,7 @@ public partial class BinaryEditViewModel : ObservableObject
         }
 
         await VideoPlayerControl.Open(videoFileName);
+        await OfferVideoFrameRate(videoFileName);
     }
 
     internal void VideoPlayerAreaPointerPressed()
@@ -1947,7 +2527,7 @@ public partial class BinaryEditViewModel : ObservableObject
 
         using var skBitmap = selectedItem.Bitmap.ToSkBitmap();
         var pngBytes = skBitmap.ToPngArray();
-        System.IO.File.WriteAllBytes(fileName, pngBytes);
+        await System.IO.File.WriteAllBytesAsync(fileName, pngBytes);
     }
 
     [RelayCommand]
@@ -1964,9 +2544,15 @@ public partial class BinaryEditViewModel : ObservableObject
             return;
         }
 
+        // The new line ends one gap BEFORE the selected line starts (this used to ADD the gap,
+        // overlapping the selected line - and setting EndTime before StartTime let the
+        // duration-preserving property cascade shrink the new line to gap length). StartTime
+        // must be set first, like InsertAfter does.
         var newItem = new BinarySubtitleItem(selectedItem);
-        newItem.EndTime = TimeSpan.FromMilliseconds(selectedItem.StartTime.TotalMilliseconds + Se.Settings.General.MinimumBetweenLines.GetMilliseconds());
-        newItem.StartTime = TimeSpan.FromMilliseconds(newItem.EndTime.TotalMilliseconds - Se.Settings.General.NewEmptyDefaultMs);
+        var newEndMs = Math.Max(selectedItem.StartTime.TotalMilliseconds - Se.Settings.General.MinimumBetweenLines.GetMilliseconds(), 0);
+        var newStartMs = Math.Max(newEndMs - Se.Settings.General.NewEmptyDefaultMs, 0);
+        newItem.StartTime = TimeSpan.FromMilliseconds(newStartMs);
+        newItem.EndTime = TimeSpan.FromMilliseconds(newEndMs);
         var selectedIndex = SubtitleGrid.SelectedIndex;
         Subtitles.Insert(selectedIndex, newItem);
         Renumber();
@@ -2169,6 +2755,64 @@ public partial class BinaryEditViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private async Task RemoveFades()
+    {
+        if (Window == null)
+        {
+            return;
+        }
+
+        if (Subtitles.Count == 0)
+        {
+            await MessageBox.Show(Window, Se.Language.General.Information,
+                Se.Language.Tools.ImageBasedEdit.NoImageSubtitlesLoaded,
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var selectedItem = SelectedSubtitle;
+        var items = Subtitles.ToList();
+        var removed = FadeRemover.RemoveFades(items);
+        if (removed == 0)
+        {
+            await MessageBox.Show(Window, Se.Language.General.Information,
+                Se.Language.Tools.ImageBasedEdit.RemoveFadeInOutNothingFound,
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        foreach (var item in Subtitles)
+        {
+            item.PropertyChanged -= OnSubtitleItemPropertyChanged;
+        }
+
+        Subtitles.Clear();
+        foreach (var item in items)
+        {
+            Subtitles.Add(item);
+            item.PropertyChanged += OnSubtitleItemPropertyChanged;
+        }
+
+        Renumber();
+        _isDirty = true;
+        if (SubtitleGrid != null)
+        {
+            var newIndex = selectedItem != null ? Subtitles.IndexOf(selectedItem) : -1;
+            SubtitleGrid.ItemsSource = null;
+            SubtitleGrid.ItemsSource = Subtitles;
+            SelectAndScrollToRow(Math.Max(0, newIndex));
+        }
+
+        UpdateOverlayPosition();
+        RefreshPositionMonitor();
+        RefreshStatusText();
+
+        await MessageBox.Show(Window, Se.Language.General.Information,
+            string.Format(Se.Language.Tools.ImageBasedEdit.RemoveFadeInOutXLinesRemoved, removed),
+            MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    [RelayCommand]
     private void SortByStartTime()
     {
         var selectedItem = SelectedSubtitle;
@@ -2199,7 +2843,7 @@ public partial class BinaryEditViewModel : ObservableObject
             return;
         }
 
-        var fileName = await _fileHelper.PickOpenFile(Window, Se.Language.General.OpenSubtitleFileTitle, Se.Language.General.ImageBasedSubtitles, "*.sup;*.sub;*.ts;*.xml;*.mkv;*.mks", Se.Language.General.AllFiles, "*.*");
+        var fileName = await _fileHelper.PickOpenFile(Window, Se.Language.General.OpenSubtitleFileTitle, Se.Language.General.ImageBasedSubtitles, "*.sup;*.sub;*.ts;*.m2ts;*.mts;*.rec;*.mkv;*.mks;*.mp4;*.m4v;*.mov;*.3gp;*.avi;*.divx;*.xml;*.ttml;*.dfxp;*.vtt;*.webvtt", Se.Language.General.AllFiles, "*.*");
         if (string.IsNullOrEmpty(fileName))
         {
             return;
@@ -2220,14 +2864,14 @@ public partial class BinaryEditViewModel : ObservableObject
         var imageSubtitle = await LoadImageSubtitle(fileName);
         if (imageSubtitle == null)
         {
-            await MessageBox.Show(Window, Se.Language.General.Error, "Image based subtitle format not found/supported.", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            await MessageBox.Show(Window, Se.Language.General.Error, Se.Language.Tools.ImageBasedEdit.ImageBasedFormatNotSupported, MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
 
         var ocrItems = imageSubtitle.MakeOcrSubtitleItems();
         if (ocrItems.Count == 0)
         {
-            await MessageBox.Show(Window, Se.Language.General.Error, "No subtitles found in the file.", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            await MessageBox.Show(Window, Se.Language.General.Error, Se.Language.General.NoSubtitlesFound, MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
 
@@ -2598,12 +3242,13 @@ public partial class BinaryEditViewModel : ObservableObject
 
     private void PerformCleanup()
     {
-        if (VideoPlayerControl == null)
-            return;
-        if (string.IsNullOrWhiteSpace(VideoPlayerControl.VideoPlayer.FileName))
-            return;
-        VideoPlayerControl.VideoPlayer.CloseFile();
+        // Always save the window position - it used to sit behind the video checks below,
+        // so closing without ever opening a video forgot the window placement.
         UiUtil.SaveWindowPosition(Window);
+
+        // Dispose the player core even when no video was ever opened - MakeVideoPlayer already
+        // created the mpv core and the position pump, and only CloseAndDisposePlayer frees them.
+        VideoPlayerControl?.CloseAndDisposePlayer();
     }
 
     public void Loaded()
@@ -2726,8 +3371,8 @@ public partial class BinaryEditViewModel : ObservableObject
     {
         foreach (var s in subtitles)
         {
-            var newStart = TimeSpan.FromMilliseconds(s.StartTime.TotalMilliseconds * factor);
-            var newEnd = TimeSpan.FromMilliseconds(s.EndTime.TotalMilliseconds * factor);
+            var newStart = TimeSpanExtensions.FromMillisecondsWholeMilliseconds(s.StartTime.TotalMilliseconds * factor);
+            var newEnd = TimeSpanExtensions.FromMillisecondsWholeMilliseconds(s.EndTime.TotalMilliseconds * factor);
             s.StartTime = newStart;
             s.EndTime = newEnd;
         }
@@ -2812,13 +3457,38 @@ public partial class BinaryEditViewModel : ObservableObject
                 }
             }
 
+            // One pass, bottom up: IndexOf + Remove per selected row is a scan of the collection
+            // each, which made select all + delete O(rows * rows) on a full Blu-ray sup.
+            var firstRemovedIndex = -1;
+            var removeSet = new HashSet<BinarySubtitleItem>(itemsToRemove);
+            for (var i = Subtitles.Count - 1; i >= 0 && removeSet.Count > 0; i--)
+            {
+                if (removeSet.Remove(Subtitles[i]))
+                {
+                    Subtitles.RemoveAt(i);
+                    firstRemovedIndex = i;
+                }
+            }
+
+            if (removeSet.Count > 0)
+            {
+                firstRemovedIndex = -1; // a row that was not in the list: IndexOf gave -1, and Min picked it
+            }
+
             foreach (var item in itemsToRemove)
             {
-                Subtitles.Remove(item);
                 item.Bitmap?.Dispose();
             }
 
             Renumber();
+
+            // Keep a row selected after the delete (grid-removal invariant): the line that
+            // moved up into the gap, or the new last line when the tail was deleted.
+            if (Subtitles.Count > 0 && firstRemovedIndex >= 0)
+            {
+                SelectAndScrollToRow(Math.Min(firstRemovedIndex, Subtitles.Count - 1));
+            }
+
             RefreshStatusText();
 
             return;

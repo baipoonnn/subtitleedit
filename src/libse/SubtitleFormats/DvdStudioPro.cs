@@ -223,6 +223,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             var sb = new StringBuilder();
             bool italicOn = false;
             bool boldOn = false;
+            bool underlineOn = false;
             bool skipNext = false;
             for (int i = 0; i < text.Length; i++)
             {
@@ -232,16 +233,22 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 }
                 else
                 {
-                    if (text.Substring(i).StartsWith("^I", StringComparison.Ordinal))
+                    if (text.StartsWithAt(i, "^I", StringComparison.Ordinal))
                     {
                         sb.Append(!italicOn ? "<i>" : "</i>");
                         italicOn = !italicOn;
                         skipNext = true;
                     }
-                    else if (text.Substring(i).StartsWith("^B", StringComparison.Ordinal))
+                    else if (text.StartsWithAt(i, "^B", StringComparison.Ordinal))
                     {
                         sb.Append(!boldOn ? "<b>" : "</b>");
                         boldOn = !boldOn;
+                        skipNext = true;
+                    }
+                    else if (text.StartsWithAt(i, "^U", StringComparison.Ordinal))
+                    {
+                        sb.Append(!underlineOn ? "<u>" : "</u>");
+                        underlineOn = !underlineOn;
                         skipNext = true;
                     }
                     else

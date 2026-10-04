@@ -25,6 +25,65 @@ public class RemoveTextForHearingImpairedViewModelTests
         Assert.True(vm.IsSettingsMode);
     }
 
+    /// <summary>
+    /// The 500 ms timer used to run the whole HI pass over every line on the UI thread on every
+    /// tick. It now only does so when an input changed - so every input has to mark it dirty.
+    /// </summary>
+    [AvaloniaFact]
+    public void Preview_IsOnlyDirty_AfterAnInputChanged()
+    {
+        var vm = Resolve();
+        var sub = new Subtitle();
+        sub.Paragraphs.Add(new Paragraph("[door slams] Hello", 0, 1000));
+        vm.Initialize(sub);
+        Assert.True(vm.IsPreviewDirty); // first tick must build the list
+
+        vm.GeneratePreview();
+        Assert.False(vm.IsPreviewDirty);
+        Assert.Single(vm.Fixes);
+
+        vm.SelectedFix = vm.Fixes[0]; // browsing the fix list is not an input
+        Assert.False(vm.IsPreviewDirty);
+
+        vm.IsRemoveBracketsOn = !vm.IsRemoveBracketsOn;
+        Assert.True(vm.IsPreviewDirty);
+        vm.GeneratePreview();
+        Assert.False(vm.IsPreviewDirty);
+
+        vm.TextContains = "abc";
+        Assert.True(vm.IsPreviewDirty);
+        vm.GeneratePreview();
+
+        vm.SelectedLanguage = vm.Languages.First(l => l.Code == "da");
+        Assert.True(vm.IsPreviewDirty);
+    }
+
+    [AvaloniaFact]
+    public void Preview_CarriesCheckboxStatesOverById_WithManyFixes()
+    {
+        var vm = Resolve();
+        var sub = new Subtitle();
+        for (var i = 0; i < 50; i++)
+        {
+            sub.Paragraphs.Add(new Paragraph(i % 2 == 0 ? $"[noise {i}] Hello {i}" : $"Plain {i}", i * 1000, i * 1000 + 900));
+        }
+
+        vm.Initialize(sub);
+        vm.IsRemoveBracketsOn = true;
+        vm.GeneratePreview();
+        Assert.Equal(25, vm.Fixes.Count);
+        vm.Fixes[3].Apply = false;
+        vm.Fixes[7].Apply = false;
+        var unticked = new[] { vm.Fixes[3].Paragraph.Id, vm.Fixes[7].Paragraph.Id };
+
+        vm.IsRemoveTextUppercaseLineOn = !vm.IsRemoveTextUppercaseLineOn; // forces a rebuilt list...
+        sub.Paragraphs[0].Text = "[other] Changed";                        // ...that differs from the old one
+        vm.GeneratePreview();
+
+        Assert.Equal(25, vm.Fixes.Count);
+        Assert.Equal(unticked, vm.Fixes.Where(f => !f.Apply).Select(f => f.Paragraph.Id).ToArray());
+    }
+
     [AvaloniaFact]
     public void Apply_PushesTickedFixesToCallback_WithoutNeedingOk()
     {
@@ -146,5 +205,43 @@ public class RemoveTextForHearingImpairedViewModelTests
         vm.OnKeyDown(withShift);
         Assert.True(withShift.Handled);
         Assert.True(vm.Fixes[0].Apply);
+    }
+
+    // #13591: the HI pass rebuilds the text with Environment.NewLine, so a paragraph holding a
+    // foreign line break must not be offered as a fix that renders exactly like the original.
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    [InlineData("\r")]
+    public void LineBreakOnlyDifference_IsNotAFix(string lineBreak)
+    {
+        const string first = "I told him to get lost,";
+        const string second = "and when he vanished with the light,";
+
+        Assert.False(RemoveTextForHearingImpairedViewModel.IsVisibleChange(
+            first + lineBreak + second,
+            first + Environment.NewLine + second));
+    }
+
+    [AvaloniaTheory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public void PlainTextWithAnyLineBreak_GivesNoFixes(string lineBreak)
+    {
+        var vm = Resolve();
+        var sub = new Subtitle();
+        sub.Paragraphs.Add(new Paragraph(
+            "I told him to get lost," + lineBreak + "and when he vanished with the light,", 0, 3000));
+        vm.Initialize(sub, _ => { });
+
+        vm.GeneratePreview();
+
+        Assert.Empty(vm.Fixes);
+    }
+
+    [Fact]
+    public void RealChange_IsStillAFix()
+    {
+        Assert.True(RemoveTextForHearingImpairedViewModel.IsVisibleChange("[door slams]" + Environment.NewLine + "Hello", "Hello"));
     }
 }

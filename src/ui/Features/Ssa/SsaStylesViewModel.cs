@@ -95,6 +95,18 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
     /// the item list would make Avalonia clear the selection and null out the style's font.
     /// Make sure the font is listed before the style becomes current (#13101).
     /// </summary>
+    /// <summary>
+    /// The border type combo is not bound to CurrentStyle - it writes its selection into the
+    /// current style (BorderTypeChanged). Keep it in sync on every change of the current style,
+    /// or it would show (and on its next selection change write) another style's border type:
+    /// Initialize left it at the last file style's, and deleting a file style kept the deleted
+    /// one's. Both were only corrected by the grid's selection event.
+    /// </summary>
+    partial void OnCurrentStyleChanged(StyleDisplay? value)
+    {
+        SelectedBorderType = value?.BorderStyle ?? BorderTypes[0];
+    }
+
     partial void OnCurrentStyleChanging(StyleDisplay? value)
     {
         var fontName = value?.FontName;
@@ -124,21 +136,59 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
     }
 
     [RelayCommand]
-    private void Ok()
+    private async Task Ok()
     {
+        if (!await ValidateFileStyleNames())
+        {
+            return;
+        }
+
         OkPressed = true;
         SaveFileStylesToHeader();
         SaveSettings();
         Close();
     }
 
+    /// <summary>
+    /// Hands the current styles to the main window without closing. OkPressed stays false: it
+    /// is only for OK, so a later Cancel keeps what was applied instead of also applying the
+    /// edits made after Apply.
+    /// </summary>
     [RelayCommand]
-    private void Apply()
+    private async Task Apply()
     {
-        OkPressed = true;
+        if (!await ValidateFileStyleNames())
+        {
+            return;
+        }
+
         SaveFileStylesToHeader();
         SaveSettings();
         _applySsaStyles?.ApplySsaStyles(this);
+    }
+
+    // An empty or duplicate name would be written to the header as is (see FileStyleNameValidator).
+    // The offending style is selected so it can be fixed.
+    private async Task<bool> ValidateFileStyleNames()
+    {
+        var invalid = FileStyleNameValidator.FindInvalidName(FileStyles);
+        if (invalid == null)
+        {
+            return true;
+        }
+
+        SelectedFileStyle = invalid.Value.Style;
+        if (Window != null)
+        {
+            await MessageBox.Show(
+                Window,
+                Se.Language.General.Error,
+                invalid.Value.Message,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+
+        return false;
     }
 
     [RelayCommand]
@@ -362,10 +412,11 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
             return;
         }
 
-        var ssaStyles = FileStyles.Where(p => p.UsageCount > 0 && p.Name != selectedStyle.Name).Select(p => p.ToSsaStyle()).ToList();
+        var usedStyles = FileStyles.Where(p => p.UsageCount > 0 && p.Name != selectedStyle.Name).ToList();
         var result = await _windowService.ShowDialogAsync<AssaStylePickerWindow, AssaStylePickerViewModel>(Window, vm =>
         {
-            var styles = ssaStyles.Select(p => StripAlpha(new StyleDisplay(p))).ToList();
+            // ToSsaStyle() does not carry the usage count, which is the column this picker shows
+            var styles = usedStyles.Select(p => StripAlpha(new StyleDisplay(p.ToSsaStyle()) { UsageCount = p.UsageCount })).ToList();
             vm.Initialize(Se.Language.Assa.TakeUsagesFromDotDotDot, styles, Se.Language.General.Ok, true);
         });
 
@@ -631,7 +682,7 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
         string selectedStyleName,
         IApplySsaStyles? applySsaStyles)
     {
-        Title = string.Format(Se.Language.Assa.StylesTitleX, fileName);
+        Title = UiUtil.FormatTitleWithFileName(Se.Language.Assa.StylesTitleX, fileName);
         Header = subtitle.Header;
         _subtitle = new Subtitle(subtitle, false);
         _subtitleFileName = fileName;
@@ -650,7 +701,6 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
             if (style != null)
             {
                 var display = StripAlpha(new StyleDisplay(style));
-                SelectedBorderType = display.BorderStyle;
                 FileStyles.Add(display);
 
                 var fontName = display.FontName;
@@ -782,14 +832,17 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
 
         if (style.BorderStyle.Style == BorderStyleType.BoxPerLine)
         {
+            // The other two branches resolve the libass face name to a Skia family and pass
+            // (outlineColor, shadowColor) in that order; this one used the raw face name and had
+            // the two colors the wrong way round, so the shadow came out in the outline color.
             bitmap = TextToImageGenerator.GenerateImageWithPadding(
                 text,
-                style.FontName,
+                libAssFontName,
                 fontSize,
                 style.Bold,
                 style.ColorPrimary.ToSKColor(),
-                style.ColorShadow.ToSKColor(),
                 style.ColorOutline.ToSKColor(),
+                style.ColorShadow.ToSKColor(),
                 style.ColorOutline.ToSKColor(),
                 0,
                 (float)style.ShadowWidth,
@@ -799,8 +852,10 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
 
             if (style.ShadowWidth > 0)
             {
-                bitmap = TextToImageGenerator.AddShadowToBitmap(bitmap,
+                var withShadow = TextToImageGenerator.AddShadowToBitmap(bitmap,
                     (int)Math.Round(style.ShadowWidth, MidpointRounding.AwayFromZero), style.ColorShadow.ToSKColor());
+                bitmap.Dispose();
+                bitmap = withShadow;
             }
         }
         else if (style.BorderStyle.Style == BorderStyleType.OneBox)
@@ -840,8 +895,11 @@ public partial class SsaStylesViewModel : ObservableObject, IClosingCleanup
                 isStrikeout: style.Strikeout);
         }
 
-        var frame = TextToImageGenerator.ComposeOnPreviewFrame(bitmap, GetAlignment(style), style.MarginLeft, style.MarginRight, style.MarginVertical);
+        // A 500 ms timer re-renders this for as long as the dialog is open, and ToAvaloniaBitmap
+        // copies the pixels out, so both native bitmaps must go or the preview leaks ~1 MB a tick.
+        using var frame = TextToImageGenerator.ComposeOnPreviewFrame(bitmap, GetAlignment(style), style.MarginLeft, style.MarginRight, style.MarginVertical);
         ImagePreview = frame.ToAvaloniaBitmap();
+        bitmap.Dispose();
     }
 
     private static int GetPlayResY(string? header)

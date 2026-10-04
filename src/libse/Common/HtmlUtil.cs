@@ -437,8 +437,9 @@ namespace Nikse.SubtitleEdit.Core.Common
         /// </summary>
         /// <param name="input">The input string that may contain HTML tags.</param>
         /// <param name="alsoSsaTags">A boolean value indicating whether SSA tags should also be removed.</param>
+        /// <param name="alsoSsaCommentBlocks">With <paramref name="alsoSsaTags"/>, also remove ASSA comment blocks like {comment}.</param>
         /// <returns>A new string with all HTML tags removed, and optionally SSA tags removed.</returns>
-        public static string RemoveHtmlTags(string input, bool alsoSsaTags = false)
+        public static string RemoveHtmlTags(string input, bool alsoSsaTags = false, bool alsoSsaCommentBlocks = false)
         {
             if (input == null || input.Length < 3)
             {
@@ -448,7 +449,7 @@ namespace Nikse.SubtitleEdit.Core.Common
             var s = input;
             if (alsoSsaTags)
             {
-                s = Utilities.RemoveSsaTags(s);
+                s = Utilities.RemoveSsaTags(s, removeCommentBlocks: alsoSsaCommentBlocks);
             }
 
             if (s.IndexOf('<') < 0)
@@ -565,21 +566,36 @@ namespace Nikse.SubtitleEdit.Core.Common
                 int arrayIndex = 0;
                 ReadOnlySpan<char> span = s.AsSpan();
 
+                // Hop from '<' to '<' and bulk-copy the stretch in between instead of
+                // testing every char - most of a subtitle line is plain text.
                 for (var i = 0; i < span.Length;)
                 {
-                    // If we hit an opening bracket, check if it's a target tag
-                    if (span[i] == '<')
+                    var rest = span.Slice(i);
+                    var tagStart = rest.IndexOf('<');
+                    if (tagStart < 0)
                     {
-                        if (TryGetTagLength(span.Slice(i), out int tagLength))
-                        {
-                            i += tagLength;
-                            continue;
-                        }
+                        rest.CopyTo(buffer.Slice(arrayIndex));
+                        arrayIndex += rest.Length;
+                        break;
                     }
 
-                    // Normal character processing
-                    buffer[arrayIndex++] = span[i];
-                    i++;
+                    if (tagStart > 0)
+                    {
+                        rest.Slice(0, tagStart).CopyTo(buffer.Slice(arrayIndex));
+                        arrayIndex += tagStart;
+                        i += tagStart;
+                    }
+
+                    if (TryGetTagLength(span.Slice(i), out int tagLength))
+                    {
+                        i += tagLength;
+                    }
+                    else
+                    {
+                        // A '<' that does not start a known tag is kept as-is
+                        buffer[arrayIndex++] = '<';
+                        i++;
+                    }
                 }
 
                 // Nothing was stripped (e.g. a stray '<' that is not a known tag);
@@ -864,6 +880,14 @@ namespace Nikse.SubtitleEdit.Core.Common
         /// <returns>A string with corrected italic tags.</returns>
         public static string FixInvalidItalicTags(string input)
         {
+            // Every transformation below requires a '<' somewhere in the text (the "{\...}"
+            // prefix is only sliced off to be re-prepended verbatim), and most subtitle lines
+            // carry no tags at all - so skip the ~50 full-string Replace scans for those.
+            if (string.IsNullOrEmpty(input) || input.IndexOf('<') < 0)
+            {
+                return input;
+            }
+
             var text = input;
 
             var preTags = string.Empty;
@@ -1050,7 +1074,13 @@ namespace Nikse.SubtitleEdit.Core.Common
                     if (newLineIndex > 0)
                     {
                         var firstLine = text.Substring(0, newLineIndex).Trim();
-                        var secondLine = text.Substring(newLineIndex + 2).Trim();
+                        // Skip the separator by its real length, not a hard-coded 2: on Linux and
+                        // macOS Environment.NewLine is "\n", so a text whose only line break was
+                        // the final character indexed one past the end and threw
+                        // ArgumentOutOfRangeException out of RemoveHtmlTags (which routes here for
+                        // any text containing "< "). Every sibling line in this method already
+                        // uses Environment.NewLine.Length; on Windows this is the same value 2.
+                        var secondLine = text.Substring(newLineIndex + Environment.NewLine.Length).Trim();
                         if (firstLine.EndsWith(endTag, StringComparison.Ordinal))
                         {
                             firstLine = beginTag + firstLine;
@@ -1078,7 +1108,9 @@ namespace Nikse.SubtitleEdit.Core.Common
                 text = beginTag + text + endTag;
             }
 
-            if (italicBeginTagCount == 0 && italicEndTagCount == 2)
+            // "else if": the counts above are stale after the block just ran, so this used to undo
+            // it - rewriting the closing tag it had just added into a second opening tag.
+            else if (italicBeginTagCount == 0 && italicEndTagCount == 2)
             {
                 var firstIndex = text.IndexOf(endTag, StringComparison.Ordinal);
                 text = text.Remove(firstIndex, endTag.Length).Insert(firstIndex, beginTag);
@@ -1120,7 +1152,9 @@ namespace Nikse.SubtitleEdit.Core.Common
 
                 //FALCONE:<i> I didn't think</i><br /><i>it was going to be you,</i>
                 var colIdx = text.IndexOf(':');
-                if (colIdx >= 0 && Utilities.CountTagInText(text, beginTag) + Utilities.CountTagInText(text, endTag) == 4 && text.Length > colIdx + 1 && !char.IsDigit(text[colIdx + 1]))
+                // index is -1 for a text broken with a bare "\n" on Windows (GetNumberOfLines counts
+                // '\n'), and Substring(0, -1) threw - same guard as the sibling branches.
+                if (index > 0 && colIdx >= 0 && Utilities.CountTagInText(text, beginTag) + Utilities.CountTagInText(text, endTag) == 4 && text.Length > colIdx + 1 && !char.IsDigit(text[colIdx + 1]))
                 {
                     var firstLine = text.Substring(0, index);
                     var secondLine = text.Substring(index).TrimStart();
@@ -1155,7 +1189,11 @@ namespace Nikse.SubtitleEdit.Core.Common
 
             //<i>- You think they're they gone?<i>
             //<i>- That can't be.</i>
-            if (italicBeginTagCount == 3 && italicEndTagCount == 1 && noOfLines == 2)
+            // GetNumberOfLines counts '\n', so noOfLines is 2 for a text broken with a bare "\n"
+            // too - and on Windows IndexOf(Environment.NewLine) then returns -1 and Substring
+            // threw. The sibling branches in this method all guard the index the same way.
+            if (italicBeginTagCount == 3 && italicEndTagCount == 1 && noOfLines == 2 &&
+                text.IndexOf(Environment.NewLine, StringComparison.Ordinal) > 0)
             {
                 var newLineIdx = text.IndexOf(Environment.NewLine, StringComparison.Ordinal);
                 var firstLine = text.Substring(0, newLineIdx).Trim();
@@ -1528,11 +1566,11 @@ namespace Nikse.SubtitleEdit.Core.Common
         }
 
 #if NET7_0_OR_GREATER
-        [GeneratedRegex("[ ]*(COLOR|color|Color)=[\"']*[#\\dA-Za-z]*[\"']*[ ]*")]
+        [GeneratedRegex("[ ]*(COLOR|color|Color)=[\"']*[#\\dA-Za-z]*(?:\\([^()<>\"']*\\))?[\"']*[ ]*")]
         private static partial Regex ColorAttributeRegexGen();
         private static readonly Regex ColorAttributeRegex = ColorAttributeRegexGen();
 #else
-        private static readonly Regex ColorAttributeRegex = new Regex("[ ]*(COLOR|color|Color)=[\"']*[#\\dA-Za-z]*[\"']*[ ]*", RegexOptions.Compiled);
+        private static readonly Regex ColorAttributeRegex = new Regex("[ ]*(COLOR|color|Color)=[\"']*[#\\dA-Za-z]*(?:\\([^()<>\"']*\\))?[\"']*[ ]*", RegexOptions.Compiled);
 #endif
 
         /// <summary>
@@ -1542,6 +1580,14 @@ namespace Nikse.SubtitleEdit.Core.Common
         /// <returns>A new string with color tags removed.</returns>
         public static string RemoveColorTags(string input)
         {
+            // The loop below restarts the regex from index 0 after every hit and rebuilds the
+            // whole string twice per hit, so it is worth not entering it at all: the pattern can
+            // only match "COLOR=" or "color=", and most lines carry neither.
+            if (input.IndexOf("olor", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                return input.Trim();
+            }
+
             var r = ColorAttributeRegex;
             var s = input;
             var match = r.Match(s);
@@ -1563,14 +1609,14 @@ namespace Nikse.SubtitleEdit.Core.Common
                             endIndex = s.IndexOf("< /font>", match.Index - 5, StringComparison.OrdinalIgnoreCase);
                             if (endIndex >= 0)
                             {
-                                s = s.Remove(endIndex, 7);
+                                s = s.Remove(endIndex, 8);
                             }
                             else
                             {
                                 endIndex = s.IndexOf("</ font>", match.Index - 5, StringComparison.OrdinalIgnoreCase);
                                 if (endIndex >= 0)
                                 {
-                                    s = s.Remove(endIndex, 7);
+                                    s = s.Remove(endIndex, 8);
                                 }
                             }
                         }
@@ -1662,11 +1708,48 @@ namespace Nikse.SubtitleEdit.Core.Common
         /// </summary>
         /// <param name="s">The input string from which to remove the alignment tags.</param>
         /// <returns>A new string without ASS and SSA alignment tags.</returns>
+        /// <summary>
+        /// True when <paramref name="s"/> can hold one of the alignment tags
+        /// <see cref="RemoveAssAlignmentTags"/> strips. Every one of its 45 patterns is an 'a'
+        /// directly after '\\' or '{', followed by 1-9 or by 'n' and 1-9, so one scan tells the
+        /// ASSA lines that carry an alignment tag from the far more common ones that only carry
+        /// \pos, \fad, \c and friends - which would otherwise pay all 45 Replace scans.
+        /// </summary>
+        private static bool HasAlignmentTag(string s)
+        {
+            for (var i = 1; i + 1 < s.Length; i++)
+            {
+                if (s[i] != 'a')
+                {
+                    continue;
+                }
+
+                var previous = s[i - 1];
+                if (previous != '\\' && previous != '{')
+                {
+                    continue;
+                }
+
+                var next = s[i + 1];
+                if (next >= '1' && next <= '9')
+                {
+                    return true;
+                }
+
+                if (next == 'n' && i + 2 < s.Length && s[i + 2] >= '1' && s[i + 2] <= '9')
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         public static string RemoveAssAlignmentTags(string s)
         {
             // Every pattern below contains a backslash, so plain text (the common case in
             // batch convert) skips all 45 Replace scans.
-            if (s.IndexOf('\\') < 0)
+            if (s.IndexOf('\\') < 0 || !HasAlignmentTag(s))
             {
                 return s;
             }

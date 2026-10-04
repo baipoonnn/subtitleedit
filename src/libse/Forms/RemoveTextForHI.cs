@@ -3,11 +3,52 @@ using Nikse.SubtitleEdit.Core.Forms.FixCommonErrors;
 using System;
 using System.Collections.Generic;
 using System.Text;
+#if NET8_0_OR_GREATER
+using System.Buffers;
+#endif
 
 namespace Nikse.SubtitleEdit.Core.Forms
 {
     public class RemoveTextForHI
     {
+        private static readonly CharLookup MusicSymbols = CharLookup.Create('\u266A', '\u266B');
+
+        // ShouldRemoveNarrator runs for every colon in the file and used to allocate all three
+        // of these sets on every call. Hoisting the string[] literals alone measured *slower*
+        // than the throw-away arrays, so the sets are prepared as multi-value searches instead:
+        // one pass over the text each, rather than two and fifteen separate IndexOf sweeps.
+        private static readonly string[] NarratorSkipWords =
+        {
+            "Previously on",
+            "Improved by",
+            " is ",
+            " are ",
+            " were ",
+            " was ",
+            " think ",
+            " guess ",
+            " will ",
+            " believe ",
+            " say ",
+            " said ",
+            " do ",
+            " want ",
+            "That's "
+        };
+
+        private static readonly string[] NarratorSkipUrlOrList = { "http", ", " };
+        private static readonly char[] NarratorSkipPunctuation = { '!', '?', '\u00BF', '\u00A1' };
+#if NET8_0_OR_GREATER
+        private static readonly SearchValues<string> NarratorSkipWordsSearch =
+            SearchValues.Create(NarratorSkipWords, StringComparison.OrdinalIgnoreCase);
+
+        private static readonly SearchValues<string> NarratorSkipUrlOrListSearch =
+            SearchValues.Create(NarratorSkipUrlOrList, StringComparison.OrdinalIgnoreCase);
+
+        private static readonly SearchValues<char> NarratorSkipPunctuationSearch =
+            SearchValues.Create(NarratorSkipPunctuation);
+#endif
+
         public RemoveTextForHISettings Settings { get; set; }
 
         public List<int> Warnings { get; set; }
@@ -66,49 +107,67 @@ namespace Nikse.SubtitleEdit.Core.Forms
             }
 
             var newText = input;
-            const string endChars = ".?!";
             for (var i = 6; i < newText.Length; i++)
             {
-                var s = newText.Substring(i);
-                if (s.Length > 2 && endChars.Contains(s[0]))
+                // The tail past i used to be materialized with newText.Substring(i) on every
+                // character, and then sliced again two or three times - quadratic in time and
+                // allocation for every line this runs on. Everything below the sentence-ending
+                // character is index arithmetic now; the tail is only built once a candidate
+                // prefix has actually matched.
+                var ch = newText[i];
+                if (newText.Length - i <= 2 || (ch != '.' && ch != '?' && ch != '!'))
                 {
-                    var pre = string.Empty;
+                    continue;
+                }
 
-                    s = s.Remove(0, 1);
-                    if (s.StartsWith(' '))
-                    {
-                        pre = s.StartsWith(" <i>", StringComparison.Ordinal) ? " <i>" : " ";
-                    }
-                    else if (s.StartsWith("<i>", StringComparison.Ordinal))
-                    {
-                        pre = "<i>";
-                    }
-                    else if (s.StartsWith("</i>", StringComparison.Ordinal))
-                    {
-                        pre = "</i>";
-                    }
+                // "s" in the old code started here (the sentence-ending character removed).
+                var tail = i + 1;
+                var pre = string.Empty;
+                if (newText[tail] == ' ')
+                {
+                    pre = StartsWithAt(newText, tail, " <i>") ? " <i>" : " ";
+                }
+                else if (StartsWithAt(newText, tail, "<i>"))
+                {
+                    pre = "<i>";
+                }
+                else if (StartsWithAt(newText, tail, "</i>"))
+                {
+                    pre = "</i>";
+                }
 
-                    if (pre.Length > 0)
-                    {
-                        s = s.Remove(0, pre.Length);
-                        if (s.Length > 1 && s[0] == ' ')
-                        {
-                            pre += " ";
-                            s = s.Remove(0, 1);
-                        }
+                if (pre.Length == 0)
+                {
+                    continue;
+                }
 
-                        if (HasHearImpairedTagsAtStartOrEnd(s))
-                        {
-                            s = RemoveStartEndTags(s);
-                            newText = newText.Substring(0, i + 1) + pre + " " + s;
-                            newText = newText.Replace("<i></i>", string.Empty);
-                            newText = newText.Replace("<i> </i>", " ").FixExtraSpaces();
-                        }
-                    }
+                var rest = tail + pre.Length;
+                if (newText.Length - rest > 1 && newText[rest] == ' ')
+                {
+                    pre += " ";
+                    rest++;
+                }
+
+                var s = newText.Substring(rest);
+                if (HasHearImpairedTagsAtStartOrEnd(s))
+                {
+                    s = RemoveStartEndTags(s);
+                    newText = newText.Substring(0, i + 1) + pre + " " + s;
+                    newText = newText.Replace("<i></i>", string.Empty);
+                    newText = newText.Replace("<i> </i>", " ").FixExtraSpaces();
                 }
             }
 
             return newText;
+        }
+
+        /// <summary>
+        /// Ordinal <c>text.Substring(index).StartsWith(value)</c> without the substring.
+        /// </summary>
+        private static bool StartsWithAt(string text, int index, string value)
+        {
+            return text.Length - index >= value.Length &&
+                   string.CompareOrdinal(text, index, value, 0, value.Length) == 0;
         }
 
         private static readonly string[] ExpectedStrings = { ". ", "! ", "? " };
@@ -130,17 +189,19 @@ namespace Nikse.SubtitleEdit.Core.Forms
                 }
             }
 
+            var lines = text.Trim().SplitToLines();
+
             // House 7x01 line 52: and she would like you to do three things:
             // Okay or remove???
             var noTagText = HtmlUtil.RemoveHtmlTags(text);
-            if (noTagText.Length > 10 && noTagText.IndexOf(':') == noTagText.Length - 1 && !Utilities.IsAllUppercase(noTagText))
+            if (noTagText.Length > 10 && noTagText.IndexOf(':') == noTagText.Length - 1 && !Utilities.IsAllUppercase(noTagText) &&
+                !IsSpeakerNameLine(lines, lines.Count - 1))
             {
                 return preAssTag + text;
             }
 
             var language = Settings.NameList != null ? Settings.NameList.LanguageName : "en";
             var newText = string.Empty;
-            var lines = text.Trim().SplitToLines();
             var noOfNames = 0;
             var count = 0;
             var removedInFirstLine = false;
@@ -150,7 +211,8 @@ namespace Nikse.SubtitleEdit.Core.Forms
             {
                 var indexOfColon = line.IndexOf(':');
                 var isLastColon = count == lines.Count - 1 && !HtmlUtil.RemoveHtmlTags(line).TrimEnd(':').Contains(':');
-                if (indexOfColon <= 0 || IsInsideBrackets(line, indexOfColon) || (isLastColon && Utilities.CountTagInText(HtmlUtil.RemoveHtmlTags(line), ' ') > 1))
+                if (indexOfColon <= 0 || IsInsideBrackets(line, indexOfColon) ||
+                    (isLastColon && Utilities.CountTagInText(HtmlUtil.RemoveHtmlTags(line), ' ') > 1 && !IsSpeakerNameLine(lines, count)))
                 {
                     newText = (newText + Environment.NewLine + line).Trim();
 
@@ -528,7 +590,10 @@ namespace Nikse.SubtitleEdit.Core.Forms
                 count++;
             }
             newText = newText.Trim();
-            if ((noOfNames > 0 || removedInFirstLine) && Utilities.GetNumberOfLines(newText) == 2)
+            // a single name that took up a whole line of its own says nothing about the
+            // speakers of the remaining lines - only names removed from a line that
+            // survived (or a second name) mean there really is a dialog here
+            if ((noOfNames > 1 || removedInFirstLine || removedInSecondLine) && Utilities.GetNumberOfLines(newText) == 2)
             {
                 var indexOfDialogChar = newText.IndexOf('-');
                 var insertDash = true;
@@ -582,7 +647,10 @@ namespace Nikse.SubtitleEdit.Core.Forms
                     }
                 }
 
-                if (insertDash)
+                // arr came from SplitToLines, which accepts "\n", "\r" and "\r\n" alike, so on
+                // Windows a text broken with a bare "\n" reached the Substring below with an index
+                // of -1 and threw out of the whole Remove-text-for-HI run.
+                if (insertDash && newText.IndexOf(Environment.NewLine, StringComparison.Ordinal) >= 0)
                 {
                     if (indexOfDialogChar < 0 || indexOfDialogChar > 4)
                     {
@@ -643,25 +711,27 @@ namespace Nikse.SubtitleEdit.Core.Forms
             else if (noOfNames == 2 && Utilities.GetNumberOfLines(newText) == 3 && Utilities.GetNumberOfLines(text) == 3)
             {
                 var dialogHelper = new DialogSplitMerge { DialogStyle = Configuration.Settings.General.DialogStyle, TwoLetterLanguageCode = language };
-                if (dialogHelper.IsDialog(text.SplitToLines()))
+                if (removedInFirstLine && removedInSecondLine)
                 {
-                    if (removedInFirstLine && removedInSecondLine)
+                    // a name was removed from the start of both of the first two lines,
+                    // so this is a dialog no matter what the third line looks like
+                    var arr = newText.SplitToLines();
+
+                    if (!arr[0].Contains('-') && !arr[0].Contains(':'))
                     {
-                        var arr = newText.SplitToLines();
-
-                        if (!arr[0].Contains('-') && !arr[0].Contains(':'))
-                        {
-                            arr[0] = InsertStartDashInLine(arr[0]);
-                        }
-
-                        if (!arr[1].Contains('-') && !arr[1].Contains(':'))
-                        {
-                            arr[1] = InsertStartDashInLine(arr[1]);
-                        }
-
-                        newText = string.Join(Environment.NewLine, arr);
+                        arr[0] = InsertStartDashInLine(arr[0]);
                     }
-                    else if (!removedInFirstLine && removedInSecondLine)
+
+                    if (!arr[1].Contains('-') && !arr[1].Contains(':'))
+                    {
+                        arr[1] = InsertStartDashInLine(arr[1]);
+                    }
+
+                    newText = string.Join(Environment.NewLine, arr);
+                }
+                else if (dialogHelper.IsDialog(text.SplitToLines()))
+                {
+                    if (!removedInFirstLine && removedInSecondLine)
                     {
                         var arr = newText.SplitToLines();
 
@@ -748,6 +818,54 @@ namespace Nikse.SubtitleEdit.Core.Forms
             return preAssTag + newText;
         }
 
+        /// <summary>
+        /// True if the line is a speaker name on a line of its own, like the "UNA:" in
+        /// "First officer's log." + "Stardate 2122.4." + "UNA:" - as opposed to a sentence
+        /// that just happens to end in a colon, like "...to do three things:".
+        /// </summary>
+        private bool IsSpeakerNameLine(List<string> lines, int index)
+        {
+            if (index < 0 || index >= lines.Count)
+            {
+                return false;
+            }
+
+            var line = HtmlUtil.RemoveHtmlTags(lines[index], true).Trim();
+            if (!line.EndsWith(':') || line.TrimEnd(':').Contains(':'))
+            {
+                return false;
+            }
+
+            var name = line.TrimEnd(':').TrimStart('-', ' ').Trim();
+            if (name.Length == 0 || name.Length > 30)
+            {
+                return false;
+            }
+
+            if (!Utilities.IsAllUppercase(name) &&
+                !(Settings.NameList != null && Settings.NameList.ContainsCaseInsensitive(name, out _)))
+            {
+                return false;
+            }
+
+            if (Utilities.CountTagInText(name, ' ') <= 1)
+            {
+                return true;
+            }
+
+            // a label of more than two words, like "MAN ON RADIO:", is easily confused with the tail
+            // of a sentence - only take it when the line before it is a finished sentence, as the
+            // sentence tail would be a continuation of it
+            if (index == 0)
+            {
+                return true;
+            }
+
+            var previous = HtmlUtil.RemoveHtmlTags(lines[index - 1], true).TrimEnd().TrimEnd('"');
+
+            return previous.Length > 0 && ".!?♪♫—".Contains(previous[previous.Length - 1]);
+        }
+
         private static string InsertStartDashInLine(string input)
         {
             if (string.IsNullOrEmpty(input))
@@ -804,11 +922,17 @@ namespace Nikse.SubtitleEdit.Core.Forms
 
                     if (partialRemove)
                     {
-                        newText = line.Remove(lastIndexOfPeriod + 4, indexOfColon - lastIndexOfPeriod - 3);
-                        if (newText.Substring(lastIndexOfPeriod + 3).StartsWith("  "))
+                        var modifiedLine = line.Remove(lastIndexOfPeriod + 4, indexOfColon - lastIndexOfPeriod - 3);
+                        var doubleSpaceAt = lastIndexOfPeriod + 3;
+                        if (doubleSpaceAt + 1 < modifiedLine.Length && modifiedLine[doubleSpaceAt] == ' ' && modifiedLine[doubleSpaceAt + 1] == ' ')
                         {
-                            newText = newText.Remove(lastIndexOfPeriod + 3, 1);
+                            modifiedLine = modifiedLine.Remove(lastIndexOfPeriod + 3, 1);
                         }
+
+                        // Append to the accumulator, the way every other branch of RemoveColon
+                        // does. Assigning replaced it, throwing away every line already
+                        // processed - so removing "NAME:" on line 2 deleted line 1.
+                        newText = (newText + Environment.NewLine + modifiedLine).Trim();
 
                         if (count == 0)
                         {
@@ -847,35 +971,33 @@ namespace Nikse.SubtitleEdit.Core.Forms
 
         private static bool ShouldRemoveNarrator(string pre, string language)
         {
-            if (pre.Length > 30 || pre.IndexOfAny(new[] { "http", ", " }, StringComparison.OrdinalIgnoreCase) >= 0)
+#if NET8_0_OR_GREATER
+            if (pre.Length > 30 || pre.AsSpan().IndexOfAny(NarratorSkipUrlOrListSearch) >= 0)
             {
                 return false;
             }
 
-            if (language == "en" && pre.Length > 15 && pre.IndexOfAny(new[]
-                {
-                    "Previously on",
-                    "Improved by",
-                    " is ",
-                    " are ",
-                    " were ",
-                    " was ",
-                    " think ",
-                    " guess ",
-                    " will ",
-                    " believe ",
-                    " say ",
-                    " said ",
-                    " do ",
-                    " want ",
-                    "That's "
-                }, StringComparison.OrdinalIgnoreCase) >= 0)
+            if (language == "en" && pre.Length > 15 && pre.AsSpan().IndexOfAny(NarratorSkipWordsSearch) >= 0)
             {
                 return false;
             }
 
             // Okay! Narrator: Hello!
-            return pre.IndexOfAny(new[] { '!', '?', '¿', '¡' }) < 0;
+            return pre.AsSpan().IndexOfAny(NarratorSkipPunctuationSearch) < 0;
+#else
+            if (pre.Length > 30 || pre.IndexOfAny(NarratorSkipUrlOrList, StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return false;
+            }
+
+            if (language == "en" && pre.Length > 15 && pre.IndexOfAny(NarratorSkipWords, StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return false;
+            }
+
+            // Okay! Narrator: Hello!
+            return pre.IndexOfAny(NarratorSkipPunctuation) < 0;
+#endif
         }
 
         private static readonly char[] TrimStartNoiseChar = { '-', ' ' };
@@ -1052,12 +1174,11 @@ namespace Nikse.SubtitleEdit.Core.Forms
             text = RemoveColon(text);
             text = RemoveLineIfAllUppercase(text);
             text = RemoveHearingImpairedTagsInsideLine(text);
-            if (Settings.RemoveInterjections)
+            // Interjection removal needs a list; the caller supplies one via ReloadInterjection.
+            // Without this guard a caller that enables the setting but never loads a list (the
+            // seconv "removetextforhi" path) dereferenced null inside RemoveInterjection.
+            if (Settings.RemoveInterjections && _interjections != null)
             {
-                if (_interjections == null)
-                {
-                    //ReloadInterjection(twoLetterIsoLanguageName);
-                }
 
                 // reusable context
                 _interjectionRemoveContext.Text = text;
@@ -1201,7 +1322,12 @@ namespace Nikse.SubtitleEdit.Core.Forms
                 text = "<i>" + text.Remove(0, removeText.Length).TrimStart(' ');
             }
 
-            if (input != text)
+            // Collapsing double spaces and trimming above is a side effect of rebuilding the text,
+            // not an HI fix. A file that centers its lines with leading spaces came out of the
+            // rebuild "changed" on every line, which woke the dash fixer below and stripped or
+            // added dialog dashes with no option selected (#15157).
+            var whiteSpaceOnlyChange = IsWhiteSpaceOnlyChange(originalAfterU2010Replace, text);
+            if (input != text && !whiteSpaceOnlyChange)
             {
                 // insert spaces before "-"
                 text = text.Replace(Environment.NewLine + "- <i>", Environment.NewLine + "<i>- ");
@@ -1232,14 +1358,14 @@ namespace Nikse.SubtitleEdit.Core.Forms
 
             if (Settings.RemoveIfOnlyMusicSymbols)
             {
-                if (string.IsNullOrWhiteSpace(HtmlUtil.RemoveHtmlTags(text, true).RemoveChar('♪', '♫')))
+                if (HtmlUtil.RemoveHtmlTags(text, true).IsOnlyCharsOrWhiteSpace(MusicSymbols))
                 {
                     return string.Empty;
                 }
             }
 
-            // keep U2010 dashes if no changes
-            if (originalAfterU2010Replace == text)
+            // keep U2010 dashes (and the original white space) if no changes
+            if (originalAfterU2010Replace == text || whiteSpaceOnlyChange)
             {
                 return inputWithoutUnicodeReplace;
             }
@@ -1250,6 +1376,41 @@ namespace Nikse.SubtitleEdit.Core.Forms
             }
 
             return text.Trim();
+        }
+
+        /// <summary>
+        /// True when the two texts differ only in white space: padding, double spaces, trailing
+        /// blanks or line break style.
+        /// </summary>
+        internal static bool IsWhiteSpaceOnlyChange(string before, string after)
+        {
+            var i = 0;
+            var j = 0;
+            while (true)
+            {
+                while (i < before.Length && char.IsWhiteSpace(before[i]))
+                {
+                    i++;
+                }
+
+                while (j < after.Length && char.IsWhiteSpace(after[j]))
+                {
+                    j++;
+                }
+
+                if (i >= before.Length || j >= after.Length)
+                {
+                    return i >= before.Length && j >= after.Length;
+                }
+
+                if (before[i] != after[j])
+                {
+                    return false;
+                }
+
+                i++;
+                j++;
+            }
         }
 
         private static string RemoveEmptyFontTag(string text)
@@ -1363,34 +1524,10 @@ namespace Nikse.SubtitleEdit.Core.Forms
             var newText = text;
             var s = text;
             int index;
-            if (Settings.RemoveTextBetweenSquares && s.StartsWith('[') && (index = s.IndexOf(']', 1)) > 0)
-            {
-                if (++index < s.Length && s[index] == ':')
-                {
-                    index++;
-                }
-
-                newText = s.Remove(0, index);
-            }
-            else if (Settings.RemoveTextBetweenBrackets && s.StartsWith('{') && (index = s.IndexOf('}', 1)) > 0)
-            {
-                if (++index < s.Length && s[index] == ':')
-                {
-                    index++;
-                }
-
-                newText = s.Remove(0, index);
-            }
-            else if (Settings.RemoveTextBetweenParentheses && s.StartsWith('(') && (index = s.IndexOf(')', 1)) > 0)
-            {
-                if (++index < s.Length && s[index] == ':')
-                {
-                    index++;
-                }
-
-                newText = s.Remove(0, index);
-            }
-            else if (Settings.RemoveTextBetweenQuestionMarks && s.StartsWith('?') && (index = s.IndexOf('?', 1)) > 0)
+            if (Settings.RemoveTextBetweenSquares && s.StartsWith('[') && (index = s.IndexOf(']', 1)) > 0 ||
+                Settings.RemoveTextBetweenBrackets && s.StartsWith('{') && (index = s.IndexOf('}', 1)) > 0 ||
+                Settings.RemoveTextBetweenParentheses && s.StartsWith('(') && (index = s.IndexOf(')', 1)) > 0 ||
+                Settings.RemoveTextBetweenQuestionMarks && s.StartsWith('?') && (index = s.IndexOf('?', 1)) > 0)
             {
                 if (++index < s.Length && s[index] == ':')
                 {
@@ -1543,7 +1680,7 @@ namespace Nikse.SubtitleEdit.Core.Forms
 
             do
             {
-                var end = text.IndexOf(endTag, start + startTag.Length, StringComparison.Ordinal);
+                var end = FindMatchingEndTag(text, start, startTag, endTag);
                 if (end < 0)
                 {
                     break;
@@ -1575,6 +1712,49 @@ namespace Nikse.SubtitleEdit.Core.Forms
             return text.FixExtraSpaces().TrimEnd();
         }
 
+        /// <summary>
+        /// Index of the end tag that closes the start tag at <paramref name="start"/>, counting
+        /// nesting depth. Taking the first end tag instead cut the wrong span for a nested pair
+        /// of the same kind - "(WOMAN (V.O.)) Where are you?" lost "(WOMAN (V.O.)" and left the
+        /// outer ")" stranded. Returns -1 when the pair is never closed.
+        /// </summary>
+        private static int FindMatchingEndTag(string text, int start, string startTag, string endTag)
+        {
+            // Identical start/end tags (e.g. "#...#") cannot nest - the first one closes it.
+            if (startTag == endTag)
+            {
+                return text.IndexOf(endTag, start + startTag.Length, StringComparison.Ordinal);
+            }
+
+            var depth = 1;
+            var i = start + startTag.Length;
+            while (i < text.Length)
+            {
+                if (string.CompareOrdinal(text, i, startTag, 0, startTag.Length) == 0)
+                {
+                    depth++;
+                    i += startTag.Length;
+                    continue;
+                }
+
+                if (string.CompareOrdinal(text, i, endTag, 0, endTag.Length) == 0)
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        return i;
+                    }
+
+                    i += endTag.Length;
+                    continue;
+                }
+
+                i++;
+            }
+
+            return -1;
+        }
+
         public string RemoveLineIfAllUppercase(string text)
         {
             if (!Settings.RemoveIfAllUppercase)
@@ -1585,14 +1765,17 @@ namespace Nikse.SubtitleEdit.Core.Forms
             var whitelist = GetUppercaseWhitelist();
 
             var sb = new StringBuilder();
-            char[] endTrimChars = { '.', '!', '?', ':' };
+            // Commas, semicolons and quote marks too: IsAllUppercase accepts them, so a
+            // whitelisted word punctuated any other way ("OK," / '"OK"') failed the lookup
+            // below and the whole line was deleted.
+            char[] endTrimChars = { '.', '!', '?', ':', ',', ';', '"', '\'', '\u201d', '\u2019' };
             char[] trimChars = { ' ', '-', '—' };
             foreach (var line in text.SplitToLines())
             {
                 var lineNoHtml = HtmlUtil.RemoveHtmlTags(line, true);
                 if (Utilities.IsAllUppercase(lineNoHtml) && Utilities.HasUppercase(lineNoHtml))
                 {
-                    var temp = lineNoHtml.TrimEnd(endTrimChars).Trim().Trim(trimChars);
+                    var temp = lineNoHtml.Trim(endTrimChars).Trim().Trim(trimChars);
                     // Single-letter lines (e.g. "I") are always kept; otherwise keep only the
                     // user-configurable whitelist words / acronyms (OK, TV, WWE, ...) - issue #11563.
                     if (temp.Length == 1 || whitelist.Contains(temp))

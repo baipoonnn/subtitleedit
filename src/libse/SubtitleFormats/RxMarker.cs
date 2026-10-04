@@ -8,6 +8,8 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 {
     public class RxMarker : SubtitleFormat
     {
+        private static readonly CharLookup TimeCodeChars = CharLookup.Create('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.', ':', ',');
+
         private static readonly Regex RegexTimeCode = new Regex(@"^Region \d+\t\d\d:\d\d:\d\d:\d\d\.\d\d\t\d\d:\d\d:\d\d:\d\d\.\d\d\t.+$", RegexOptions.Compiled);
 
         public override string Extension => ".txt";
@@ -17,7 +19,18 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
         private static string MakeTimeCode(TimeCode tc)
         {
             var ts = tc.TimeSpan;
-            var s = $"{ts.Days * 24 + ts.Hours:00}:{ts.Minutes:00}:{ts.Seconds:00}:{(int)Math.Round(ts.Milliseconds / 10.0, MidpointRounding.AwayFromZero):00}.00";
+
+            // Rounding the hundredths carries into the next second (997 ms -> 100) and ":00" then
+            // printed three digits - a time code RegexTimeCode rejects, so on reload the whole line
+            // fell through to the text branch and the cue itself vanished.
+            var hundredths = (int)Math.Round(ts.Milliseconds / 10.0, MidpointRounding.AwayFromZero);
+            if (hundredths >= 100)
+            {
+                ts = ts.Add(TimeSpan.FromMilliseconds(1000 - ts.Milliseconds));
+                hundredths = 0;
+            }
+
+            var s = $"{ts.Days * 24 + ts.Hours:00}:{ts.Minutes:00}:{ts.Seconds:00}:{hundredths:00}.00";
             return s;
         }
 
@@ -74,7 +87,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                         if (arr.Length >= 3)
                         {
                             var text = s.Remove(0, arr[0].Length + arr[1].Length + arr[2].Length + 2).Trim();
-                            if (string.IsNullOrWhiteSpace(text.RemoveChar('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.', ':', ',')))
+                            if (text.IsOnlyCharsOrWhiteSpace(TimeCodeChars))
                             {
                                 _errorCount++;
                             }

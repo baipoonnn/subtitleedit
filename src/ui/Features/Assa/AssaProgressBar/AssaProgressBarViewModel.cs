@@ -116,11 +116,23 @@ public partial class AssaProgressBarViewModel : ObservableObject, IClosingCleanu
         _videoFileName = videoFileName;
 
         LoadExistingSettings();
-        _subtitle.Paragraphs.Clear();
+
+        // _subtitle is both the working copy and the dialog's result, and ApplyProgressBar already
+        // removes just the previous bar paragraphs by style name. Clearing here threw away every
+        // dialogue line, so pressing OK replaced the subtitle with the progress bar alone.
         GeneratePreview();
         
         Dispatcher.UIThread.Post(() =>
         {
+            // Closed before this post ran: OnClosing has already stopped the (placeholder) pump
+            // and disposed the player, so the pump started below would never be stopped and
+            // would poll the dead player for the rest of the session - every poll an
+            // error-log entry.
+            if (_isClosing)
+            {
+                return;
+            }
+
             if (!string.IsNullOrEmpty(videoFileName) && VideoPlayerControl != null)
             {
                 _ = VideoPlayerControl.Open(videoFileName);
@@ -583,7 +595,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
         try
         {
-            VideoPlayerControl?.Close();
+            VideoPlayerControl?.CloseAndDisposePlayer();
         }
         catch
         {

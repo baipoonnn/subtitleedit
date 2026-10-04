@@ -20,6 +20,8 @@ public class AllTalk : ITtsEngine
     public bool HasRegion => false;
     public bool HasModel => false;
     public bool HasKeyFile => false;
+    public bool SupportsVoiceCloning => false;
+    public bool SupportsPerLineVoiceCloning => false;
 
     private bool _isInstalled;
     public async Task<bool> IsInstalled(string? region)
@@ -64,7 +66,7 @@ public class AllTalk : ITtsEngine
             var uri = new Uri("avares://SubtitleEdit/Assets/TextToSpeech/AllTalkVoices.json");
             using var stream = AssetLoader.Open(uri);
             using var fileStream = File.Create(voiceFileName);
-            stream.CopyTo(fileStream);
+            await stream.CopyToAsync(fileStream);
         }
 
         var result = new List<Voice>();

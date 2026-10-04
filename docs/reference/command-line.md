@@ -7,8 +7,8 @@
 ## Highlights
 
 - **380+ subtitle formats** — text, binary, and image-based.
-- **Container input** — Matroska (`.mkv` / `.mks`), MP4, MCC, transport stream teletext, Blu-Ray `.sup`.
-- **OCR for image-based sources** via five engines (Tesseract subprocess, nOCR built-in, BinaryOCR built-in, Ollama HTTP, PaddleOCR subprocess).
+- **Container input** — Matroska (`.mkv` / `.mks`), MP4, MCC, MXF, AVI (`.avi` / `.divx`), transport stream teletext, Blu-Ray `.sup`.
+- **OCR for image-based sources** via seven engines (Tesseract subprocess, nOCR built-in, BinaryOCR built-in, Ollama HTTP, llama.cpp HTTP with automatic server start, PaddleOCR subprocess, Apple Vision built into macOS).
 - **Auto-translate** via local LLMs (llama.cpp with automatic server start, Ollama, LM Studio) or self-hosted services (LibreTranslate, NLLB).
 - **Image-based output** — Blu-Ray sup, BDN-XML, DOST, FCP (Final Cut Pro + image), D-Cinema interop / SMPTE 2014, images-with-time-code.
 - **Operations pipeline** — offset, fps change, change-speed, renumber, adjust-duration, fix-common-errors, merge/split, balance, redo casing, RTL fixes, multiple-replace, custom-text format, plain text.
@@ -40,6 +40,13 @@ seconv "*.srt,*.ass" subrip --input-folder:./in
 
 Options accept either `--option:value`, `--option=value`, or `--option value`. The colon form is shown throughout this page.
 
+An unrecognised option is an error, never a silent no-op: `seconv` exits 1 and suggests the closest real option rather than converting the file without the operation you asked for.
+
+```console
+$ seconv movie.srt subrip --remove-formating
+Error: Unknown option '--remove-formating'. Did you mean '--remove-formatting'?
+```
+
 ### Quick examples
 
 ```bash
@@ -54,6 +61,7 @@ seconv movie.sup subrip --ocr-engine:nocr --ocr-db:Latin.nocr      # OCR via nOC
 seconv movie.sup subrip --ocr-engine:binaryocr --ocr-db:Latin.db   # OCR via BinaryOCR
 seconv movie.sup subrip --ocr-engine:ollama --ollama-model:llama3.2-vision
 seconv movie.sup subrip --ocr-engine:llamacpp                      # OCR via llama.cpp (auto-starts llama-server)
+seconv *.mkv subrip --ocr-engine:applevision                       # macOS: OCR via built-in Apple Vision
 
 seconv subs.srt bluraysup --resolution:1920x1080                   # render text → Blu-Ray sup
 seconv subs.srt bdnxml --resolution:1920x1080                      # render text → BDN-XML
@@ -68,17 +76,43 @@ seconv subs.srt subrip --offset:-2000 --renumber:1 --overwrite     # offset 2s b
 ## Subcommands
 
 ```bash
-seconv formats              # list all supported formats
-seconv list-encodings       # list text encodings
+seconv formats              # list all supported formats (also /formats, --formats)
+seconv list-encodings       # list text encodings (for --encoding and --input-encoding-fallback)
 seconv list-pac-codepages   # list PAC code pages
 seconv list-ocr-engines     # list OCR engines + installation status
 seconv list-fce-rules       # list FixCommonErrors rule IDs
-seconv list-rf-rules        # list remove-formatting rule IDs
-seconv dump-settings        # print a full --settings JSON with libse defaults
+seconv list-rf-rules        # list remove-formatting rule IDs (alias: list-remove-formatting-rules)
+seconv dump-settings        # print a full --settings JSON with libse defaults (alias: default-settings)
 seconv info <file>          # print format/encoding/duration/language for a file
 seconv lint <pattern>       # validate subtitle(s); exit 1 if issues found
-seconv --help               # show help
+seconv --help               # show help (same text as -h, /? and /help)
+seconv --help-json          # print the whole command-line schema as JSON
 seconv --version            # print version and exit
+```
+
+### Machine-readable output
+
+Every subcommand above accepts `--json`, and so does a conversion run. Scripts and agents should prefer it: the tables are hundreds of box-drawing lines, while the JSON gives you the exact tokens each option accepts.
+
+```bash
+seconv formats --json | jq -r '.formats[] | select(.inputOnly | not) | .id'
+seconv list-fce-rules --json | jq -r '.rules[].id'
+seconv list-ocr-engines --json | jq -r '.engines[] | select(.ready) | .id'
+```
+
+In `formats --json`, `id` is the token `--format` matches on (the display name with spaces removed); `name` is the human-readable name; `inputOnly` marks formats that can be loaded but not used as a conversion target.
+
+`seconv --help-json` describes the command line itself — every option with its aliases, type (`flag`, `string`, `integer`, `number`), whether it is an operation, its closed value set where it has one, and the subcommand that enumerates valid values otherwise. It is reflected off the parser, so it cannot drift from the options actually accepted.
+
+```bash
+seconv --help-json | jq -r '.options[] | select(.group == "operation") | .name'
+seconv --help-json | jq -r '.options[] | select(.discover) | "\(.name)\t\(.discover)"'
+```
+
+Under `--json`, stdout is always a single JSON document — on success *and* on failure. A usage error (unknown option, bad value, no files matched) comes back in the same envelope as a failed conversion, with the message in `errors`:
+
+```json
+{ "success": false, "totalFiles": 0, "files": [], "errors": ["Unknown option '--bogus'."], "warnings": [] }
 ```
 
 ### Inspect & validate
@@ -100,8 +134,12 @@ seconv lint *.srt --json             # CI-friendly: exit 1 on any issue
 | `--input-folder:<path>` | Input folder; relative patterns resolve against it |
 | `--output-folder:<path>` | Output folder (default: input file's directory) |
 | `--output-filename:<name>` | Output file name (single input only) |
+| `--output-filename-append:<text>` | Text appended to the output file name stem, before any language/track suffix: `movie.ts` → `movie_fixed.eng.srt`. Ignored with `--output-filename` |
 | `--overwrite` | Overwrite existing files (default: rotate to `name_2.ext`, `_3.ext`, ...) |
+| `--no-language-suffix` | Do not insert the language code before the extension (`movie.srt` instead of `movie.en.srt` for container tracks and `--translate-to`). A forced track keeps its marker (`movie.forced.srt`). With `--overwrite` and `--translate-to` the file is translated in place |
+| `--keep-timestamp` (also `--keep-timestamps`) | Give output files the source file's modified/created date instead of the conversion time |
 | `--encoding:<name>` | Encoding name or codepage. Special values: `utf-8`, `utf-8-no-bom` (also `utf-8-nobom`, `utf8-nobom`), a code page number, or `source` to keep the input file's detected encoding. Defaults: auto-detect on input, UTF-8 BOM on output |
+| `--input-encoding-fallback:<name>` | Encoding to assume when the input is not UTF-8 / has no BOM, instead of the ANSI auto-detection (names as in `seconv list-encodings`). Ignored when `--encoding` is set |
 
 ### Time / frame
 
@@ -121,6 +159,7 @@ seconv lint *.srt --json             # CI-friendly: exit 1 on any issue
 | `--resolution:<WxH>` | ASSA, image-based | Sets `PlayResX`/`PlayResY` for ASSA; sets canvas for image outputs (default `1920x1080`) |
 | `--assa-style-file:<file>` | ASSA | Apply `[V4+ Styles]` block from another ASSA file |
 | `--pac-codepage:<page>` | PAC | Code page name (`Latin`, `Greek`, `Hebrew`, …) or numeric (0–12). See `seconv list-pac-codepages` |
+| `--pac-secondary-codepage:<page>` | PAC | Code page for lines in another script (e.g. `Cyrillic` for the Russian lines of a Hebrew file); those lines are flagged "secondary code page". Reading detects it automatically |
 | `--ebu-header-file:<file>` | EBU STL | Reuse the GSI header block from an existing `.stl` file |
 | `--plaintext-merge` | Plain text (`txt`) | Merge all subtitles into one space-separated block (no blank lines). Takes precedence over the two options below |
 | `--plaintext-unbreak` | Plain text (`txt`) | Unbreak each subtitle, joining its lines into one |
@@ -146,11 +185,23 @@ When rendering a text subtitle to an image-based target (Blu-Ray `sup`, VobSub, 
 | `--box-padding:<px>` | Box padding: one value for all sides, or `left,right,top,bottom` (default: `5,5,3,3`) |
 | `--line-spacing:<percent>` | Extra gap between lines as percent of line height (default: `0`) |
 | `--alignment:<pos>` | Screen position: `bottom-center` (default), `top-left`, `middle-right`, ... |
-| `--content-alignment:<align>` | Multi-line text justification: `left` \| `center` (default) \| `right` |
+| `--content-alignment:<align>` | Multi-line text justification: `left` \| `center` (default) \| `right` \| `from-alignment` (follow the `{\anX}` tag) |
 | `--bottom-top-margin:<px>` | Vertical screen-edge margin (default: 5% of height) |
 | `--left-right-margin:<px>` | Horizontal screen-edge margin (default: 5% of width) |
+| `--override-position:<x\|y\|xy>` | Image → image only (DVB-sub, PGS, VobSub pass-through): ignore the source bitmap position on that axis and place it by `--alignment` and the margins instead. The other axis keeps the source position. Matches SE4's transport-stream "override original X/Y position" |
+| `--full-frame` | Draw each subtitle onto a frame-sized image instead of one cropped to the text. Only `fcpimage` and `bluraysup` use it; other image targets warn and ignore it |
+| `--full-frame-background-color:<color>` | Background of the full frame image (default: `transparent`) |
+| `--mode-3d:<mode>` | Draw each subtitle for frame-packed 3D video, once per eye: `none` (default) \| `half-side-by-side` (`sbs`) \| `half-top-bottom` (`tab`). Works for text → image and image → image; D-Cinema warns and ignores it |
+| `--depth-3d:<px>` | 3D depth, -100 to 100 (default: 0): positive brings the subtitle out of the screen, negative pushes it back. D-Cinema writes it as the image's Z-position |
+| `--plane-3d:<file.ofs>` | A 3D Blu-ray's 3D-Plane (OFS file from BD3D2MK3D or OFSExtractor): each subtitle gets the disc's depth for the frames it is shown on. `--depth-3d` is used where the 3D-Plane has none. Needs `--mode-3d` |
 
 Colours accept hex (`#AARRGGBB`, `#RRGGBB`, with or without `#`) or a colour name (`white`, `black`, `yellow`, ...).
+
+**Full frame** (`--full-frame`) draws the subtitle onto a canvas the size of the video frame, using the alignment and margins to place it there, so every image can be dropped on an editing timeline at 0,0 instead of being positioned one by one. It matches the "Full frame image" checkbox in the export dialog, and applies to `fcpimage` and `bluraysup` only. The background is transparent unless `--full-frame-background-color` says otherwise, so the images sit on a track above the video.
+
+**3D** (`--mode-3d`) matches the "3D" option in the export dialog (SE4's 3D export). A half side-by-side or half top/bottom video holds a squeezed view per eye, so the subtitle is squeezed the same way and drawn once in each view, where the alignment, margins or `{\pos}` would put it. `--depth-3d` moves the two copies apart. With an image source (`.sup`, VobSub, DVB-sub, ...) it turns a 2D track into a 3D one, keeping each subtitle's position.
+
+A 3D Blu-ray's subtitle track is flat: the player moves it by a depth stored for every frame, in the track's 3D-Plane. `--plane-3d` reads that 3D-Plane from an `.ofs` file, so each subtitle stands where the disc puts it. A subtitle gets the depth nearest to the viewer during its frames. The offsets are in pixels of the 1920 wide Blu-ray view, scaled to `--resolution` and halved for half side-by-side.
 
 ```bash
 # SRT → UHD Blu-Ray sup with a semi-transparent black background box (SE4-style)
@@ -158,6 +209,15 @@ seconv movie.srt bluraysup --resolution:3840x2160 --background-color:"#B4000000"
 
 # Custom font, bold, box per line
 seconv movie.srt bluraysup --font-name:Verdana --font-size:60 --font-bold --box-type:box-per-line
+
+# Final Cut Pro + image, one frame-sized png per subtitle
+seconv movie.srt fcpimage --full-frame
+
+# 2D Blu-ray sup → half side-by-side 3D Blu-ray sup, standing slightly out of the screen
+seconv movie.sup bluraysup --mode-3d:half-side-by-side --depth-3d:4 --output-filename-append:.3d
+
+# 3D Blu-ray subtitle track → half side-by-side sup, at the disc's own depth (tsMuxeR: "3d-plane: 2")
+seconv track.sup bluraysup --mode-3d:half-side-by-side --plane-3d:3D-Plane-02.ofs --output-filename-append:.3d
 ```
 
 ### Containers / tracks
@@ -166,11 +226,14 @@ seconv movie.srt bluraysup --font-name:Verdana --font-size:60 --font-bold --box-
 
 | Extension | Sources |
 |---|---|
-| `.mkv`, `.mks` | Matroska text tracks (S_TEXT/UTF8, SSA, ASS, HDMV/TEXTST) and image tracks (S_HDMV/PGS via OCR) |
-| `.mp4`, `.m4v`, `.m4s`, `.3gp` | MP4 text tracks and WebVTT VTTC |
+| `.mkv`, `.mks`, `.webm` | Matroska text tracks (S_TEXT/UTF8, SSA, ASS, HDMV/TEXTST) and image tracks (S_HDMV/PGS via OCR) |
+| `.mp4`, `.m4v`, `.m4s`, `.3gp`, `.mov`, `.m4a`, `.m4b`, `.cmaf` | MP4 text tracks and WebVTT VTTC |
 | `.mcc` | MacCaption 1.0 |
 | `.ts`, `.m2ts`, `.mts` | Transport stream — teletext (no OCR) and DVB-sub (via OCR) |
 | `.sup` | Blu-Ray sup (via OCR) |
+| `.sub`, `.idx` | VobSub (via OCR) — pass either file of the pair; the companion is found automatically. A `.sub` with no `.idx` is read with its stream timing and a default palette |
+| `.avi`, `.divx` | XSUB / DivX subtitles (via OCR) |
+| `.mxf` | MXF timed-text essences (TTML, SRT, …; auto-detected per essence). Image essences are not extracted |
 
 When a container has multiple usable tracks, one output file is written per track with the track's language code as a suffix:
 
@@ -181,6 +244,8 @@ movie.mkv → movie.eng.srt
 ```
 
 If two tracks share a language, the track number is added: `movie.#3.eng.srt`.
+
+An AVI stream header carries no language, so a multi-stream `.avi` names its outputs after the stream number instead (`movie.xsub_track1.srt`, `movie.xsub_track2.srt`); `--track-number` takes those same AVI stream numbers.
 
 | Option | Description |
 |---|---|
@@ -197,21 +262,25 @@ If two tracks share a language, the track number is added: `movie.#3.eng.srt`.
 | `nocr` | In-process | Built-in nOCR matcher. Required: `--ocr-db:<path-to-Latin.nocr>`. |
 | `binaryocr` *(alias: `binary`)* | In-process | Built-in BinaryOCR matcher (different accuracy profile, similar speed). Required: `--ocr-db:<path-to-Latin.db>`. |
 | `ollama` | HTTP | Local Ollama server with a vision-capable model (e.g. `llama3.2-vision`, `qwen2.5vl`). Configure via `--ollama-url` (default `http://localhost:11434/api/chat`) and `--ollama-model` (default `llama3.2-vision`). Pass `--ocr-language` as a human name like `English`. |
-| `llamacpp` *(aliases: `llama.cpp`, `llama`)* | HTTP | llama.cpp with a curated OCR vision model (GLM-OCR, LightOnOCR, PaddleOCR-VL). With no `--ocr-url`, seconv finds `llama-server` (SE data folder next to seconv, installed SE data folder, then `PATH`) and an installed OCR model, starts the server on a free loopback port, and stops it at exit. seconv never downloads engines/models — install them via the SE UI's OCR window (engine "llama.cpp") or point `--ocr-url` at a running server. Pass `--ocr-language` as a human name like `English`. |
-| `paddle` *(alias: `paddleocr`)* | Subprocess | Install via `pip install paddleocr`; ensure the `paddleocr` binary is on `PATH`. Pass `--ocr-language` as a short code (`en`, `de`, …). |
+| `llamacpp` *(aliases: `llama.cpp`, `llama`)* | HTTP | llama.cpp with a curated OCR vision model (best-first: GLM-OCR, LFM2.5-VL 3B, PaddleOCR-VL, HunyuanOCR 1.5, LightOnOCR). With no `--ocr-url`, seconv finds `llama-server` (SE data folder next to seconv, installed SE data folder, then `PATH`) and an OCR model — the first model in that order that is installed, unless `--ocr-model` names one — starts the server on a free loopback port, and stops it at exit. seconv never downloads engines/models — install them via the SE UI's OCR window (engine "llama.cpp") or point `--ocr-url` at a running server. Pass `--ocr-language` as a human name like `English`. |
+| `paddle` *(alias: `paddleocr`)* | Subprocess | Install via `pip install paddleocr` (3.7 or newer, for the PP-OCRv6 models); ensure the `paddleocr` binary is on `PATH`. Pass `--ocr-language` as a short code (`en`, `de`, …). Images are OCR'ed in batches: the prepared images of a file are written to a folder and one `paddleocr` process reads the whole folder, so the roughly twenty-second model load is paid once per file rather than once per image. |
+| `applevision` *(alias: `apple-vision`)* | In-process (macOS only) | macOS's built-in Vision framework — the same recognizer as the GUI's "Apple Vision" engine. Nothing to install. Pass `--ocr-language` as a Vision tag (`en-US`, `de-DE`, `zh-Hans`, …; default `en-US`); `de`, `deu` and `German` are mapped to the matching tag too. `seconv list-ocr-engines --json` lists the tags this Mac supports. |
 
 | Option | Description |
 |---|---|
-| `--ocr-engine:<engine>` | `tesseract` (default) \| `nocr` \| `binaryocr` \| `ollama` \| `llamacpp` \| `paddle` |
-| `--ocr-language:<lang>` | Tesseract: ISO 639-2 (`eng`, `deu`); Paddle: short (`en`); Ollama/llama.cpp: human (`English`) |
+| `--ocr-engine:<engine>` | `tesseract` (default) \| `nocr` \| `binaryocr` \| `ollama` \| `llamacpp` \| `paddle` \| `applevision` |
+| `--ocr-language:<lang>` | Tesseract: ISO 639-2 (`eng`, `deu`); Paddle: short (`en`); Ollama/llama.cpp: human (`English`); Apple Vision: Vision tag (`en-US`) |
 | `--ocr-db:<path>` | OCR database file: `.nocr` for `nocr`, `.db` for `binaryocr` (required for both) |
 | `--dictionary-folder:<path>` | Folder with Hunspell dictionaries + `*_OCRFixReplaceList.xml`; enables the "Fix common OCR errors" pass of `--fix-common-errors` (English is bundled, so this is only needed for other languages) |
+| `--ocr-auto-detect-assa-alignment` | Add an ASSA alignment tag from where each subtitle image sits in the video frame — the same logic as **Auto-detect ASSA alignment** in the OCR window. The frame is divided into a 3×3 grid: a caption at the top centre gets `{\an8}`, a sign at the left edge `{\an4}`, and so on; bottom-centre is the default and gets no tag. A tall image holding a few short lines placed apart (one at the top, one at the bottom) is tagged per line and written as separate subtitles with the same time codes. Sources that do not report a frame size (MP4 VobSub) are left untagged. Ignored with `--time-codes-only`. |
 | `--ollama-url:<url>` | Default `http://localhost:11434/api/chat` |
 | `--ollama-model:<model>` | Default `llama3.2-vision` |
-| `--ocr-model:<model>` | llama.cpp OCR model: curated `.gguf` file name (e.g. `GLM-OCR-Q8_0.gguf`) or a full path to a `.gguf` with its `mmproj` sidecar next to it. Default: the first downloaded OCR model. |
+| `--ocr-model:<model>` | llama.cpp OCR model: the file name of a model in the llama.cpp models folder - curated (e.g. `GLM-OCR-Q8_0.gguf`) or your own vision model with its `mmproj` sidecar next to it - or a full path to a `.gguf` with its `mmproj` sidecar next to it. Default: the first downloaded OCR model. |
 | `--ocr-url:<url>` | llama.cpp: endpoint of an already-running `llama-server` (a bare `host:port` is completed to `/v1/chat/completions`); skips the local auto-start. |
-| `--time-codes-only` | Image sources (`.sup`, VobSub `.sub`/`.idx`, MKV PGS/VobSub, MP4 VobSub, TS DVB-sub) → text format with time codes only and empty text. **Skips OCR entirely** — no OCR engine required. Ignored for text inputs and image output targets. |
+| `--ocr-prompt:<text\|file>` | Prompt for the prompt-driven OCR engines (`llamacpp`, `ollama`); rejected for the others. `{language}` is replaced with `--ocr-language`. A value that names an existing file, or ends in `.txt`/`.prompt`/`.md`, is read from that file; inline text gets `\n`/`\r`/`\t` unescaped. Default: the same prompt as the SE OCR window, except that LFM2.5-VL gets its own tuned prompt unless `--ocr-prompt` is given. |
+| `--time-codes-only` | Image sources (`.sup`, VobSub `.sub`/`.idx`, MKV PGS/VobSub, MP4 VobSub, TS DVB-sub, AVI XSUB) → text format with time codes only and empty text. **Skips OCR entirely** — no OCR engine required. Ignored for text inputs and image output targets. |
 | `--no-vobsub-isolate-colors` | Disable VobSub OCR colour isolation, which is **on by default**. Isolation rebuilds each subpicture as a crisp black-on-white bitmap via histogram-based colour analysis — the most frequent opaque colour (the glyph fill) becomes black and the gray outline / anti-alias colours collapse into the white background, which helps on discs whose outlines otherwise melt adjacent characters together (`Yuri` → `Yurl`). Pass this flag to OCR the raw palette instead. Ignored for non-VobSub sources and with `--time-codes-only`. |
+| `--no-pgs-isolate-colors` | Disable PGS / DVB-sub OCR colour isolation, which is likewise **on by default** — except for `applevision`, which always reads the original images (binarising costs Vision umlauts and trailing punctuation, and the GUI does not binarise for it either), and for `nocr` / `binaryocr`, which split letters on the original image's transparency and cannot segment the opaque isolated bitmap. |
 
 > **OCR database files are not bundled with `seconv`.** The `nocr` and `binaryocr` engines need a `.nocr` or `.db` file passed via `--ocr-db`. Sources:
 >
@@ -220,6 +289,12 @@ If two tracks share a language, the track number is added: `movie.#3.eng.srt`.
 > - Other languages: download from the SE UI (Tools → "OCR with nOCR" / BinaryOCR → download).
 
 Run `seconv list-ocr-engines` for the per-engine installation-status table.
+
+Long OCR runs report progress as images *finished* of the current source (per PID for TS
+DVB-sub, per track for MKV). On a terminal this rewrites a single line - `  OCR 42/345 (12%)...`;
+when stdout is a pipe or a file it prints one plain line per 10% instead, so a log of a
+5000-image run holds ten lines rather than one endless one. Auto-translate reports the same way
+(`  Translated 42/345 (12%)...`). Both are suppressed by `--quiet` and `--json`.
 
 ```bash
 # Tesseract
@@ -236,8 +311,21 @@ seconv movie.sup subrip --ocr-engine:llamacpp
 seconv movie.sup subrip --ocr-engine:llamacpp --ocr-model:GLM-OCR-Q8_0.gguf
 seconv movie.sup subrip --ocr-engine:llamacpp --ocr-url:http://127.0.0.1:8080
 
+# Override the OCR prompt (inline or from a file); {language} = --ocr-language
+seconv movie.sup subrip --ocr-engine:llamacpp --ocr-language:German \
+  --ocr-prompt:"Identify the number of lines, then extract the text of each line exactly as written. The language is {language}."
+seconv movie.sup subrip --ocr-engine:llamacpp --ocr-prompt:my-ocr-prompt.txt
+
+# Apple Vision (macOS) — nothing to install
+seconv movie.sup subrip --ocr-engine:applevision
+seconv movie.sup subrip --ocr-engine:applevision --ocr-language:de-DE
+
 # MKV with image (PGS or VobSub) tracks — OCR runs automatically
 seconv movie.mkv subrip --ocr-engine:tesseract --ocr-language:eng
+seconv "*.mkv" subrip --input-folder:"$HOME/Movies" --ocr-engine:applevision   # a whole folder on a Mac
+
+# AVI with XSUB (DivX) subtitles — OCR runs automatically
+seconv movie.avi subrip --ocr-engine:tesseract --ocr-language:eng
 
 # VobSub .sub + .idx pair — the .idx companion is auto-detected
 seconv movie.sub subrip --ocr-engine:tesseract --ocr-language:eng
@@ -254,6 +342,8 @@ seconv movie.sub subrip --time-codes-only
 
 `--translate-to:<language>` machine-translates each file as part of the conversion (after OCR for image sources, before the cleanup operations). Languages are given as a code or English name (`de`, `German`, `da`, `Danish`, …); the source language is auto-detected per file unless `--translate-from` is set.
 
+Translated output is named with the target language code — `way.srt --translate-to:zh-CN` writes `way.zh-CN.srt` (for container tracks the target code replaces the track's own language suffix, since the content leaves in the target language). An explicit `--output-filename` is used as-is, and `--no-language-suffix` keeps the plain name (`way.srt`) — combine it with `--overwrite` to translate a file in place.
+
 | Option | Description |
 |---|---|
 | `--translate-to:<lang>` | Target language — enables translation |
@@ -261,6 +351,7 @@ seconv movie.sub subrip --time-codes-only
 | `--translate-engine:<engine>` | `llamacpp` (default) \| `ollama` \| `lmstudio` \| `libretranslate` \| `nllb-serve` \| `nllb-api` |
 | `--translate-url:<url>` | Endpoint of an already-running translate server. For `llamacpp` this skips the local server auto-start; a bare `host:port` is completed to `/v1/chat/completions`. |
 | `--translate-model:<model>` | `ollama`/`lmstudio`: model name. `llamacpp`: a `.gguf` file name from the models folder or a full path (default: the first installed translate model). |
+| `--translate-prompt:<text\|file>` | Prompt for `llamacpp` / `ollama` / `lmstudio` — inline text or a path to a text file. See [Custom prompt](#custom-prompt) below. |
 
 **llama.cpp (default engine).** With no `--translate-url`, seconv runs a local `llama-server` for you: it looks for the binary in Subtitle Edit's data folder (`llama.cpp` next to `seconv`, then `%AppData%\Subtitle Edit\llama.cpp` / `~/Library/Application Support/Subtitle Edit/llama.cpp` / `~/.config/Subtitle Edit/llama.cpp`) and falls back to `llama-server` on `PATH`. The server is started on a free localhost port with the model's correct chat-template flags and stopped again when seconv exits. Models resolve against the data folder's `models` subfolder.
 
@@ -287,13 +378,60 @@ seconv movie.srt subrip --translate-to:da --translate-engine:ollama --translate-
 seconv movie.sup subrip --ocr-engine:tesseract --ocr-language:eng --translate-to:de
 ```
 
+#### Custom prompt
+
+`--translate-prompt` is the command-line equivalent of the prompt field the GUI offers for the
+local-LLM engines (see [Prompts: chat models and completion models](../features/auto-translate.md#prompts-chat-models-and-completion-models)).
+It applies to `llamacpp`, `ollama` and `lmstudio`; the translation services (`libretranslate`,
+`nllb-serve`, `nllb-api`) have no prompt, and passing it to them is an error rather than a silent
+no-op.
+
+The same placeholders as in the GUI are substituted: `{0}` = source language, `{1}` = target
+language (both as English names, e.g. `English` / `German`). A prompt that also contains `{2}` is a
+*completion template*: the subtitle text is placed at `{2}` and the filled-in block is sent as-is,
+which is what raw-completion translation models such as MiLMMT-46 are trained on.
+
+The value is either inline text or the path to a text file. Reading from a file is the practical way
+to pass a multi-line completion template; in inline text `\n` (also `\r`, `\t`, `\\`) is unescaped, so
+a short template still fits on one command line.
+
+The two are told apart by shape: an existing file is always read, and so is a value that *looks*
+like a path — no spaces, or a `.txt` / `.prompt` / `.md` extension. A path-shaped value that does not
+exist is an error, so a typo (`--translate-prompt:prompts/mine.tmpl`) fails immediately instead of
+being handed to the model as the prompt and quietly mistranslating the whole batch. Prompt text is
+recognised by containing a space, a line break, or a `{0}`/`{1}`/`{2}` placeholder — which every
+real prompt does.
+
+```bash
+# Inline instruction prompt
+seconv movie.srt subrip --translate-to:de \
+  --translate-prompt:"Translate from {0} to {1}. Keep the line breaks. Use informal address. Output only the translation:"
+
+# Completion template, inline
+seconv movie.srt subrip --translate-to:da --translate-prompt:"Translate this from {0} to {1}:\n{0}: {2}\n{1}:"
+
+# The same, from a file (recommended for anything multi-line)
+seconv movie.srt subrip --translate-to:da --translate-prompt:milmmt.prompt
+
+# Ollama / LM Studio take the same option
+seconv movie.srt subrip --translate-to:da --translate-engine:ollama --translate-model:gemma2 \
+  --translate-prompt:my-prompt.txt
+```
+
+Precedence for `llamacpp`, highest first: `--translate-prompt`, then a curated model's own trained
+prompt (MiLMMT-46, Hy-MT2 — applied automatically when that model is selected), then
+`tools.llamaCppPrompt` from a `--settings` file, then the built-in default. `--translate-prompt`
+deliberately overrides the curated template too: an option given on the command line must never be
+a no-op. `ollama` and `lmstudio` have no per-model template, so it is simply
+`--translate-prompt` > `--settings` > built-in default.
+
 ### Templates / replacements
 
 | Option | Description |
 |---|---|
 | `--multiple-replace:<path>` | Multiple-replace rules applied per paragraph after operations. Accepts the legacy SE *MultipleSearchAndReplaceGroups* XML **and** the file the SE5 GUI exports from *Tools → Multiple replace → export* — either `.template` (JSON) or `.csv`. Supports case-insensitive, `CaseSensitive`, and `RegularExpression` rules; only active rules are applied. The format is chosen by extension, then by content |
 | `--custom-format:<path.xml>` | SE *CustomFormatItem* XML (use with `--format customtext`) |
-| `--settings:<path.json>` | JSON file overlaying `Configuration.Settings` (general / tools / removeTextForHearingImpaired) plus image-output styling (exportImages). Optional `profiles` map for named overlays |
+| `--settings:<path.json>` | JSON file overlaying `Configuration.Settings` (general / tools / removeTextForHearingImpaired) plus image-output styling (exportImages). Optional `profiles` map for named overlays. The `tools` section also carries the auto-translate prompts (`llamaCppPrompt`, `ollamaPrompt`, `lmStudioPrompt`), so a `profiles` entry can hold a per-target-language prompt. `tools.ocrUseWordSplitList: true` lets *Fix common OCR errors* split run-together words via the word split list (off by default, as in the GUI, because it also splits valid words missing from the dictionary) |
 | `--profile:<name>` | Selects a named overlay from the settings file's `profiles` map. Requires `--settings` |
 
 #### Multiple-replace rule files
@@ -383,38 +521,74 @@ The keys and defaults below are exactly what `dump-settings` emits:
     "minimumMillisecondsBetweenLines": 24,
     "maxNumberOfLines": 2,
     "mergeLinesShorterThan": 33,
-    "subtitleMaximumCharactersPerSeconds": 25.0,
-    "subtitleOptimalCharactersPerSeconds": 15.0,
-    "subtitleMaximumWordsPerMinute": 400.0,
+    "subtitleMaximumCharactersPerSeconds": 25,
+    "subtitleOptimalCharactersPerSeconds": 15,
+    "subtitleMaximumWordsPerMinute": 400,
     "dialogStyle": "DashBothLinesWithSpace",
     "continuationStyle": "None"
   },
+  "tools": {
+    "mergeShortLinesMaxGap": 250,
+    "mergeShortLinesOnlyContinuous": true,
+    "llamaCppPrompt": "Translate from {0} to {1}, keep punctuation as input, keep line breaks exactly the same, do not censor the translation, give only the output without comments:",
+    "ollamaPrompt": "Translate from {0} to {1}, keep punctuation as input, keep line breaks exactly the same, do not censor the translation, give only the output without comments or notes:",
+    "lmStudioPrompt": "Translate from {0} to {1}, keep punctuation as input, keep line breaks exactly the same, do not censor the translation, give only the output without comments:",
+    "ocrUseWordSplitList": false
+  },
   "removeTextForHearingImpaired": {
+    "removeTextBetweenBrackets": true,
+    "removeTextBetweenParentheses": true,
+    "removeTextBetweenCurlyBrackets": true,
+    "removeTextBetweenQuestionMarks": true,
+    "removeTextBetweenCustom": false,
+    "removeTextBetweenCustomBefore": "\u00B6",
+    "removeTextBetweenCustomAfter": "\u00B6",
+    "removeTextBetweenOnlySeparateLines": false,
     "removeTextBeforeColon": true,
-    "removeInterjections": false
+    "removeTextBeforeColonOnlyIfUppercase": true,
+    "removeTextBeforeColonOnlyOnSeparateLine": false,
+    "removeInterjections": false,
+    "removeInterjectionsOnlyOnSeparateLine": false,
+    "removeIfContains": false,
+    "removeIfAllUppercase": false,
+    "removeIfContainsText": "\u00B6",
+    "removeIfOnlyMusicSymbols": true
   },
   "exportImages": {
     "fontName": "Arial",
     "fontSize": 50,
-    "fontColor": "#FFFFFF",
+    "fontColor": "#FFFFFFFF",
     "isBold": false,
-    "outlineColor": "black",
+    "outlineColor": "#FF000000",
     "outlineWidth": 2.5,
-    "shadowColor": "black",
+    "shadowColor": "#FF000000",
     "shadowWidth": 0,
-    "backgroundColor": "#B4000000",
+    "backgroundColor": "#00FFFFFF",
     "backgroundCornerRadius": 0,
-    "boxType": "one-box",
+    "boxType": "None",
     "boxPaddingLeft": 5,
     "boxPaddingRight": 5,
     "boxPaddingTop": 3,
     "boxPaddingBottom": 3,
     "lineSpacingPercent": 0,
-    "alignment": "bottom-center",
-    "contentAlignment": "center",
-    "bottomTopMargin": 54,
-    "leftRightMargin": 96
-  },
+    "isFullFrame": false,
+    "fullFrameBackgroundColor": "#00FFFFFF",
+    "mode3D": "None",
+    "depth3D": 0,
+    "alignment": "BottomCenter",
+    "contentAlignment": "Center"
+  }
+}
+```
+
+The `exportImages` section styles text → image rendering (see [Image output styling](#image-output-styling) for the semantics); the equivalent CLI flags override it. Colours are emitted as `#AARRGGBB` (so `backgroundColor` / `fullFrameBackgroundColor` default to fully transparent, `#00FFFFFF`, and `boxType` to `None`); `boxType`, `mode3D`, `alignment`, and `contentAlignment` are emitted as enum names but also accept the CLI spellings (`one-box`, `half-sbs`, `bottom-center`, …). Two optional `exportImages` keys are read but not emitted: `bottomTopMargin` and `leftRightMargin` (pixels; default 5% of the frame height / width). The `tools` section holds the merge-short-lines settings and the auto-translate prompts. The `general` section mirrors `Configuration.Settings.General`; any key left out keeps the libse default. The profile-shaping values (`minimumMillisecondsBetweenLines`, `maxNumberOfLines`, `mergeLinesShorterThan`, `subtitleMaximumCharactersPerSeconds`, `subtitleOptimalCharactersPerSeconds`, `subtitleMaximumWordsPerMinute`, `dialogStyle`, `continuationStyle`) feed Fix common errors and the split/merge operations, so set them to reproduce an SE4 profile. `dialogStyle` and `continuationStyle` take the enum names (case-insensitive): `dialogStyle` ∈ `DashBothLinesWithSpace`, `DashBothLinesWithoutSpace`, `DashSecondLineWithSpace`, `DashSecondLineWithoutSpace`; `continuationStyle` ∈ `None`, `NoneTrailingDots`, `NoneTrailingEllipsis`, `OnlyTrailingDots`, `LeadingTrailingDots`, `LeadingTrailingEllipsis`, `LeadingTrailingDash`, … (see the Fix common errors continuation styles).
+
+Keys that seconv does not recognize are ignored, so a settings file written for a newer version still applies everything this one understands — but they are listed in a warning, so a typo (or a key your seconv is too old to know) does not silently give you default output.
+
+A `profiles` map (not emitted by `dump-settings`) adds named overlays with the same sections, selected with `--profile`:
+
+```json
+{
   "profiles": {
     "broadcast": {
       "general": { "subtitleMaximumDisplayMilliseconds": 6000 },
@@ -427,10 +601,6 @@ The keys and defaults below are exactly what `dump-settings` emits:
 }
 ```
 
-The `exportImages` section styles text → image rendering (see [Image output styling](#image-output-styling) for the semantics); the equivalent CLI flags override it. The `general` section mirrors `Configuration.Settings.General`; any key left out keeps the libse default. The profile-shaping values (`minimumMillisecondsBetweenLines`, `maxNumberOfLines`, `mergeLinesShorterThan`, `subtitleMaximumCharactersPerSeconds`, `subtitleOptimalCharactersPerSeconds`, `subtitleMaximumWordsPerMinute`, `dialogStyle`, `continuationStyle`) feed Fix common errors and the split/merge operations, so set them to reproduce an SE4 profile. `dialogStyle` and `continuationStyle` take the enum names (case-insensitive): `dialogStyle` ∈ `DashBothLinesWithSpace`, `DashBothLinesWithoutSpace`, `DashSecondLineWithSpace`, `DashSecondLineWithoutSpace`; `continuationStyle` ∈ `None`, `NoneTrailingDots`, `NoneTrailingEllipsis`, `OnlyTrailingDots`, `LeadingTrailingDots`, `LeadingTrailingEllipsis`, `LeadingTrailingDash`, … (see the Fix common errors continuation styles).
-
-Keys that seconv does not recognize are ignored, so a settings file written for a newer version still applies everything this one understands — but they are listed in a warning, so a typo (or a key your seconv is too old to know) does not silently give you default output.
-
 ```bash
 seconv *.srt subrip --settings:my.json --profile:broadcast --remove-text-for-hi
 ```
@@ -439,9 +609,9 @@ seconv *.srt subrip --settings:my.json --profile:broadcast --remove-text-for-hi
 
 | Option | Description |
 |---|---|
-| `--quiet` / `-q` | Suppress per-file progress and the parameters table; only print the final summary |
+| `--quiet` / `-q` | Suppress per-file progress, the parameters table, and the OCR/translate progress lines; only print the final summary |
 | `--verbose` / `-v` | Print extra diagnostic information, including full exception details (stack traces) on errors |
-| `--json` | Emit per-file results as JSON to stdout (suppresses Spectre output) |
+| `--json` | Emit per-file results as JSON to stdout (suppresses Spectre output). Also accepted by every subcommand. Failures use the same envelope, so stdout is always one JSON document |
 
 ## Operations
 
@@ -458,7 +628,7 @@ Operations run after the structural transforms (offset, fps, renumber, adjust-du
 | `--delete-first:<n>` | Delete first N entries |
 | `--delete-last:<n>` | Delete last N entries |
 | `--delete-contains:<word>` | Delete entries containing the given word |
-| `--fix-common-errors` | Fix common subtitle errors (all 39 rules) |
+| `--fix-common-errors` | Fix common subtitle errors (all 40 rules) |
 | `--fix-common-errors-rules:<list>` | Run a subset of FCE rules (CSV; supports `all,-RuleId`) |
 | `--fce-language:<code>` | Force the language for FCE language-gated rules (code or English name, e.g. `es` / `Spanish`); default: auto-detect from content |
 | `--fix-rtl-via-unicode-chars` | Fix RTL via Unicode characters |
@@ -490,7 +660,7 @@ In most batch pipelines `--apply-min-gap` is the better choice; reach for the FC
 
 ### FixCommonErrors rule selection
 
-`--fix-common-errors` (no value) runs all 39 rules. Pass `--fix-common-errors-rules:<list>` to pick a subset — supplying that option implies `--fix-common-errors`.
+`--fix-common-errors` (no value) runs all 40 rules (39 fixes plus the `FixCommonOcrErrors` pass). Pass `--fix-common-errors-rules:<list>` to pick a subset — supplying that option implies `--fix-common-errors`.
 
 ```bash
 seconv movie.srt subrip --fix-common-errors                                  # all rules
@@ -508,6 +678,8 @@ The language is auto-detected from the content. To force it:
 
 **Rule selection is CLI-only.** The set of rules is chosen with `--fix-common-errors-rules`, not through the `--settings` JSON. The settings file shapes *how* the rules behave (line length, min gap, dialog/continuation style, CPS — see [Settings JSON](#settings-json)); it does not select which rules run.
 
+**Opt-in rules.** `FixMisreadQuotes` can change correct text (British-style `'quotes'` become `"quotes"`), so it is not part of `all` — neither the `--fix-common-errors` default, `all`, nor a negation-only spec runs it. Name it explicitly to use it, e.g. `--fix-common-errors-rules:all,FixMisreadQuotes`.
+
 `FixCommonOcrErrors` runs only when a dictionary folder is available — bundled for English, or supplied via `--dictionary-folder` for other languages (see [OCR options](#ocr)). Without one, that rule is skipped and every other rule still runs.
 
 #### Rule ID ↔ GUI equivalent
@@ -516,6 +688,7 @@ The CLI rule IDs match the check-box rules in the desktop app's *Fix Common Erro
 
 | Rule ID | GUI equivalent | Language gate |
 |---|---|---|
+| `FixMisreadQuotes` | Fix apostrophes misread as double quotes (OCR, English) | en only, opt-in |
 | `AddMissingQuotes` | Add missing quotes (") | — |
 | `Fix3PlusLines` | Fix subtitles with more than two lines | — |
 | `FixAloneLowercaseIToUppercaseI` | Fix alone lowercase 'i' to 'I' (English) | en only |
@@ -603,29 +776,34 @@ This mirrors the desktop app, where batch convert's *Remove formatting* function
 | `unipac`, `pacunicode` | PAC Unicode |
 | `ebu`, `ebustl`, `stl` | EBU STL — binary |
 | `cavena`, `cavena890` | Cavena 890 — binary |
-| `cheetahcaption` | CheetahCaption — binary |
-| `capmakerplus` | CapMakerPlus — binary |
+| `cheetah`, `cheetahcaption` | CheetahCaption — binary |
+| `capmaker`, `capmakerplus` | CapMakerPlus — binary |
 | `ayato` | Ayato — binary |
-| `bluraysup`, `sup` | Blu-Ray sup — image |
+| `bluraysup`, `blurayup`, `sup` | Blu-Ray sup — image |
+| `dvdsup`, `spdvdsup` | DVD sup (SP-wrapped DVD subpictures) — image |
 | `vobsub` | VobSub — image |
 | `bdnxml`, `bdn-xml` | BDN-XML — image (folder of PNGs + index.xml) |
 | `bdnxml8bit`, `bdn-xml8-bit` | BDN-XML with 8-bit palette-indexed PNGs — image |
+| `imscimage`, `imsc-image` | IMSC 1.1 image profile — image (`.ttml` plus one PNG per subtitle next to it) |
 | `dost`, `dostimage` | DOST/image |
 | `fcpimage`, `fcp` | FCP/image |
-| `dcinemainterop` | D-Cinema interop/png |
-| `dcinemasmpte2014` | D-Cinema SMPTE 2014/png |
-| `imageswithtimecode` | Images with time codes in file name |
+| `dcinemainterop`, `dcinema-interop` | D-Cinema interop/png |
+| `dcinemasmpte2014`, `dcinema-smpte` | D-Cinema SMPTE 2014/png |
+| `imageswithtimecode`, `imagesintc` | Images with time codes in file name |
+| `webvttthumbnail`, `webvtt-thumbnail`, `vttthumb` | WebVTT Thumbnail — image (sprite sheet + `.vtt`) |
 | `plaintext`, `text`, `txt` | Plain text (HTML stripped) |
 | `customtext`, `customtextformat` | Custom-templated text (requires `--custom-format`) |
 
-Run `seconv formats` for the full catalog (380+ entries, including input-only formats like Matroska, MP4, and MCC).
+Run `seconv formats` for the full catalog (380+ entries, including input-only formats like Matroska, MP4, and MCC), or `seconv formats --json` for the machine-readable list whose `id` field is exactly what `--format` accepts.
 
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
 | `0` | Conversion succeeded for all matched files |
-| `1` | Any error: validation failure, parse error, OCR engine missing, invalid `--settings` file, or one or more files failed to convert |
+| `1` | Any error: bad usage, unknown option, rejected option value, no files matched, parse error, OCR engine missing, invalid `--settings` file, or one or more files failed to convert |
+
+There are only these two. Every failure path — including argument parsing — exits 1.
 
 ## Legacy syntax
 

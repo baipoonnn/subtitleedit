@@ -1,10 +1,11 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Nikse.SubtitleEdit.Controls.AudioVisualizerControl;
 using Nikse.SubtitleEdit.Controls.VideoPlayer;
+using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Features.Main;
 using Nikse.SubtitleEdit.Features.Shared;
 using Nikse.SubtitleEdit.Features.Shared.FindText;
@@ -12,10 +13,10 @@ using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
 using Nikse.SubtitleEdit.Logic.Media;
 using Nikse.SubtitleEdit.Logic.VideoPlayers;
-using Nikse.SubtitleEdit.Logic.VideoPlayers.LibMpvDynamic;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Nikse.SubtitleEdit.UiLogic.Media;
@@ -42,17 +43,38 @@ public partial class VisualSyncViewModel : ObservableObject
     public ComboBox ComboBoxRight { get; set; }
 
     private readonly IWindowService _windowService;
+    private readonly IFileHelper _fileHelper;
+
+    // One per player: each keeps the temp subtitle file it handed to its own player, so a shared
+    // instance would have the two players overwriting each other's file.
+    private readonly IVideoPreviewSubtitle _previewSubtitleLeft;
+    private readonly IVideoPreviewSubtitle _previewSubtitleRight;
 
     private string? _videoFileName;
-    private DispatcherTimer _positionTimer = new DispatcherTimer();
+    private string? _wavePeaksVideoFileName;
+    private bool _closed; // set by OnClosing; stops the posted half of Initialize from starting a pump on a disposed player
+    private UiTickPump _positionTimer = new(TimeSpan.FromMilliseconds(150)); // posted ticks, not a DispatcherTimer - see UiTickPump
     private List<SubtitleLineViewModel> _subtitleLines = new List<SubtitleLineViewModel>();
+
+    // _subtitleLines by start time, for the two waveforms. Sorting on every 150 ms tick (twice -
+    // once per waveform) cost milliseconds and a large-object-heap array each time, so it is
+    // built on demand and dropped wherever the time codes can change.
+    private List<SubtitleLineViewModel>? _sortedLines;
+    private VideoPreviewSubtitleContext _previewContext = VideoPreviewSubtitleContext.Default;
     private bool _updateAudioVisualizer;
     private double _lastManualOffsetSeconds;
     private double _lastManualSpeedFactor = 1.0;
 
-    public VisualSyncViewModel(IWindowService windowService)
+    public VisualSyncViewModel(
+        IWindowService windowService,
+        IFileHelper fileHelper,
+        IVideoPreviewSubtitle previewSubtitleLeft,
+        IVideoPreviewSubtitle previewSubtitleRight)
     {
         _windowService = windowService;
+        _fileHelper = fileHelper;
+        _previewSubtitleLeft = previewSubtitleLeft;
+        _previewSubtitleRight = previewSubtitleRight;
 
         Title = string.Empty;
         VideoInfo = string.Empty;
@@ -85,26 +107,56 @@ public partial class VisualSyncViewModel : ObservableObject
         List<SubtitleLineViewModel> paragraphs,
         string? videoFileName,
         string? subtitleFileName,
+        VideoPreviewSubtitleContext previewContext,
         AudioVisualizer? audioVisualizer,
         int audioTrackId = -1)
     {
+        // No video handed down from the main window - look for one next to the subtitle file, the
+        // way SE4's visual sync did. Failing that the dialog is not a dead end: "Open video file..."
+        // is there to pick one. The video stays local to this dialog either way - only time codes
+        // are reported back, so a video found on disk cannot walk over the "auto open video file"
+        // setting in the main window.
+        if (string.IsNullOrEmpty(videoFileName) &&
+            !string.IsNullOrEmpty(subtitleFileName) &&
+            FindVideoFileName.TryFindVideoFileName(subtitleFileName, out var foundVideoFileName))
+        {
+            videoFileName = foundVideoFileName;
+        }
+
         SetVideoInFo(videoFileName);
         Paragraphs = new ObservableCollection<SubtitleDisplayItem>(paragraphs.Select(p => new SubtitleDisplayItem(p)));
         _videoFileName = videoFileName;
         _subtitleLines = paragraphs;
+        _sortedLines = null;
+
+        // Carried in so the subtitle drawn on the two videos looks like the one on the main
+        // window's video.
+        _previewContext = previewContext;
 
         Dispatcher.UIThread.Post(() =>
         {
+            // Closed before this post ran: OnClosing has already stopped the (placeholder) pump
+            // and disposed the player, so the pump started below would never be stopped and
+            // would poll the dead player for the rest of the session - every poll an
+            // error-log entry.
+            if (_closed)
+            {
+                return;
+            }
+
             if (!string.IsNullOrEmpty(videoFileName))
             {
                 _ = OpenPlayersAsync(videoFileName, audioTrackId);
             }
 
-            if (audioVisualizer != null)
+            // An audio visualizer without peaks is just an empty box - only show it when the main
+            // window actually has a waveform to lend us.
+            if (audioVisualizer?.WavePeaks != null)
             {
                 AudioVisualizerLeft.WavePeaks = audioVisualizer.WavePeaks;
                 AudioVisualizerRight.WavePeaks = audioVisualizer.WavePeaks;
                 IsAudioVisualizerVisible = true;
+                _wavePeaksVideoFileName = videoFileName;
             }
             StartTitleTimer();
             _updateAudioVisualizer = true;
@@ -124,15 +176,8 @@ public partial class VisualSyncViewModel : ObservableObject
             return;
         }
 
-        if (VideoPlayerControlLeft.VideoPlayer is LibMpvDynamicPlayer mpvLeft)
-        {
-            mpvLeft.SetAudioTrack(audioTrackId);
-        }
-
-        if (VideoPlayerControlRight.VideoPlayer is LibMpvDynamicPlayer mpvRight)
-        {
-            mpvRight.SetAudioTrack(audioTrackId);
-        }
+        VideoPlayerControlLeft.VideoPlayer?.SetAudioTrack(audioTrackId);
+        VideoPlayerControlRight.VideoPlayer?.SetAudioTrack(audioTrackId);
     }
 
     private void SetVideoInFo(string? videoFileName)
@@ -161,13 +206,18 @@ public partial class VisualSyncViewModel : ObservableObject
 
     }
 
+    /// <summary>Test hook: whether the position pump is ticking.</summary>
+    internal bool IsPositionTimerRunning => _positionTimer.IsRunning;
+
     private void StartTitleTimer()
     {
-        _positionTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+        _positionTimer = new UiTickPump(TimeSpan.FromMilliseconds(150));
         _positionTimer.Tick += (s, e) =>
         {
             UpdateAudioVisualizer(VideoPlayerControlLeft.VideoPlayer, AudioVisualizerLeft, SelectedParagraphLeftIndex);
             UpdateAudioVisualizer(VideoPlayerControlRight.VideoPlayer, AudioVisualizerRight, SelectedParagraphRightIndex);
+
+            RefreshPreviewSubtitles();
 
             if (_updateAudioVisualizer)
             {
@@ -179,6 +229,31 @@ public partial class VisualSyncViewModel : ObservableObject
         _positionTimer.Start();
     }
 
+    /// <summary>
+    /// Both players get the whole subtitle, so each shows whatever line belongs at the frame it is
+    /// parked on - which is the comparison visual sync is for (discussion #13767).
+    /// </summary>
+    internal void RefreshPreviewSubtitles()
+    {
+        _previewSubtitleLeft.Refresh(VideoPlayerControlLeft.VideoPlayer, BuildPreviewSubtitle, _previewContext);
+        _previewSubtitleRight.Refresh(VideoPlayerControlRight.VideoPlayer, BuildPreviewSubtitle, _previewContext);
+    }
+
+    /// <summary>
+    /// The lines as they stand right now - "Sync" adjusts them in place, so the subtitle on the
+    /// videos follows the new time codes just as SE4's did.
+    /// </summary>
+    private Subtitle BuildPreviewSubtitle()
+    {
+        var subtitle = new Subtitle { Header = _previewContext.Header };
+        foreach (var p in Paragraphs)
+        {
+            subtitle.Paragraphs.Add(p.Subtitle.ToParagraph(_previewContext.Format));
+        }
+
+        return subtitle;
+    }
+
     private void UpdateAudioVisualizer(
         IVideoPlayer vp,
         AudioVisualizer av,
@@ -188,7 +263,7 @@ public partial class VisualSyncViewModel : ObservableObject
             ? null
             : Paragraphs[selectedParagraphIndex];
 
-        var subtitle = _subtitleLines.OrderBy(p => p.StartTime.TotalMilliseconds).ToList();
+        var subtitle = _sortedLines ??= _subtitleLines.OrderBy(p => p.StartTime.TotalMilliseconds).ToList();
         var firstSelectedIndex = -1;
 
         var mediaPlayerSeconds = vp.Position;
@@ -229,14 +304,14 @@ public partial class VisualSyncViewModel : ObservableObject
     [RelayCommand]
     private void LeftOneSecondForward()
     {
-        VideoPlayerControlLeft.Position = Math.Max(0, VideoPlayerControlLeft.Position + 1);
+        VideoPlayerControlLeft.Position = Math.Min(VideoPlayerControlLeft.Duration, VideoPlayerControlLeft.Position + 1);
         _updateAudioVisualizer = true;
     }
 
     [RelayCommand]
     private void RightOneSecondBack()
     {
-        VideoPlayerControlRight.Position = Math.Min(VideoPlayerControlRight.Duration, VideoPlayerControlRight.Position - 1);
+        VideoPlayerControlRight.Position = Math.Max(0, VideoPlayerControlRight.Position - 1);
         _updateAudioVisualizer = true;
     }
 
@@ -257,14 +332,14 @@ public partial class VisualSyncViewModel : ObservableObject
     [RelayCommand]
     private void LeftHalfSecondForward()
     {
-        VideoPlayerControlLeft.Position = Math.Max(0, VideoPlayerControlLeft.Position + 0.5);
+        VideoPlayerControlLeft.Position = Math.Min(VideoPlayerControlLeft.Duration, VideoPlayerControlLeft.Position + 0.5);
         _updateAudioVisualizer = true;
     }
 
     [RelayCommand]
     private void RightHalfSecondBack()
     {
-        VideoPlayerControlRight.Position = Math.Min(VideoPlayerControlRight.Duration, VideoPlayerControlRight.Position - 0.5);
+        VideoPlayerControlRight.Position = Math.Max(0, VideoPlayerControlRight.Position - 0.5);
         _updateAudioVisualizer = true;
     }
 
@@ -393,6 +468,9 @@ public partial class VisualSyncViewModel : ObservableObject
             vm.Initialize(new ObservableCollection<SubtitleLineViewModel>(_subtitleLines), _lastManualOffsetSeconds, _lastManualSpeedFactor);
         });
 
+        // The dialog gets the same line objects - don't trust the sorted copy after it.
+        _sortedLines = null;
+
         if (!result.OkPressed)
         {
             return;
@@ -405,7 +483,7 @@ public partial class VisualSyncViewModel : ObservableObject
         ApplySync(result.SpeedFactor, result.OffsetSeconds);
     }
 
-    private void ApplySync(double factor, double adjust)
+    internal void ApplySync(double factor, double adjust)
     {
         if (Math.Abs(factor) < 0.000001)
         {
@@ -434,6 +512,11 @@ public partial class VisualSyncViewModel : ObservableObject
                 current.EndTime = TimeSpan.FromMilliseconds(next.StartTime.TotalMilliseconds - 1);
             }
         }
+
+        // The time codes moved, so the subtitle on both videos has to be pushed again.
+        _sortedLines = null;
+        _previewSubtitleLeft.Invalidate();
+        _previewSubtitleRight.Invalidate();
 
         _updateAudioVisualizer = true;
     }
@@ -497,9 +580,14 @@ public partial class VisualSyncViewModel : ObservableObject
     internal void OnClosing()
     {
         UiUtil.SaveWindowPosition(Window);
+        _closed = true;
         _positionTimer.Stop();
-        VideoPlayerControlLeft.VideoPlayer.CloseFile();
-        VideoPlayerControlRight.VideoPlayer.CloseFile();
+        VideoPlayerControlLeft.CloseAndDisposePlayer();
+        VideoPlayerControlRight.CloseAndDisposePlayer();
+
+        // Deletes the temp subtitle files handed to the two players.
+        _previewSubtitleLeft.Reset();
+        _previewSubtitleRight.Reset();
     }
 
     [RelayCommand]
@@ -538,14 +626,14 @@ public partial class VisualSyncViewModel : ObservableObject
     {
         UiUtil.RestoreWindowPosition(Window);
 
-        if (string.IsNullOrEmpty(_videoFileName))
+        // Only the video needs waiting for - the start/end scenes still have to be picked when
+        // there is none, so the combo boxes are not left empty while the user finds a video.
+        if (!string.IsNullOrEmpty(_videoFileName))
         {
-            return;
+            // Wait a bit for video players to finish opening the file (or until they report a duration)
+            await VideoPlayerControlLeft.WaitForPlayersReadyAsync();
+            await VideoPlayerControlRight.WaitForPlayersReadyAsync();
         }
-
-        // Wait a bit for video players to finish opening the file (or until they report a duration)
-        await VideoPlayerControlLeft.WaitForPlayersReadyAsync();
-        await VideoPlayerControlRight.WaitForPlayersReadyAsync();
 
         Dispatcher.UIThread.Post(() =>
         {
@@ -558,6 +646,56 @@ public partial class VisualSyncViewModel : ObservableObject
             SelectedParagraphRightIndex = Paragraphs.Count - 1;
             GoToLeftSubtitle();
             GoToRightSubtitle();
+        });
+    }
+
+    /// <summary>
+    /// Opens a video from inside the dialog, so entering visual sync without one is not a dead end
+    /// - SE4 offered the same button. The video stays local to this dialog; only time codes are
+    /// reported back.
+    /// </summary>
+    [RelayCommand]
+    private async Task OpenVideoFile()
+    {
+        if (Window == null)
+        {
+            return;
+        }
+
+        var fileName = await _fileHelper.PickOpenVideoFile(Window, Se.Language.General.OpenVideoFileTitle);
+        if (string.IsNullOrEmpty(fileName) || !File.Exists(fileName))
+        {
+            return;
+        }
+
+        _videoFileName = fileName;
+        SetVideoInFo(fileName);
+
+        // The lent waveform belongs to the video the dialog was opened with - keeping it
+        // under a different video would have the user syncing against the wrong peaks.
+        if (!string.Equals(fileName, _wavePeaksVideoFileName, StringComparison.OrdinalIgnoreCase))
+        {
+            AudioVisualizerLeft.WavePeaks = null;
+            AudioVisualizerRight.WavePeaks = null;
+            IsAudioVisualizerVisible = false;
+        }
+
+        await OpenPlayersAsync(fileName, -1);
+        await VideoPlayerControlLeft.WaitForPlayersReadyAsync();
+        await VideoPlayerControlRight.WaitForPlayersReadyAsync();
+
+        // The external subtitle went with the old file - it has to be added to the new one from
+        // scratch, not reloaded into a track that is no longer there.
+        _previewSubtitleLeft.Reset();
+        _previewSubtitleRight.Reset();
+
+        // Land the players on the scenes already picked in the combo boxes (OnLoaded seeds them
+        // to the first/last line even without a video), instead of both sitting at zero.
+        Dispatcher.UIThread.Post(() =>
+        {
+            GoToLeftSubtitle();
+            GoToRightSubtitle();
+            _updateAudioVisualizer = true;
         });
     }
 
@@ -576,67 +714,105 @@ public partial class VisualSyncViewModel : ObservableObject
 
         if (IsLeftFocused())
         {
-            if (e.Key == Key.Space || (e.Key == Key.P && e.KeyModifiers.HasFlag(KeyModifiers.Control)))
-            {
-                e.Handled = true;
-                VideoPlayerControlLeft.TogglePlayPause();
-            }
-            else if (e.Key == Key.Left && e.KeyModifiers.HasFlag(KeyModifiers.Control))
-            {
-                e.Handled = true;
-                VideoPlayerControlLeft.Position = Math.Max(0, VideoPlayerControlLeft.Position - 1);
-                _updateAudioVisualizer = true;
-            }
-            else if (e.Key == Key.Right && e.KeyModifiers.HasFlag(KeyModifiers.Control))
-            {
-                e.Handled = true;
-                VideoPlayerControlLeft.Position += 1;
-                _updateAudioVisualizer = true;
-            }
-            else if (e.Key == Key.Left && e.KeyModifiers.HasFlag(KeyModifiers.Alt))
-            {
-                e.Handled = true;
-                VideoPlayerControlLeft.Position = Math.Max(0, VideoPlayerControlLeft.Position - 0.5);
-                _updateAudioVisualizer = true;
-            }
-            else if (e.Key == Key.Right && e.KeyModifiers.HasFlag(KeyModifiers.Alt))
-            {
-                e.Handled = true;
-                VideoPlayerControlLeft.Position += 0.5;
-                _updateAudioVisualizer = true;
-            }
+            HandlePaneKeys(e, VideoPlayerControlLeft, AudioVisualizerLeft);
         }
         else if (IsRightFocused())
         {
-            if (e.Key == Key.Space || (e.Key == Key.P && e.KeyModifiers.HasFlag(KeyModifiers.Control)))
-            {
-                e.Handled = true;
-                VideoPlayerControlRight.TogglePlayPause();
-            }
-            else if (e.Key == Key.Left && e.KeyModifiers.HasFlag(KeyModifiers.Control))
-            {
-                e.Handled = true;
-                VideoPlayerControlRight.Position = Math.Max(0, VideoPlayerControlRight.Position - 1);
-                _updateAudioVisualizer = true;
-            }
-            else if (e.Key == Key.Right && e.KeyModifiers.HasFlag(KeyModifiers.Control))
-            {
-                e.Handled = true;
-                VideoPlayerControlRight.Position += 1;
-                _updateAudioVisualizer = true;
-            }
-            else if (e.Key == Key.Left && e.KeyModifiers.HasFlag(KeyModifiers.Alt))
-            {
-                e.Handled = true;
-                VideoPlayerControlRight.Position = Math.Max(0, VideoPlayerControlRight.Position - 0.5);
-                _updateAudioVisualizer = true;
-            }
-            else if (e.Key == Key.Right && e.KeyModifiers.HasFlag(KeyModifiers.Alt))
-            {
-                e.Handled = true;
-                VideoPlayerControlRight.Position += 0.5;
-                _updateAudioVisualizer = true;
-            }
+            HandlePaneKeys(e, VideoPlayerControlRight, AudioVisualizerRight);
         }
+    }
+
+    private void HandlePaneKeys(KeyEventArgs e, VideoPlayerControl videoPlayer, AudioVisualizer audioVisualizer)
+    {
+        if (e.Key == Key.Space || (e.Key == Key.P && e.KeyModifiers.HasFlag(KeyModifiers.Control)))
+        {
+            e.Handled = true;
+            videoPlayer.TogglePlayPause();
+            return;
+        }
+
+        var seekSeconds = GetSeekSeconds(e);
+        if (seekSeconds.HasValue)
+        {
+            e.Handled = true;
+            videoPlayer.Position = Math.Max(0, videoPlayer.Position + seekSeconds.Value);
+            _updateAudioVisualizer = true;
+        }
+        else if ((e.Key == Key.Add || e.Key == Key.OemPlus) && e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            e.Handled = true;
+            WaveformVerticalZoomIn(audioVisualizer);
+        }
+        else if ((e.Key == Key.Subtract || e.Key == Key.OemMinus) && e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            e.Handled = true;
+            WaveformVerticalZoomOut(audioVisualizer);
+        }
+    }
+
+    /// <summary>
+    /// How far a key moves the focused video, in seconds, or null for other keys.
+    /// The main window's "Move start/end X ms back/forward" shortcuts step by the X ms setting
+    /// (finer than a frame, to hit waveform edges); the built-in arrow steps are SE 4's:
+    /// Ctrl = 100 ms, Alt = 500 ms, Ctrl+Shift = 1 s. A user binding wins over a built-in step.
+    /// </summary>
+    internal static double? GetSeekSeconds(KeyEventArgs e)
+    {
+        var stepSeconds = Math.Max(1, Se.Settings.General.MoveStartEndStepMs) / 1000.0;
+        if (MainShortcutKeys.Matches(e, nameof(MainViewModel.MoveStartXMsBackCommand), []) ||
+            MainShortcutKeys.Matches(e, nameof(MainViewModel.MoveEndXMsBackCommand), []))
+        {
+            return -stepSeconds;
+        }
+
+        if (MainShortcutKeys.Matches(e, nameof(MainViewModel.MoveStartXMsForwardCommand), []) ||
+            MainShortcutKeys.Matches(e, nameof(MainViewModel.MoveEndXMsForwardCommand), []))
+        {
+            return stepSeconds;
+        }
+
+        var direction = e.Key switch
+        {
+            Key.Left => -1,
+            Key.Right => 1,
+            _ => 0,
+        };
+        if (direction == 0)
+        {
+            return null;
+        }
+
+        return e.KeyModifiers switch
+        {
+            KeyModifiers.Control | KeyModifiers.Shift => direction * 1.0,
+            KeyModifiers.Control => direction * 0.1,
+            KeyModifiers.Alt => direction * 0.5,
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// Mirrors the main window's waveform vertical zoom (Shift +/-) for whichever pane has focus:
+    /// scales that waveform's amplitude in place instead of resizing the split panel, so zooming
+    /// in does not eat into the video area (#14419 comment).
+    /// </summary>
+    private void WaveformVerticalZoomIn(AudioVisualizer audioVisualizer)
+    {
+        if (!IsAudioVisualizerVisible)
+        {
+            return;
+        }
+
+        audioVisualizer.VerticalZoomFactor = Math.Max(Math.Min(audioVisualizer.VerticalZoomFactor - 0.1, AudioVisualizer.MaxZoomFactor), AudioVisualizer.MinZoomFactor);
+    }
+
+    private void WaveformVerticalZoomOut(AudioVisualizer audioVisualizer)
+    {
+        if (!IsAudioVisualizerVisible)
+        {
+            return;
+        }
+
+        audioVisualizer.VerticalZoomFactor = Math.Max(Math.Min(audioVisualizer.VerticalZoomFactor + 0.1, AudioVisualizer.MaxZoomFactor), AudioVisualizer.MinZoomFactor);
     }
 }

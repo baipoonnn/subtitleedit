@@ -42,6 +42,8 @@ public class ChatterboxTtsCpp : ITtsEngine
     public bool HasRegion => false;
     public bool HasModel => true;
     public bool HasKeyFile => false;
+    public bool SupportsVoiceCloning => true;
+    public bool SupportsPerLineVoiceCloning => false;
 
     /// <summary>
     /// The only sample rate the chatterbox backend clones from without losing anything. 16 kHz
@@ -56,6 +58,8 @@ public class ChatterboxTtsCpp : ITtsEngine
     private const long MinimumUsableWavLength = 44;
 
     public const string ModelKeyBase = ChatterboxTtsCppDownloadService.ModelKeyBase;
+    public const string ModelKeyBaseF16 = ChatterboxTtsCppDownloadService.ModelKeyBaseF16;
+    public const string ModelKeyBaseQ4K = ChatterboxTtsCppDownloadService.ModelKeyBaseQ4K;
     public const string ModelKeyTurbo = ChatterboxTtsCppDownloadService.ModelKeyTurbo;
     public const string DefaultModelKey = ChatterboxTtsCppDownloadService.DefaultModelKey;
 
@@ -82,6 +86,9 @@ public class ChatterboxTtsCpp : ITtsEngine
     private static Process? _serverProcess;
     private static int _serverPort;
     private static string? _serverModelKey;
+    // The `voice` the running server last served, i.e. whose clone conditionals are installed in
+    // it (bare file name, empty for the model's baked default voice). See NeedsRestartForVoice.
+    private static string _serverVoiceKey = string.Empty;
     private static string? _serverLaunchCommand;
     private static bool _processExitHooked;
     // Rolling buffer of the server's stdout+stderr — used to attach context to
@@ -270,17 +277,14 @@ public class ChatterboxTtsCpp : ITtsEngine
     public static string GetS3GenModelPath(string? modelKey = null) =>
         Path.Combine(GetSetModelsFolder(), ChatterboxTtsCppDownloadService.GetS3GenFileName(ResolveModelKey(modelKey)));
 
-    // Legacy pre-multilingual Base GGUFs (English-only T3, downloaded before upstream's
-    // 2026-06-18 in-place rebuild of cstr/chatterbox-GGUF) count as NOT installed so the
-    // normal "Download models?" prompt re-fetches the multilingual files — without this,
-    // picking a language changes nothing for those users and there is no visible reason why.
+    // A plain existence check is enough now that the Base pair is the versioned chatterbox-v3-*
+    // artifact: the file name pins which weights it is, so nothing on disk can quietly become
+    // something else. The byte-size probe this replaced existed only because upstream rebuilt
+    // the unversioned names in place (English-only -> multilingual) and left the old files
+    // looking installed; users still holding those get them deleted after the V3 download.
     public static bool AreModelsInstalled(string? modelKey = null)
     {
-        var t3Path = GetT3ModelPath(modelKey);
-        var s3genPath = GetS3GenModelPath(modelKey);
-        return File.Exists(t3Path) && File.Exists(s3genPath)
-            && !ChatterboxTtsCppDownloadService.IsLegacyEnglishOnlyModel(t3Path)
-            && !ChatterboxTtsCppDownloadService.IsLegacyEnglishOnlyModel(s3genPath);
+        return File.Exists(GetT3ModelPath(modelKey)) && File.Exists(GetS3GenModelPath(modelKey));
     }
 
     public Task<Voice[]> GetVoices(string language)
@@ -304,10 +308,20 @@ public class ChatterboxTtsCpp : ITtsEngine
 
     public Task<string[]> GetRegions() => Task.FromResult(Array.Empty<string>());
 
-    public Task<string[]> GetModels() => Task.FromResult(new[] { ModelKeyBase, ModelKeyTurbo });
+    /// <summary>
+    /// Base is the multilingual v3 pair in three quantizations — q8_0 (default), f16 and q4_k,
+    /// all the same weights at different precision — plus the separate Turbo distillation.
+    /// Measured 2026-08-12 on crispasr v0.8.28 (Apple M4), 27 runs over en/de/fr × 2 seeds ×
+    /// built-in and cloned voice: every quantization returned the prompt verbatim through a
+    /// parakeet-v3 ASR roundtrip and synthesis time was within noise of the others, so the
+    /// only real trade-off is download size and peak RSS (~2.2 GB f16 / ~1.6 GB q8_0 /
+    /// ~1.25 GB q4_k). q8_0 stays the default; f16 is offered for parity with upstream's
+    /// reference tier, not because it measured better.
+    /// </summary>
+    public Task<string[]> GetModels() => Task.FromResult(ChatterboxTtsCppDownloadService.GetAllModelKeys());
 
     /// <summary>
-    /// The multilingual Base model takes a per-request language (23 languages, "[xx]" prompt
+    /// The multilingual Base models take a per-request language (23 languages, "[xx]" prompt
     /// token server-side); Turbo is an English-only distillation, so it gets "Auto" alone
     /// rather than an empty combo.
     /// </summary>
@@ -336,7 +350,7 @@ public class ChatterboxTtsCpp : ITtsEngine
         }
 
         var modelKey = ResolveModelKey(model);
-        await EnsureServerRunningAsync(modelKey, cancellationToken);
+        await EnsureServerRunningAsync(modelKey, ResolveVoiceKey(chatterboxVoice.FilePath), cancellationToken);
 
         // Off the calling thread because the repair shells out to ffmpeg. Deliberately not a hard
         // failure either: the check is stricter than the backend's (which still has a partial
@@ -355,11 +369,34 @@ public class ChatterboxTtsCpp : ITtsEngine
             ? string.Empty
             : ChatterboxLanguages.ResolveLanguageArg(language);
 
-        var payload = BuildSpeakPayload(inputText, chatterboxVoice.FilePath, languageArg);
+        // Language the reference recording is spoken in (CrispASR v0.8.29 / #329). The backend
+        // needs BOTH sides before it goes cross-lingual, so without this an English reference
+        // asked for German keeps the English accent. Only meaningful when actually cloning and
+        // when a target language was asked for at all.
+        var sourceLanguageArg = !string.IsNullOrEmpty(chatterboxVoice.FilePath) && !string.IsNullOrEmpty(languageArg)
+            ? ChatterboxLanguages.ResolveSourceLanguageArg(TryReadReferenceTranscript(chatterboxVoice.FilePath))
+            : string.Empty;
+
+        if (string.IsNullOrEmpty(sourceLanguageArg)
+            && !string.IsNullOrEmpty(chatterboxVoice.FilePath)
+            && !string.IsNullOrEmpty(languageArg))
+        {
+            // Target language asked for, reference language unknowable: the clone keeps the
+            // reference's accent and nothing in the 200 response says so. Same wording as the
+            // CosyVoice3 path, which hit this first.
+            Se.WriteToolsLog(
+                $"Chatterbox TTS: target language '{languageArg}' requested for cloned voice "
+                + $"'{chatterboxVoice}', but the language of its reference WAV is unknown. Synthesis "
+                + "stays zero-shot and keeps the reference's accent - set \"Reference language\" in "
+                + "the Chatterbox settings window to enable cross-lingual synthesis.",
+                true);
+        }
+
+        var payload = BuildSpeakPayload(inputText, chatterboxVoice.FilePath, languageArg, sourceLanguageArg);
 
         var body = JsonSerializer.Serialize(payload);
         using var content = new StringContent(body, Encoding.UTF8, "application/json");
-        Se.WriteToolsLog($"Chatterbox TTS: POST {ServerBaseUrl}/v1/audio/speech (voice={chatterboxVoice}, model={modelKey}, textLen={text.Length}, language={(string.IsNullOrEmpty(languageArg) ? "(auto)" : languageArg)})");
+        Se.WriteToolsLog($"Chatterbox TTS: POST {ServerBaseUrl}/v1/audio/speech (voice={chatterboxVoice}, model={modelKey}, textLen={text.Length}, language={(string.IsNullOrEmpty(languageArg) ? "(auto)" : languageArg)}, sourceLanguage={(string.IsNullOrEmpty(sourceLanguageArg) ? "(none)" : sourceLanguageArg)})");
         HttpResponseMessage response;
         try
         {
@@ -370,9 +407,13 @@ public class ChatterboxTtsCpp : ITtsEngine
             // Connection dropped before a response — typically the server crashed
             // during synth (ggml fault, OOM, etc.). Attach what the server printed
             // so the user/we can see the underlying reason.
+            //
+            // Let the process finish dying first: the fatal lines are still travelling through the
+            // async stderr reader when the socket drops, so snapshotting straight away captured a
+            // log that stopped at the last normal line and said nothing about the crash (#13572).
+            var died = await WaitForServerExitAsync(TimeSpan.FromSeconds(2));
             var serverLog = SnapshotServerLog();
             var launchCommand = _serverLaunchCommand;
-            var died = _serverProcess?.HasExited == true;
             if (died)
             {
                 StopServerInternal();
@@ -383,13 +424,27 @@ public class ChatterboxTtsCpp : ITtsEngine
             Se.LogError(ex, failMsg);
             Se.WriteToolsLog(failMsg);
 
-            var prefix = LooksLikeUpstreamChatterboxCrash(serverLog)
-                ? "Chatterbox TTS hit a CrispASR runtime bug during synthesis (ggml tensor read out of bounds). "
-                  + "This is an upstream issue — please file it at https://github.com/CrispStrobe/CrispASR/issues with the server log below. "
-                  + "The crash reproduces on the CPU and Vulkan builds (chatterbox's T3 step runs on CPU regardless of the build); "
-                  + "the CUDA build may avoid it but is unverified."
-                : "Chatterbox TTS request failed — "
-                  + (died ? "the crispasr server crashed during synthesis." : "the connection to the crispasr server was dropped.");
+            string prefix;
+            if (LooksLikeCudaBackendCrash(serverLog))
+            {
+                prefix = "Chatterbox TTS hit a CrispASR bug during synthesis (CUDA error in ggml_cuda_cpy). "
+                         + "This is not specific to the CUDA build - the Vulkan build crashes at the identical "
+                         + "point, so re-downloading a different build does not help. The known trigger is the "
+                         + "first step after the cloned voice changes; Subtitle Edit restarts the server on a "
+                         + "voice change to avoid it, so please report this at "
+                         + "https://github.com/CrispStrobe/CrispASR/issues with the server log below.";
+            }
+            else if (LooksLikeUpstreamChatterboxCrash(serverLog))
+            {
+                prefix = "Chatterbox TTS hit a CrispASR runtime bug during synthesis (ggml tensor read out of bounds). "
+                         + "This is an upstream issue — please file it at https://github.com/CrispStrobe/CrispASR/issues with the server log below. "
+                         + "The crash reproduces on the CPU and Vulkan builds (chatterbox's T3 step runs on CPU regardless of the build).";
+            }
+            else
+            {
+                prefix = "Chatterbox TTS request failed — "
+                         + (died ? "the crispasr server crashed during synthesis." : "the connection to the crispasr server was dropped.");
+            }
 
             throw new InvalidOperationException(
                 prefix
@@ -451,7 +506,11 @@ public class ChatterboxTtsCpp : ITtsEngine
     /// the one SE engine that hard-requires the attestations. An empty path falls back to the
     /// model's baked default voice, which is not cloning and needs no attestation.
     /// </remarks>
-    internal static Dictionary<string, object> BuildSpeakPayload(string inputText, string? voiceFilePath, string? languageCode = null)
+    internal static Dictionary<string, object> BuildSpeakPayload(
+        string inputText,
+        string? voiceFilePath,
+        string? languageCode = null,
+        string? sourceLanguageCode = null)
     {
         var payload = new Dictionary<string, object>
         {
@@ -464,13 +523,64 @@ public class ChatterboxTtsCpp : ITtsEngine
             payload["language"] = languageCode;
         }
 
-        if (!string.IsNullOrEmpty(voiceFilePath))
+        // Only alongside a reference and a target language: on its own the field says what a
+        // recording that is not being cloned from is spoken in, which is nothing.
+        if (!string.IsNullOrEmpty(sourceLanguageCode)
+            && !string.IsNullOrEmpty(voiceFilePath)
+            && !string.IsNullOrEmpty(languageCode))
         {
-            payload["voice"] = Path.GetFileName(voiceFilePath);
+            payload["source_lang"] = sourceLanguageCode;
+        }
+
+        var voiceKey = ResolveVoiceKey(voiceFilePath);
+        if (!string.IsNullOrEmpty(voiceKey))
+        {
+            payload["voice"] = voiceKey;
             CrispAsrTtsProvenance.AddSpeechAttestations(payload);
         }
 
         return payload;
+    }
+
+    /// <summary>
+    /// The <c>voice</c> field for a reference WAV path — the bare file name, empty for the model's
+    /// baked default voice. Also identifies which clone the running server has conditionals
+    /// installed for (see <see cref="EnsureServerRunningAsync"/>).
+    /// </summary>
+    internal static string ResolveVoiceKey(string? voiceFilePath)
+    {
+        return string.IsNullOrEmpty(voiceFilePath) ? string.Empty : Path.GetFileName(voiceFilePath);
+    }
+
+    /// <summary>
+    /// The spoken text of a reference WAV, read from the <c>.txt</c> sidecar the other cloning
+    /// engines use, or null when there is none. Chatterbox itself never needs the transcript —
+    /// it clones from the audio alone — so this exists only to detect what language the
+    /// reference is in for <c>source_lang</c>.
+    /// </summary>
+    internal static string? TryReadReferenceTranscript(string? referenceWavPath)
+    {
+        if (string.IsNullOrEmpty(referenceWavPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            var sidecar = Path.ChangeExtension(referenceWavPath, ".txt");
+            if (!File.Exists(sidecar))
+            {
+                return null;
+            }
+
+            var text = File.ReadAllText(sidecar).Trim();
+            return string.IsNullOrEmpty(text) ? null : text;
+        }
+        catch
+        {
+            // A sidecar we cannot read is the same as no sidecar - detection just declines.
+            return null;
+        }
     }
 
     /// <summary>
@@ -509,24 +619,76 @@ public class ChatterboxTtsCpp : ITtsEngine
         }
     }
 
-    private static async Task EnsureServerRunningAsync(string modelKey, CancellationToken ct)
+    /// <summary>
+    /// True when the running server has already served a cloned voice and a different one is now
+    /// asked for.
+    /// </summary>
+    /// <remarks>
+    /// Installing a second voice's conditionals into a live chatterbox server crashes it at the
+    /// first autoregressive step of that request (#13572). Both reported crashes have the same
+    /// shape - previous line fine with voice A, <c>atomic native WAV clone (B.wav ...) - all 5 conds
+    /// installed</c>, then death at <c>chatterbox[ar]: step=0</c> - and the CUDA and Vulkan builds
+    /// die at the identical token, so this is the shared voice-load path and not a GPU backend bug.
+    /// A server that loads the voice at startup is fine, so the fix is to make every voice the first
+    /// one its server sees. Costs a model reload per voice change, which an actor-voice cast pays on
+    /// every actor change; that is still cheaper than the crash it replaces, since #13795's retry
+    /// already restarts the server after throwing away the line's synthesis.
+    /// <para>
+    /// Switching to the baked default voice restarts too: that swaps the conditionals back through
+    /// the same upstream code. Going the other way - default → clone - does not, because the clone
+    /// is then the first one this server installs. Narrow this once upstream fixes it.
+    /// </para>
+    /// </remarks>
+    private static bool NeedsRestartForVoice(string voiceKey) => NeedsRestartForVoice(_serverVoiceKey, voiceKey);
+
+    /// <inheritdoc cref="NeedsRestartForVoice(string)"/>
+    internal static bool NeedsRestartForVoice(string loadedVoiceKey, string requestedVoiceKey)
     {
-        if (_serverProcess is { HasExited: false } && _serverPort != 0 && _serverModelKey == modelKey)
+        return !string.IsNullOrEmpty(loadedVoiceKey)
+               && !string.Equals(loadedVoiceKey, requestedVoiceKey, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Starts the crispasr server for <paramref name="modelKey"/>, or reuses the running one.
+    /// Restarts it when <paramref name="voiceKey"/> differs from the voice it last served — see
+    /// <see cref="NeedsRestartForVoice"/>.
+    /// </summary>
+    private static async Task EnsureServerRunningAsync(string modelKey, string voiceKey, CancellationToken ct)
+    {
+        if (_serverProcess is { HasExited: false }
+            && _serverPort != 0
+            && _serverModelKey == modelKey
+            && !NeedsRestartForVoice(voiceKey))
         {
+            _serverVoiceKey = voiceKey;
             return;
         }
 
         await ServerLock.WaitAsync(ct);
         try
         {
-            if (_serverProcess is { HasExited: false } && _serverPort != 0 && _serverModelKey == modelKey)
+            if (_serverProcess is { HasExited: false }
+                && _serverPort != 0
+                && _serverModelKey == modelKey
+                && !NeedsRestartForVoice(voiceKey))
             {
+                _serverVoiceKey = voiceKey;
                 return;
             }
 
-            // Server not running — or running with a different model variant. (Re)start.
+            // Server not running — or running with a different model variant, or with another
+            // voice's clone conditionals installed. (Re)start.
             if (_serverProcess != null)
             {
+                if (_serverProcess is { HasExited: false } && NeedsRestartForVoice(voiceKey))
+                {
+                    Se.WriteToolsLog(
+                        "Chatterbox TTS: restarting the crispasr server before switching cloned voice "
+                        + $"'{_serverVoiceKey}' -> '{(string.IsNullOrEmpty(voiceKey) ? "(default)" : voiceKey)}' "
+                        + "- installing a second voice's conditionals into a live server crashes the "
+                        + "chatterbox backend at the first autoregressive step (#13572).");
+                }
+
                 StopServerInternal();
             }
 
@@ -552,6 +714,11 @@ public class ChatterboxTtsCpp : ITtsEngine
                 CreateNoWindow = true,
                 RedirectStandardError = true,
                 RedirectStandardOutput = true,
+                // The server writes UTF-8. Without these the reader decodes it in the OS default
+                // codepage, and non-ASCII text in the captured log - the line being synthesised,
+                // upstream's em dashes - reaches bug reports as mojibake (#13572).
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
             };
             psi.ArgumentList.Add("--server");
             psi.ArgumentList.Add("--backend");
@@ -604,6 +771,7 @@ public class ChatterboxTtsCpp : ITtsEngine
             _serverProcess = process;
             _serverPort = port;
             _serverModelKey = modelKey;
+            _serverVoiceKey = voiceKey;
             HookProcessExitOnce();
 
             // First-run model auto-download (~880 MB) needs a generous timeout.
@@ -619,6 +787,7 @@ public class ChatterboxTtsCpp : ITtsEngine
                     _serverProcess = null;
                     _serverPort = 0;
                     _serverModelKey = null;
+                    _serverVoiceKey = string.Empty;
                     _serverLaunchCommand = null;
                     if (LooksLikeOutdatedCrispAsr(tail))
                     {
@@ -699,6 +868,30 @@ public class ChatterboxTtsCpp : ITtsEngine
         // pending. Distinct from the static-init duplicate ggml assert at
         // ggml.cpp:22 (caught by LooksLikeStaleModelCache via a different match).
         return output.Contains("tensor read out of bounds", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A CUDA-backend fault during chatterbox synth (#13572):
+    /// <code>
+    /// chatterbox[ar]: step=0 tok=3704
+    /// CUDA error: invalid argument
+    ///   current device: 0, in function ggml_cuda_cpy at ggml/src/ggml-cuda/cpy.cu:474
+    ///   cudaMemcpyAsync(src1_ddc, src0_ddc, ggml_nbytes(src0), cudaMemcpyDeviceToDevice, main_stream)
+    /// </code>
+    /// Every report on that issue crashes at the first autoregressive step of the request that
+    /// switches to a different cloned voice, right after the new conditionals are installed.
+    /// <b>This is not a CUDA-specific bug</b>: the Vulkan build dies at the identical point - same
+    /// voice, same conditionals, same <c>prefill 163</c>, same <c>step=0 tok=3704</c> - so the fault
+    /// is in the shared voice-load path and only its symptom is backend-shaped (a device-to-device
+    /// copy failing with "invalid argument" is what a buffer that is not device memory looks like).
+    /// <see cref="EnsureServerRunningAsync"/> now restarts the server on a clone-voice change to
+    /// stay off that path. Matched on the ggml function name plus the generic "CUDA error" banner so
+    /// a fault in another op is still recognised as a CUDA one.
+    /// </summary>
+    internal static bool LooksLikeCudaBackendCrash(string output)
+    {
+        return output.Contains("CUDA error", StringComparison.Ordinal)
+               || output.Contains("ggml_cuda_cpy", StringComparison.Ordinal);
     }
 
     internal static bool LooksLikeCloneReferenceRejected(string output)
@@ -814,12 +1007,63 @@ public class ChatterboxTtsCpp : ITtsEngine
     /// </summary>
     public static void StopServer() => StopServerInternal();
 
+    /// <summary>
+    /// Waits up to <paramref name="timeout"/> for a server believed to have crashed to actually
+    /// exit, and for the last of its output to reach <c>_serverLog</c>. Returns whether it exited.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Process.WaitForExitAsync"/> waits for the redirected stdout/stderr readers to
+    /// reach EOF as well as for the process itself - that drain is the whole point here. The crash
+    /// report in #13572 lost the "CUDA error: invalid argument" line that named the fault, because
+    /// the socket dropped a moment before the reader delivered it. Bounded by the token so a
+    /// reader held open by an inherited handle cannot stall a generation run.
+    /// </remarks>
+    private static async Task<bool> WaitForServerExitAsync(TimeSpan timeout)
+    {
+        var p = _serverProcess;
+        if (p == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(timeout);
+            await p.WaitForExitAsync(cts.Token);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            // Timed out. The process may still have exited with only the drain outstanding, in
+            // which case this is a crash with a possibly-truncated log rather than a live server.
+            return SafeHasExited(p);
+        }
+        catch
+        {
+            // Disposed or never started - nothing to drain.
+            return false;
+        }
+    }
+
+    private static bool SafeHasExited(Process p)
+    {
+        try
+        {
+            return p.HasExited;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static void StopServerInternal()
     {
         var p = _serverProcess;
         _serverProcess = null;
         _serverPort = 0;
         _serverModelKey = null;
+        _serverVoiceKey = string.Empty;
         _serverLaunchCommand = null;
         if (p == null)
         {
@@ -990,6 +1234,14 @@ public class ChatterboxTtsCpp : ITtsEngine
             }
 
             if (header.SampleRate != CloneReferenceSampleRate || header.NumberOfChannels != 1)
+            {
+                return false;
+            }
+
+            // An extensible header carries the right samples but not the plain fmt-16 header a
+            // strict WAV reader expects - normalize it like any other mismatch (the safe
+            // direction; common recorders emit extensible even for mono 16-bit).
+            if (header.IsExtensibleFormat)
             {
                 return false;
             }

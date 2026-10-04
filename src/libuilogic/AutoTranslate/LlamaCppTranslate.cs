@@ -51,28 +51,59 @@ namespace Nikse.SubtitleEdit.UiLogic.AutoTranslate
 
         public async Task<string> Translate(string text, string sourceLanguageCode, string targetLanguageCode, CancellationToken cancellationToken)
         {
-            string prompt;
-            var modelPrompt = Configuration.Settings.Tools.LlamaCppModelPrompt;
-            if (!string.IsNullOrWhiteSpace(modelPrompt))
-            {
-                // A curated model with its own trained-in prompt (e.g. Hy-MT2). The "codes" this
-                // engine receives are already English language names - ListLanguages() puts the
-                // name in TranslationPair.Code - which is exactly what these templates expect.
-                prompt = string.Format(modelPrompt, sourceLanguageCode, targetLanguageCode);
-            }
-            else
+            Error = string.Empty; // describes this line's failure only - never an earlier line's
+            var template = Configuration.Settings.Tools.LlamaCppModelPrompt;
+            if (string.IsNullOrWhiteSpace(template))
             {
                 if (string.IsNullOrWhiteSpace(Configuration.Settings.Tools.LlamaCppPrompt))
                 {
                     Configuration.Settings.Tools.LlamaCppPrompt = new ToolsSettings().LlamaCppPrompt;
                 }
-                prompt = string.Format(Configuration.Settings.Tools.LlamaCppPrompt, sourceLanguageCode, targetLanguageCode);
+
+                template = Configuration.Settings.Tools.LlamaCppPrompt;
             }
+
+            // The "codes" this engine receives are already English language names - ListLanguages()
+            // puts the name in TranslationPair.Code - which is what the templates expect.
+            var outputText = await RequestTranslation(template, text, sourceLanguageCode, targetLanguageCode, null, cancellationToken);
+            if (!TranslationEchoGuard.IsUntranslatedEcho(text, outputText, sourceLanguageCode, targetLanguageCode))
+            {
+                return outputText;
+            }
+
+            // The model handed the source back untranslated (TranslateGemma 12B does this for merged
+            // multi-line requests). Ask once more - at greedy sampling the same request echoes every
+            // time, so a model-defined temperature is nudged up; with none set the server samples
+            // anyway and a second draw is already different.
+            var temperature = Configuration.Settings.Tools.LlamaCppModelTemperature;
+            double? retryTemperature = temperature >= 0 ? Math.Min(1.0, temperature + EchoRetryTemperatureBump) : (double?)null;
+            outputText = await RequestTranslation(template, text, sourceLanguageCode, targetLanguageCode, retryTemperature, cancellationToken);
+            if (!TranslationEchoGuard.IsUntranslatedEcho(text, outputText, sourceLanguageCode, targetLanguageCode))
+            {
+                return outputText;
+            }
+
+            // Still the source after the warmer retry: accept it. A line can legitimately read the
+            // same in both languages (a source line already in the target language, or two variants
+            // of one language), and failing it would abort the whole translation.
+            SeLogger.Error(StaticName + ": the model returned the " + sourceLanguageCode + " source text untranslated twice (target " + targetLanguageCode + "), keeping it: " + outputText);
+            return outputText;
+        }
+
+        private const double EchoRetryTemperatureBump = 0.3;
+
+        private async Task<string> RequestTranslation(string template, string text, string sourceLanguageCode, string targetLanguageCode, double? temperatureOverride, CancellationToken cancellationToken)
+        {
+            var encodedUserMessage = LlmTranslatePrompt.BuildEncodedUserMessage(
+                template, sourceLanguageCode, targetLanguageCode, text);
 
             // No "model" field: llama-server serves the single model it was started with, and for a
             // remote server the user's own llama-server does the same. Sending one would only risk a
             // mismatch with whatever that server has loaded.
-            var input = "{ \"messages\": [{ \"role\": \"user\", \"content\": \"" + Json.EncodeJsonText(prompt) + "\\n\\n" + Json.EncodeJsonText(text.Trim()) + "\" }]" + MakeSamplingJson() + "}";
+            // Generous output budget (a translation is roughly source-sized) so a model stuck in a
+            // generation loop runs out of tokens instead of generating until the context fills (#13830).
+            var maxTokens = 200 + 2 * text.Length;
+            var input = "{ \"messages\": [{ \"role\": \"user\", \"content\": \"" + encodedUserMessage + "\" }], \"max_tokens\": " + maxTokens + MakeSamplingJson(temperatureOverride) + "}";
             var content = new StringContent(input, Encoding.UTF8);
             content.Headers.ContentType = MediaTypeHeaderValue.Parse("application/json");
             var result = await _httpClient.PostAsync(string.Empty, content, cancellationToken);
@@ -111,13 +142,14 @@ namespace Nikse.SubtitleEdit.UiLogic.AutoTranslate
         /// model defines none, keeping the server defaults - the behavior before per-model
         /// sampling existed).
         /// </summary>
-        private static string MakeSamplingJson()
+        private static string MakeSamplingJson(double? temperatureOverride = null)
         {
             var sb = new StringBuilder();
             var tools = Configuration.Settings.Tools;
-            if (tools.LlamaCppModelTemperature >= 0)
+            var temperature = temperatureOverride ?? tools.LlamaCppModelTemperature;
+            if (temperature >= 0)
             {
-                sb.Append(", \"temperature\": ").Append(tools.LlamaCppModelTemperature.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                sb.Append(", \"temperature\": ").Append(temperature.ToString(System.Globalization.CultureInfo.InvariantCulture));
             }
             if (tools.LlamaCppModelTopP >= 0)
             {

@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Markup.Declarative;
@@ -88,6 +88,11 @@ public partial class AutoTranslateViewModel : ObservableObject
     [ObservableProperty] private bool _modelBrowseIsVisible;
     [ObservableProperty] private string _modelText;
     [ObservableProperty] private bool _buttonModelIsVisible;
+    [ObservableProperty] private ObservableCollection<string> _modelPresets = new();
+    [ObservableProperty] private bool _modelComboIsVisible;
+    [ObservableProperty] private bool _modelTextBoxIsVisible;
+    [ObservableProperty] private bool _translateInPlaceIsVisible;
+    [ObservableProperty] private bool _translateInPlace;
     [ObservableProperty] private bool _buttonDownloadIsVisible;
     [ObservableProperty] private ObservableCollection<SpeechToTextModelDisplay> _crispAsrModels = new();
     [ObservableProperty] private SpeechToTextModelDisplay? _selectedCrispAsrModel;
@@ -105,6 +110,7 @@ public partial class AutoTranslateViewModel : ObservableObject
     [ObservableProperty] private bool _llamaCppRemoteToggleIsVisible;
     [ObservableProperty] private bool _llamaCppUseRemoteServer;
     [ObservableProperty] private string _llamaCppServerButtonText = Se.Language.General.StartServer;
+    [ObservableProperty] private string? _llamaCppServerUrlInfo;
     [ObservableProperty] private string _llamaCppDownloadButtonText = string.Empty;
     [ObservableProperty] private string _crispAsrDownloadButtonText = string.Empty;
 
@@ -117,6 +123,8 @@ public partial class AutoTranslateViewModel : ObservableObject
     private List<string> _apiUrls = new();
     private List<string> _apiModels = new();
     private bool _onlyCurrentLine;
+    private bool _autoStart;
+    private bool _translationFailed;
     private Subtitle _subtitle = new Subtitle();
     private int _translationProgressIndex;
     private bool _llamaCppUpdatePromptShown;
@@ -136,6 +144,8 @@ public partial class AutoTranslateViewModel : ObservableObject
         _windowService = windowService;
         _folderHelper = folderHelper;
 
+        TranslateUiUpdates = new CoalescedUiUpdateQueue(SelectAndScrollToRow, ApplyTranslateProgress);
+
         ApiKeyText = string.Empty;
         ApiUrlText = string.Empty;
         ModelText = string.Empty;
@@ -148,6 +158,7 @@ public partial class AutoTranslateViewModel : ObservableObject
             new GoogleTranslateV2(),
             new MicrosoftTranslator(),
             new DeepLTranslate(),
+            new DeepLXTranslate(),
             new LibreTranslate(),
             new MyMemoryApi(),
             new ChatGptTranslate(),
@@ -160,6 +171,7 @@ public partial class AutoTranslateViewModel : ObservableObject
             new AnthropicTranslate(),
             new GroqTranslate(),
             new OpenRouterTranslate(),
+            new ApiRouteTranslate(),
             new LaraTranslate(),
             new PerplexityTranslate(),
             new GeminiTranslate(),
@@ -197,6 +209,26 @@ public partial class AutoTranslateViewModel : ObservableObject
         LoadSettings();
     }
 
+    /// <summary>
+    /// For "Selected lines > Auto translate" with no original loaded: offers translating the lines in
+    /// place instead of making the subtitle the original (#14926). The choice is remembered.
+    /// </summary>
+    public void OfferTranslateInPlace()
+    {
+        TranslateInPlaceIsVisible = true;
+        TranslateInPlace = Se.Settings.AutoTranslate.TranslateSelectedLinesInPlace;
+    }
+
+    /// <summary>
+    /// For the "Auto-translate selected lines (no prompt)" shortcut (#15603): translate right away
+    /// with the last used engine and languages, and close with OK when done. On an error or cancel
+    /// the window stays open, so the user can fix the settings or retry.
+    /// </summary>
+    public void SetAutoStart()
+    {
+        _autoStart = true;
+    }
+
     private void LoadSettings()
     {
         Configuration.Settings.Tools.OllamaApiUrl = Se.Settings.AutoTranslate.OllamaUrl;
@@ -206,6 +238,15 @@ public partial class AutoTranslateViewModel : ObservableObject
         Configuration.Settings.Tools.OpenRouterApiKey = Se.Settings.AutoTranslate.OpenRouterApiKey;
         Configuration.Settings.Tools.OpenRouterModel = Se.Settings.AutoTranslate.OpenRouterModel;
         Configuration.Settings.Tools.OpenRouterPrompt = Se.Settings.AutoTranslate.OpenRouterPrompt;
+
+        // The url is saved but was the only field of these two engines never bridged back, so both
+        // the url box and the translator fell back to the built-in endpoint on the next start.
+        Configuration.Settings.Tools.OpenRouterUrl = Se.Settings.AutoTranslate.OpenRouterUrl;
+
+        Configuration.Settings.Tools.ApiRouteApiKey = Se.Settings.AutoTranslate.ApiRouteApiKey;
+        Configuration.Settings.Tools.ApiRouteUrl = Se.Settings.AutoTranslate.ApiRouteUrl;
+        Configuration.Settings.Tools.ApiRouteModel = Se.Settings.AutoTranslate.ApiRouteModel;
+        Configuration.Settings.Tools.ApiRoutePrompt = Se.Settings.AutoTranslate.ApiRoutePrompt;
 
         Configuration.Settings.Tools.ChatGptApiKey = Se.Settings.AutoTranslate.ChatGptApiKey;
         Configuration.Settings.Tools.ChatGptUrl = Se.Settings.AutoTranslate.ChatGptUrl;
@@ -221,9 +262,14 @@ public partial class AutoTranslateViewModel : ObservableObject
         Configuration.Settings.Tools.LmStudioModel = Se.Settings.AutoTranslate.LmStudioModel;
         Configuration.Settings.Tools.LmStudioPrompt = Se.Settings.AutoTranslate.LmStudioPrompt;
 
+        // Only the translate-settings dialog writes the llama.cpp prompt back, so without this the
+        // saved one is lost on the next start (a curated model's own prompt still takes precedence).
+        Configuration.Settings.Tools.LlamaCppPrompt = Se.Settings.AutoTranslate.LlamaCppPrompt;
+
         Configuration.Settings.Tools.GroqApiKey = Se.Settings.AutoTranslate.GroqApiKey;
         Configuration.Settings.Tools.GroqModel = Se.Settings.AutoTranslate.GroqModel;
         Configuration.Settings.Tools.GroqPrompt = Se.Settings.AutoTranslate.GroqPrompt;
+        Configuration.Settings.Tools.GroqUrl = Se.Settings.AutoTranslate.GroqUrl;
 
         Configuration.Settings.Tools.GoogleApiV2Key = Se.Settings.AutoTranslate.GoogleApiV2Key;
 
@@ -327,6 +373,11 @@ public partial class AutoTranslateViewModel : ObservableObject
             Configuration.Settings.Tools.AutoTranslateDeepLApiKey = apiKey.Trim();
         }
 
+        if (engineType == typeof(DeepLXTranslate))
+        {
+            Configuration.Settings.Tools.AutoTranslateDeepLXUrl = apiUrl.Trim();
+        }
+
         if (engineType == typeof(LibreTranslate))
         {
             Configuration.Settings.Tools.AutoTranslateLibreUrl = apiUrl.Trim();
@@ -390,11 +441,7 @@ public partial class AutoTranslateViewModel : ObservableObject
             // unknown and a custom .gguf carries no template, so both fall back to the generic
             // prompt and server-default sampling.
             var curatedModel = LlamaCppUseRemoteServer ? null : SelectedLlamaCppModel?.Model;
-            Configuration.Settings.Tools.LlamaCppModelPrompt = curatedModel?.PromptTemplate ?? string.Empty;
-            Configuration.Settings.Tools.LlamaCppModelTemperature = curatedModel?.Temperature ?? -1;
-            Configuration.Settings.Tools.LlamaCppModelTopP = curatedModel?.TopP ?? -1;
-            Configuration.Settings.Tools.LlamaCppModelTopK = curatedModel?.TopK ?? -1;
-            Configuration.Settings.Tools.LlamaCppModelRepeatPenalty = curatedModel?.RepeatPenalty ?? -1;
+            LlamaCppServerManager.ApplyTranslatePromptSettings(curatedModel);
         }
 
         if (engineType == typeof(OllamaTranslate))
@@ -460,6 +507,14 @@ public partial class AutoTranslateViewModel : ObservableObject
             Se.Settings.AutoTranslate.OpenRouterUrl = apiUrl.Trim();
         }
 
+        if (engineType == typeof(ApiRouteTranslate))
+        {
+            Configuration.Settings.Tools.ApiRouteApiKey = apiKey.Trim();
+            Configuration.Settings.Tools.ApiRouteModel = apiModel.Trim();
+            Configuration.Settings.Tools.ApiRouteUrl = apiUrl.Trim();
+            Se.Settings.AutoTranslate.ApiRouteUrl = apiUrl.Trim();
+        }
+
         if (engineType == typeof(GeminiTranslate))
         {
             Configuration.Settings.Tools.GeminiProApiKey = apiKey.Trim();
@@ -501,6 +556,10 @@ public partial class AutoTranslateViewModel : ObservableObject
 
 
         Se.Settings.AutoTranslate.AutoTranslateLastName = SelectedAutoTranslator.Name;
+        if (TranslateInPlaceIsVisible)
+        {
+            Se.Settings.AutoTranslate.TranslateSelectedLinesInPlace = TranslateInPlace;
+        }
         Se.Settings.AutoTranslate.AutoTranslateLastSource = SelectedSourceLanguage?.Code ?? string.Empty;
         Se.Settings.AutoTranslate.AutoTranslateLastTarget = SelectedTargetLanguage?.Code ?? string.Empty;
 
@@ -511,6 +570,11 @@ public partial class AutoTranslateViewModel : ObservableObject
         Se.Settings.AutoTranslate.OpenRouterApiKey = Configuration.Settings.Tools.OpenRouterApiKey;
         Se.Settings.AutoTranslate.OpenRouterModel = Configuration.Settings.Tools.OpenRouterModel;
         Se.Settings.AutoTranslate.OpenRouterPrompt = Configuration.Settings.Tools.OpenRouterPrompt;
+
+        Se.Settings.AutoTranslate.ApiRouteApiKey = Configuration.Settings.Tools.ApiRouteApiKey;
+        Se.Settings.AutoTranslate.ApiRouteUrl = Configuration.Settings.Tools.ApiRouteUrl;
+        Se.Settings.AutoTranslate.ApiRouteModel = Configuration.Settings.Tools.ApiRouteModel;
+        Se.Settings.AutoTranslate.ApiRoutePrompt = Configuration.Settings.Tools.ApiRoutePrompt;
 
         Se.Settings.AutoTranslate.ChatGptApiKey = Configuration.Settings.Tools.ChatGptApiKey;
         Se.Settings.AutoTranslate.ChatGptUrl = Configuration.Settings.Tools.ChatGptUrl;
@@ -673,52 +737,13 @@ public partial class AutoTranslateViewModel : ObservableObject
             TargetLanguages.Add(language);
         }
 
-        SelectedTargetLanguage = null;
-        var targetLanguageIsoCode = EvaluateDefaultTargetLanguageCode(SelectedTargetLanguage?.Code ?? string.Empty, SelectedSourceLanguage?.Code ?? string.Empty);
-        if (!string.IsNullOrEmpty(targetLanguageIsoCode))
-        {
-            var lang = TargetLanguages.FirstOrDefault(p => p.Code == targetLanguageIsoCode);
-            if (lang != null)
-            {
-                SelectedTargetLanguage = lang;
-            }
-        }
-
-        var languageName = Iso639Dash2LanguageCode.List.FirstOrDefault(l => l.TwoLetterCode.Equals(targetLanguageIsoCode, StringComparison.InvariantCultureIgnoreCase))?.EnglishName;
-        if (SelectedTargetLanguage == null && !string.IsNullOrEmpty(languageName))
-        {
-            var lang = TargetLanguages.FirstOrDefault(p => p.Name == languageName);
-            if (lang != null)
-            {
-                SelectedTargetLanguage = lang;
-            }
-        }
-
-        if (!string.IsNullOrEmpty(Se.Settings.AutoTranslate.AutoTranslateLastTarget))
-        {
-            var lang = TargetLanguages.FirstOrDefault(p => p.Code == Se.Settings.AutoTranslate.AutoTranslateLastTarget);
-            if ((SelectedSourceLanguage == null || lang == null || SelectedSourceLanguage.Code != lang.Code) && lang != null)
-            {
-                SelectedTargetLanguage = lang;
-            }
-        }
-
-        if (SelectedTargetLanguage == null && TargetLanguages.Count > 0)
-        {
-            SelectedTargetLanguage = TargetLanguages[0];
-        }
-
-        if (SelectedSourceLanguage?.Name == SelectedTargetLanguage?.Name && TargetLanguages.Count > 1)
-        {
-            if (SelectedSourceLanguage?.Code == "en" || SelectedSourceLanguage?.Name == "English")
-            {
-                SelectedTargetLanguage = TargetLanguages.FirstOrDefault(p => p.Code == "de");
-            }
-            else
-            {
-                SelectedTargetLanguage = TargetLanguages.FirstOrDefault(p => p.Code == "en");
-            }
-        }
+        SelectedTargetLanguage = FindDefaultTargetLanguage(
+            TargetLanguages,
+            SelectedSourceLanguage,
+            Se.Settings.AutoTranslate.AutoTranslateLastTarget,
+            Se.Language.CultureName,
+            Se.Settings.AutoTranslate.AutoTranslateLastSource,
+            System.Globalization.CultureInfo.CurrentUICulture.Name);
     }
 
     [RelayCommand]
@@ -745,7 +770,31 @@ public partial class AutoTranslateViewModel : ObservableObject
         if (wasTranslating)
         {
             StatusText = Se.Language.Translate.TranslationCancelled;
+            StopLocalLlamaCppServerAfterCancel();
         }
+    }
+
+    /// <summary>
+    /// Cancelling a local llama.cpp translation also stops the SE-managed server, so the model's
+    /// RAM/VRAM is released right away instead of after the app closes (#13830). Only mid-run: a
+    /// server left idle by a completed translation stays warm (Stop server button / app exit).
+    /// The next translate run auto-restarts it.
+    /// </summary>
+    private void StopLocalLlamaCppServerAfterCancel()
+    {
+        if (SelectedAutoTranslator is not (LlamaCppTranslate or LlamaCppAdvancedTranslate) ||
+            LlamaCppUseRemoteServer ||
+            !LlamaCppServerManager.IsServerRunning)
+        {
+            return;
+        }
+
+        // Off the UI thread - StopServer kills the process and waits up to 2 s for it to exit.
+        _ = Task.Run(() =>
+        {
+            LlamaCppServerManager.StopServer();
+            Dispatcher.UIThread.Post(UpdateLlamaCppServerButtonText);
+        });
     }
 
     [RelayCommand]
@@ -961,6 +1010,12 @@ public partial class AutoTranslateViewModel : ObservableObject
     private void UpdateLlamaCppServerButtonText()
     {
         LlamaCppServerButtonText = LlamaCppServerManager.IsServerRunning ? Se.Language.General.StopServer : Se.Language.General.StartServer;
+
+        // The SE-managed server runs on a random free port, not the URL from remote-server mode -
+        // surface the live endpoint so the two are not mistaken for each other (#13830).
+        LlamaCppServerUrlInfo = LlamaCppServerManager.IsServerRunning
+            ? string.Format(Se.Language.Translate.ServerRunningAtX, LlamaCppServerManager.ApiUrl)
+            : null;
     }
 
     [RelayCommand]
@@ -994,10 +1049,24 @@ public partial class AutoTranslateViewModel : ObservableObject
         if (downloaded != null)
         {
             var selectName = string.IsNullOrEmpty(downloaded) ? model?.FileName : downloaded;
-            SelectedLlamaCppModel = LlamaCppDownloadHelper.PopulateModels(LlamaCppModels, LlamaCppServerManager.GetAllTranslateModels(), selectName);
+            SelectedLlamaCppModel = LlamaCppDownloadHelper.PopulateModels(LlamaCppModels, GetLlamaCppModelsForEngine(), selectName);
         }
 
         RefreshDownloadDots?.Invoke();
+    }
+
+    /// <summary>
+    /// The llama.cpp model list for the currently selected engine: everything for the regular
+    /// engine, but no completion-only models (MiLMMT-46) for the advanced engine - they cannot
+    /// follow its JSON batch protocol and reply with well-formed JSON holding the untranslated
+    /// source lines, which would land in the grid as a "successful" batch.
+    /// </summary>
+    private IReadOnlyList<LlamaCppModel> GetLlamaCppModelsForEngine()
+    {
+        var models = LlamaCppServerManager.GetAllTranslateModels();
+        return SelectedAutoTranslator is LlamaCppAdvancedTranslate
+            ? models.Where(m => !m.CompletionOnly).ToList()
+            : models;
     }
 
     /// <summary>
@@ -1105,17 +1174,20 @@ public partial class AutoTranslateViewModel : ObservableObject
             return false;
         }
 
-        SelectedLlamaCppModel = LlamaCppDownloadHelper.PopulateModels(LlamaCppModels, LlamaCppServerManager.GetAllTranslateModels(), model.FileName);
+        SelectedLlamaCppModel = LlamaCppDownloadHelper.PopulateModels(LlamaCppModels, GetLlamaCppModelsForEngine(), model.FileName);
         RefreshDownloadDots?.Invoke();
 
         try
         {
             // The advanced engine stuffs history/synopsis/glossary into every request, so it gets
             // a user-configurable (default larger) server context; everything else keeps the default.
-            var contextSize = SelectedAutoTranslator is LlamaCppAdvancedTranslate
+            var isAdvanced = SelectedAutoTranslator is LlamaCppAdvancedTranslate;
+            var contextSize = isAdvanced
                 ? Math.Clamp(Se.Settings.AutoTranslate.LlamaCppAdvanced.ContextSize, 2048, 262144)
                 : LlamaCppServerManager.DefaultContextSize;
-            await LlamaCppServerManager.EnsureServerRunningAsync(model, _cancellationTokenSource.Token, contextSize);
+            var extraArguments = isAdvanced ? Se.Settings.AutoTranslate.LlamaCppAdvanced.ServerArguments : null;
+            var extraArgumentsOnly = isAdvanced && Se.Settings.AutoTranslate.LlamaCppAdvanced.ServerArgumentsOnly;
+            await LlamaCppServerManager.EnsureServerRunningAsync(model, _cancellationTokenSource.Token, contextSize, extraArguments, extraArgumentsOnly);
         }
         catch (Exception ex)
         {
@@ -1212,7 +1284,7 @@ public partial class AutoTranslateViewModel : ObservableObject
         if (downloaded != null)
         {
             var selectName = string.IsNullOrEmpty(downloaded) ? model?.FileName : downloaded;
-            SelectedLlamaCppModel = LlamaCppDownloadHelper.PopulateModels(LlamaCppModels, LlamaCppServerManager.GetAllTranslateModels(), selectName);
+            SelectedLlamaCppModel = LlamaCppDownloadHelper.PopulateModels(LlamaCppModels, GetLlamaCppModelsForEngine(), selectName);
         }
 
         RefreshDownloadDots?.Invoke();
@@ -1317,10 +1389,14 @@ public partial class AutoTranslateViewModel : ObservableObject
     private async Task<bool> StartTranslation(IAutoTranslator translator)
     {
         _abort = false;
+        _translationFailed = false;
         IsProgressEnabled = true;
         var engineType = translator.GetType();
 
-        if (ApiKeyIsVisible && string.IsNullOrWhiteSpace(ApiKeyText) && engineType != typeof(LibreTranslate))
+        // LibreTranslate and MyMemory keys are optional: MyMemory works without one (anonymous
+        // daily quota), the key only raises the limit, and MakeUrl leaves it out when empty.
+        if (ApiKeyIsVisible && string.IsNullOrWhiteSpace(ApiKeyText) &&
+            engineType != typeof(LibreTranslate) && engineType != typeof(MyMemoryApi))
         {
             IsProgressEnabled = false;
             await MessageBox.Show(
@@ -1482,14 +1558,7 @@ public partial class AutoTranslateViewModel : ObservableObject
                     index += translatedCount;
                     _translationProgressIndex = index;
 
-                    var advancedProgressIndex = index;
-                    Dispatcher.UIThread.Invoke(() =>
-                    {
-                        ProgressValue = (double)advancedProgressIndex * 100 / Rows.Count;
-                        ProgressText = $"{(int)ProgressValue} %";
-                        HasTranslatedSomething = true;
-                        SelectAndScrollToRow(advancedProgressIndex - 1);
-                    });
+                    EnqueueTranslateProgress(index);
                 }
 
                 return; // the finally block below reports completion
@@ -1520,16 +1589,9 @@ public partial class AutoTranslateViewModel : ObservableObject
                     noErrorCount++;
                     index += linesMergedAndTranslated;
 
-                    var index1 = index;
                     if (!_onlyCurrentLine)
                     {
-                        Dispatcher.UIThread.Invoke(() =>
-                        {
-                            ProgressValue = (double)index1 * 100 / Rows.Count;
-                            ProgressText = $"{(int)ProgressValue} %";
-                            HasTranslatedSomething = true;
-                            SelectAndScrollToRow(index1 - 1);
-                        });
+                        EnqueueTranslateProgress(index);
                     }
                     else
                     {
@@ -1577,14 +1639,7 @@ public partial class AutoTranslateViewModel : ObservableObject
                 {
                     index += translateCount;
                     noProgressCount = 0;
-                    var progressIndex = index;
-                    Dispatcher.UIThread.Invoke(() =>
-                    {
-                        ProgressValue = (double)progressIndex * 100 / Rows.Count;
-                        ProgressText = $"{(int)ProgressValue} %";
-                        HasTranslatedSomething = true;
-                        SelectAndScrollToRow(progressIndex - 1);
-                    });
+                    EnqueueTranslateProgress(index);
 
                     if (_onlyCurrentLine)
                     {
@@ -1616,6 +1671,7 @@ public partial class AutoTranslateViewModel : ObservableObject
         }
         catch (Exception ex)
         {
+            _translationFailed = true;
             _ = Dispatcher.UIThread.Invoke(async () =>
             {
                 var details = new System.Text.StringBuilder();
@@ -1669,6 +1725,10 @@ public partial class AutoTranslateViewModel : ObservableObject
 
             Dispatcher.UIThread.Invoke(() =>
             {
+                // Apply whatever is still queued first, so the final progress/selection below
+                // is the last word instead of being overridden by a stale queued update.
+                TranslateUiUpdates.Flush();
+
                 IsTranslateEnabled = true;
                 IsProgressEnabled = false;
 
@@ -1686,6 +1746,11 @@ public partial class AutoTranslateViewModel : ObservableObject
                 {
                     SelectAndScrollToRow(Rows.IndexOf(lastTranslatedRow));
                 }
+
+                if (_autoStart && !_abort && !_translationFailed && HasTranslatedSomething)
+                {
+                    Ok();
+                }
             });
         }
     }
@@ -1700,6 +1765,7 @@ public partial class AutoTranslateViewModel : ObservableObject
         return translator switch
         {
             DeepLTranslate => settings.AutoTranslateDeepLUrl,
+            DeepLXTranslate => settings.AutoTranslateDeepLXUrl,
             LibreTranslate => settings.AutoTranslateLibreUrl,
             NoLanguageLeftBehindApi => settings.AutoTranslateNllbApiUrl,
             NoLanguageLeftBehindServe => settings.AutoTranslateNllbServeUrl,
@@ -1713,6 +1779,7 @@ public partial class AutoTranslateViewModel : ObservableObject
             AnthropicTranslate => settings.AnthropicApiUrl,
             GroqTranslate => settings.GroqUrl,
             OpenRouterTranslate => settings.OpenRouterUrl,
+            ApiRouteTranslate => settings.ApiRouteUrl,
             LaraTranslate => settings.LaraUrl,
             PerplexityTranslate => settings.PerplexityUrl,
             NvidiaTranslate => settings.NvidiaUrl,
@@ -1721,6 +1788,30 @@ public partial class AutoTranslateViewModel : ObservableObject
             BaiduTranslate => settings.BaiduUrl,
             _ => string.Empty,
         };
+    }
+
+    /// <summary>
+    /// Coalesced per-batch UI feedback during translation (#13885, the pattern OCR uses).
+    /// Only the pure feedback - progress and the follow-along selection - is queued. The row
+    /// TranslatedText writes stay immediate on purpose: the advanced engines read them back for
+    /// the next batch's rolling context (AdvancedTranslatorBase.CollectHistory) and
+    /// MergeAndSplitHelper reads existing translations when re-applying formatting, so a
+    /// deferred write would silently degrade the translation itself.
+    /// </summary>
+    private CoalescedUiUpdateQueue TranslateUiUpdates { get; }
+
+    private void ApplyTranslateProgress(double value, string text)
+    {
+        ProgressValue = value;
+        ProgressText = text;
+    }
+
+    private void EnqueueTranslateProgress(int translatedIndex)
+    {
+        var progressValue = (double)translatedIndex * 100 / Rows.Count;
+        TranslateUiUpdates.EnqueueProgress(progressValue, $"{(int)progressValue} %");
+        TranslateUiUpdates.EnqueueUpdate(() => HasTranslatedSomething = true);
+        TranslateUiUpdates.EnqueueSelect(translatedIndex - 1);
     }
 
     private void SelectAndScrollToRow(int index)
@@ -1754,9 +1845,51 @@ public partial class AutoTranslateViewModel : ObservableObject
             return;
         }
 
+        // Each engine advertises its own language list, so both combos are rebuilt from the new
+        // engine and a default re-derived from the subtitle. That threw away the languages the
+        // user had just picked - switching engine to compare them silently reset one or both, and
+        // they had to be set again before translating (#13943). Carry the picks across instead;
+        // the re-derived default only stands when the new engine cannot offer the same language.
+        var previousSource = SelectedSourceLanguage;
+        var previousTarget = SelectedTargetLanguage;
+
         SetAutoTranslatorEngine(translator);
         UpdateSourceLanguages(translator);
         UpdateTargetLanguages(translator);
+
+        var restoredSource = FindSameLanguage(previousSource, SourceLanguages);
+        if (restoredSource != null)
+        {
+            SelectedSourceLanguage = restoredSource;
+        }
+
+        var restoredTarget = FindSameLanguage(previousTarget, TargetLanguages);
+        if (restoredTarget != null)
+        {
+            SelectedTargetLanguage = restoredTarget;
+        }
+    }
+
+    /// <summary>
+    /// The entry in <paramref name="languages"/> standing for the same language as
+    /// <paramref name="previous"/>, or null when the engine does not offer it.
+    ///
+    /// Code first, then name: engines do not agree on how a language is spelled. NLLB uses
+    /// "eng_Latn" where Google uses "en", and the LLM engines take English names rather than
+    /// codes - so matching on the code alone would drop the selection between exactly the
+    /// engines a user is most likely to be comparing.
+    /// </summary>
+    private static TranslationPair? FindSameLanguage(TranslationPair? previous, ObservableCollection<TranslationPair> languages)
+    {
+        if (previous == null)
+        {
+            return null;
+        }
+
+        return languages.FirstOrDefault(p => !string.IsNullOrEmpty(p.Code) && p.Code.Equals(previous.Code, StringComparison.OrdinalIgnoreCase))
+               ?? languages.FirstOrDefault(p => !string.IsNullOrEmpty(p.Name) && p.Name.Equals(previous.Name, StringComparison.OrdinalIgnoreCase))
+               ?? languages.FirstOrDefault(p => !string.IsNullOrEmpty(p.TwoLetterIsoLanguageName)
+                                                && p.TwoLetterIsoLanguageName.Equals(previous.TwoLetterIsoLanguageName, StringComparison.OrdinalIgnoreCase));
     }
 
     partial void OnSelectedTargetLanguageChanged(TranslationPair? value)
@@ -1791,6 +1924,23 @@ public partial class AutoTranslateViewModel : ObservableObject
     }
 
     private void SetAutoTranslatorEngine(IAutoTranslator translator)
+    {
+        SetAutoTranslatorEngineFields(translator);
+
+        // Each engine's known models used to be collected here and then never shown - the model
+        // was a bare text box, so the names had to be typed from memory (#14926). They are now the
+        // drop-down of an editable combo; engines without a list keep the plain text box.
+        var presets = _apiModels.Where(m => !string.IsNullOrWhiteSpace(m)).Select(m => m.Trim()).Distinct().ToList();
+        if (!ModelPresets.SequenceEqual(presets))
+        {
+            ModelPresets = new ObservableCollection<string>(presets);
+        }
+
+        ModelComboIsVisible = ModelIsVisible && ModelPresets.Count > 0;
+        ModelTextBoxIsVisible = ModelIsVisible && ModelPresets.Count == 0;
+    }
+
+    private void SetAutoTranslatorEngineFields(IAutoTranslator translator)
     {
         SelectedAutoTranslator = translator;
         AutoTranslatorLinkText = translator.Name;
@@ -1858,6 +2008,17 @@ public partial class AutoTranslateViewModel : ObservableObject
 
             LoadSelectedFormality();
             UpdateFormalityVisibility();
+
+            return;
+        }
+
+        if (engineType == typeof(DeepLXTranslate))
+        {
+            FillUrls(new List<string>
+            {
+                Configuration.Settings.Tools.AutoTranslateDeepLXUrl,
+                "http://localhost:1188",
+            });
 
             return;
         }
@@ -2053,7 +2214,7 @@ public partial class AutoTranslateViewModel : ObservableObject
             LlamaCppModelComboIsVisible = true;
             LlamaCppButtonsAreVisible = true;
             var savedModelName = Path.GetFileName(Se.Settings.AutoTranslate.LlamaCppModel ?? string.Empty);
-            SelectedLlamaCppModel = LlamaCppDownloadHelper.PopulateModels(LlamaCppModels, LlamaCppServerManager.GetAllTranslateModels(), savedModelName);
+            SelectedLlamaCppModel = LlamaCppDownloadHelper.PopulateModels(LlamaCppModels, GetLlamaCppModelsForEngine(), savedModelName);
             UpdateLlamaCppServerButtonText();
             RefreshEngineUpdateButton();
 
@@ -2190,6 +2351,24 @@ public partial class AutoTranslateViewModel : ObservableObject
             return;
         }
 
+        if (engineType == typeof(ApiRouteTranslate))
+        {
+            FillUrls(new List<string>
+            {
+                Configuration.Settings.Tools.ApiRouteUrl,
+            });
+
+            ApiKeyText = Configuration.Settings.Tools.ApiRouteApiKey;
+            ApiKeyIsVisible = true;
+
+            _apiModels = ApiRouteTranslate.Models.ToList();
+            ModelIsVisible = true;
+            ButtonModelIsVisible = true;
+            ModelText = string.IsNullOrEmpty(Configuration.Settings.Tools.ApiRouteModel) ? _apiModels[0] : Configuration.Settings.Tools.ApiRouteModel;
+
+            return;
+        }
+
         if (engineType == typeof(GeminiTranslate))
         {
             ApiKeyText = Configuration.Settings.Tools.GeminiProApiKey;
@@ -2312,7 +2491,16 @@ public partial class AutoTranslateViewModel : ObservableObject
 
         if (string.IsNullOrEmpty(defaultSourceLanguageCode))
         {
-            defaultSourceLanguageCode = LanguageAutoDetect.AutoDetectGoogleLanguage(subtitle); // Guess language based on subtitle contents
+            defaultSourceLanguageCode = LanguageAutoDetect.AutoDetectGoogleLanguageOrNull(subtitle); // Guess language based on subtitle contents
+        }
+
+        // Nothing recognizable - typically a line or two picked for "Selected lines > Auto translate".
+        // Assuming English then pushed an English target off the target combo, which skips the source
+        // language, so it opened on German instead (#14926). The last source is a better guess.
+        if (string.IsNullOrEmpty(defaultSourceLanguageCode))
+        {
+            var lastSource = Se.Settings.AutoTranslate.AutoTranslateLastSource;
+            return string.IsNullOrEmpty(lastSource) ? "en" : lastSource;
         }
 
         if (!string.IsNullOrEmpty(Se.Settings.AutoTranslate.AutoTranslateLastSource) &&
@@ -2325,92 +2513,94 @@ public partial class AutoTranslateViewModel : ObservableObject
         return defaultSourceLanguageCode;
     }
 
-    public static string EvaluateDefaultTargetLanguageCode(string defaultSourceLanguage, string sourceLanguage)
+    /// <summary>
+    /// The target language a freshly built target combo starts on: the last target used, then the
+    /// last source if the last target is now the source (the reverse direction), then the UI
+    /// language, then the OS language, then English - skipping any that is the source language (#14903).
+    /// The OS language makes a Danish macOS with an English UI suggest Danish for an English
+    /// subtitle instead of the German fallback.
+    ///
+    /// The old default only matched on <see cref="TranslationPair.Code"/> and guessed the user's
+    /// language from the region part of the OS culture ("US" in "en-US"). The LLM engines keep the
+    /// English name in Code ("Chinese") while the last target may have been saved as an ISO code
+    /// ("zh"), so nothing matched and the combo fell back to its first entry - Abkhaz.
+    /// </summary>
+    internal static TranslationPair? FindDefaultTargetLanguage(
+        IList<TranslationPair> targetLanguages,
+        TranslationPair? sourceLanguage,
+        string? lastTarget,
+        string? uiCultureName,
+        string? lastSource = null,
+        string? osCultureName = null)
     {
-        var installedLanguages = new List<string>(); // Get installed languages
-
-        var currentCulture = CultureInfo.CurrentCulture;
-        var currentLanguage = currentCulture.Name.Split('-').LastOrDefault();
-        if (!string.IsNullOrEmpty(currentLanguage))
+        if (targetLanguages.Count == 0)
         {
-            var cultures = CultureInfo.GetCultures(CultureTypes.AllCultures);
-            var cultureByName = cultures.FirstOrDefault(p => p.Name.EndsWith(currentLanguage));
-            if (cultureByName != null)
+            return null;
+        }
+
+        var candidates = new List<string?> { lastTarget };
+        var lastTargetLanguage = FindLanguage(targetLanguages, lastTarget);
+        if (lastTargetLanguage != null && IsSameLanguage(lastTargetLanguage, sourceLanguage))
+        {
+            candidates.Add(lastSource);
+        }
+
+        AddCultureCandidates(candidates, uiCultureName);
+        AddCultureCandidates(candidates, osCultureName);
+        candidates.Add("en");
+        candidates.Add("de");
+
+        foreach (var candidate in candidates)
+        {
+            var language = FindLanguage(targetLanguages, candidate);
+            if (language != null && !IsSameLanguage(language, sourceLanguage))
             {
-                installedLanguages.Add(cultureByName.TwoLetterISOLanguageName);
+                return language;
             }
         }
 
-        var uiCultureTargetLanguage = Se.Settings.AutoTranslate.AutoTranslateLastTarget;
-        if (uiCultureTargetLanguage == sourceLanguage && installedLanguages.Count > 0 && installedLanguages[0] != sourceLanguage)
+        return targetLanguages.FirstOrDefault(p => !IsSameLanguage(p, sourceLanguage)) ?? targetLanguages[0];
+    }
+
+    private static void AddCultureCandidates(List<string?> candidates, string? cultureName)
+    {
+        if (string.IsNullOrEmpty(cultureName))
         {
-            return installedLanguages[0];
+            return;
         }
 
-        var sourceLanguageCode = Iso639Dash2LanguageCode.GetTwoLetterCodeFromEnglishName(sourceLanguage);
-        if (!string.IsNullOrEmpty(sourceLanguageCode) && uiCultureTargetLanguage == sourceLanguageCode && installedLanguages.Count > 0 && installedLanguages[0] != sourceLanguageCode)
+        candidates.Add(cultureName);
+        if (cultureName.Contains('-'))
         {
-            return installedLanguages[0];
+            candidates.Add(cultureName.Substring(0, cultureName.IndexOf('-')));
+        }
+    }
+
+    /// <summary>
+    /// The entry for a saved code or name, however the engine spells it: a code ("zh-CN",
+    /// "zho_Hans"), an English name ("Chinese"), or the ISO code behind either.
+    /// </summary>
+    private static TranslationPair? FindLanguage(IList<TranslationPair> languages, string? codeOrName)
+    {
+        if (string.IsNullOrWhiteSpace(codeOrName))
+        {
+            return null;
         }
 
-        if (uiCultureTargetLanguage == defaultSourceLanguage)
-        {
-            foreach (var s in Utilities.GetDictionaryLanguages())
-            {
-                var temp = s.Replace("[", string.Empty).Replace("]", string.Empty);
-                if (temp.Length > 4)
-                {
-                    temp = temp.Substring(temp.Length - 5, 2).ToLowerInvariant();
-                    if (temp != defaultSourceLanguage && installedLanguages.Any(p => p.Contains(temp)))
-                    {
-                        uiCultureTargetLanguage = temp;
-                        break;
-                    }
-                }
-            }
-        }
+        var englishName = Iso639Dash2LanguageCode.List
+            .FirstOrDefault(l => l.TwoLetterCode.Equals(codeOrName, StringComparison.OrdinalIgnoreCase))?.EnglishName;
 
-        if (uiCultureTargetLanguage == defaultSourceLanguage)
-        {
-            foreach (var language in installedLanguages)
-            {
-                if (language != defaultSourceLanguage)
-                {
-                    uiCultureTargetLanguage = language;
-                    break;
-                }
-            }
-        }
+        return languages.FirstOrDefault(p => codeOrName.Equals(p.Code, StringComparison.OrdinalIgnoreCase))
+               ?? languages.FirstOrDefault(p => codeOrName.Equals(p.Name, StringComparison.OrdinalIgnoreCase))
+               ?? languages.FirstOrDefault(p => codeOrName.Equals(p.TwoLetterIsoLanguageName, StringComparison.OrdinalIgnoreCase))
+               ?? (englishName == null ? null : languages.FirstOrDefault(p => englishName.Equals(p.Name, StringComparison.OrdinalIgnoreCase)));
+    }
 
-        if (uiCultureTargetLanguage == defaultSourceLanguage)
-        {
-            var name = CultureInfo.CurrentCulture.Name;
-            if (name.Length > 2)
-            {
-                name = name.Remove(0, name.Length - 2);
-            }
-            var iso = IsoCountryCodes.ThreeToTwoLetterLookup.FirstOrDefault(p => p.Value == name);
-            if (!iso.Equals(default(KeyValuePair<string, string>)))
-            {
-                var iso639 = Iso639Dash2LanguageCode.GetTwoLetterCodeFromThreeLetterCode(iso.Key);
-                if (!string.IsNullOrEmpty(iso639))
-                {
-                    uiCultureTargetLanguage = iso639;
-                }
-            }
-        }
-
-        // Set target language to something different than source language
-        if (uiCultureTargetLanguage == defaultSourceLanguage && (defaultSourceLanguage == "en" || defaultSourceLanguage == "English"))
-        {
-            uiCultureTargetLanguage = "es";
-        }
-        else if (uiCultureTargetLanguage == defaultSourceLanguage)
-        {
-            uiCultureTargetLanguage = "en";
-        }
-
-        return uiCultureTargetLanguage;
+    private static bool IsSameLanguage(TranslationPair language, TranslationPair? other)
+    {
+        return other != null &&
+               ((!string.IsNullOrEmpty(language.Code) && language.Code.Equals(other.Code, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrEmpty(language.Name) && language.Name.Equals(other.Name, StringComparison.OrdinalIgnoreCase)));
     }
 
     public void KeyDown(KeyEventArgs e)
@@ -2419,10 +2609,72 @@ public partial class AutoTranslateViewModel : ObservableObject
         {
             Cancel();
         }
+        else if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.None)
+        {
+            RunDefaultButton(e);
+        }
         else if (UiUtil.IsHelp(e))
         {
             e.Handled = true;
             UiUtil.ShowHelp("features/auto-translate");
+        }
+    }
+
+    /// <summary>
+    /// The row grid marks Enter as handled without doing anything with it, so a key press made
+    /// with a line selected never reached the window. Take it while the event tunnels down when
+    /// the grid has the keyboard - everything else that uses Enter (a focused button, an open
+    /// combo box drop-down) is left alone and answered by <see cref="KeyDown"/> on the way back up.
+    /// </summary>
+    public void PreviewKeyDown(KeyEventArgs e)
+    {
+        // e.Source is TextBox: the translation column's in-place editor owns Enter (it commits).
+        if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.None && RowGrid?.IsKeyboardFocusWithin == true && e.Source is not TextBox)
+        {
+            RunDefaultButton(e);
+        }
+    }
+
+    internal enum DefaultButtonAction
+    {
+        None,
+        Translate,
+        Ok,
+    }
+
+    /// <summary>
+    /// What Enter does in the window - the same rule that gives one of the footer buttons the
+    /// accent colour: Translate until something has been translated, then OK. Nothing while a
+    /// translation is running, as both buttons are disabled then.
+    /// </summary>
+    internal DefaultButtonAction GetDefaultButtonAction()
+    {
+        if (IsOkPrimary)
+        {
+            return DefaultButtonAction.Ok;
+        }
+
+        return IsTranslatePrimary ? DefaultButtonAction.Translate : DefaultButtonAction.None;
+    }
+
+    /// <summary>
+    /// Avalonia has no WinForms-style AcceptButton, so the accented button only looked like the
+    /// default one: Enter did nothing unless that button also had keyboard focus. Anything that
+    /// uses Enter itself - a focused button, an open combo box drop-down - has already marked the
+    /// key handled before it reaches the window.
+    /// </summary>
+    private void RunDefaultButton(KeyEventArgs e)
+    {
+        switch (GetDefaultButtonAction())
+        {
+            case DefaultButtonAction.Ok:
+                e.Handled = true;
+                Ok();
+                break;
+            case DefaultButtonAction.Translate:
+                e.Handled = true;
+                TranslateCommand.Execute(null);
+                break;
         }
     }
 
@@ -2439,8 +2691,13 @@ public partial class AutoTranslateViewModel : ObservableObject
     {
         // The OS close button bypasses the Cancel command - stop a running translation
         // loop so it does not keep calling the translation API against a closed window.
+        var wasTranslating = !IsTranslateEnabled;
         _abort = true;
         _cancellationTokenSource.Cancel();
+        if (wasTranslating)
+        {
+            StopLocalLlamaCppServerAfterCancel();
+        }
     }
 
     internal void OnLoaded()
@@ -2459,9 +2716,9 @@ public partial class AutoTranslateViewModel : ObservableObject
             Rows.Clear();
             Rows.AddRange(rows);
 
-            UpdateSourceLanguages(SelectedAutoTranslator);
-            UpdateTargetLanguages(SelectedAutoTranslator);
-
+            // Restore the engine before building its language lists. Building them for the
+            // constructor's default engine first let the engine-change carry-over (#13943) replace
+            // the saved target with whatever that other engine had fallen back to (#14903).
             if (!string.IsNullOrEmpty(Se.Settings.AutoTranslate.AutoTranslateLastName))
             {
                 var autoTranslator = AutoTranslators.FirstOrDefault(x => x.Name == Se.Settings.AutoTranslate.AutoTranslateLastName);
@@ -2471,10 +2728,18 @@ public partial class AutoTranslateViewModel : ObservableObject
                 }
             }
 
+            UpdateSourceLanguages(SelectedAutoTranslator);
+            UpdateTargetLanguages(SelectedAutoTranslator);
+
             if (Rows.Count > 0)
             {
                 SelectedTranslateRow = Rows[0];
             }
         });
+
+        if (_autoStart)
+        {
+            Dispatcher.UIThread.Post(async () => await DoTranslate(onlyCurrentLine: false));
+        }
     }
 }

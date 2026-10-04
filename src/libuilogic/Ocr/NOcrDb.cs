@@ -64,9 +64,10 @@ public class NOcrDb
         private readonly int _maxWrongPixels;
         private readonly bool _deepSeek;
         private readonly bool _lastDitch;
+        private readonly double _italicFactor;
         private readonly int _hashCode;
 
-        public MatchCacheKey(NikseBitmap2 bitmap, int topMargin, bool deepSeek, int maxWrongPixels, bool lastDitch)
+        public MatchCacheKey(NikseBitmap2 bitmap, int topMargin, bool deepSeek, int maxWrongPixels, bool lastDitch, double italicFactor)
         {
             _pixels = bitmap.GetPixelData().ToArray();
             _width = bitmap.Width;
@@ -74,6 +75,7 @@ public class NOcrDb
             _maxWrongPixels = maxWrongPixels;
             _deepSeek = deepSeek;
             _lastDitch = lastDitch;
+            _italicFactor = italicFactor;
 
             // FNV-1a over the pixel bytes plus the match parameters.
             var hash = unchecked((int)2166136261);
@@ -86,6 +88,7 @@ public class NOcrDb
             hash = unchecked((hash ^ _topMargin) * 16777619);
             hash = unchecked((hash ^ _maxWrongPixels) * 16777619);
             hash = unchecked((hash ^ (_deepSeek ? 1 : 0) ^ (_lastDitch ? 2 : 0)) * 16777619);
+            hash = unchecked((hash ^ _italicFactor.GetHashCode()) * 16777619);
             _hashCode = hash;
         }
 
@@ -97,6 +100,7 @@ public class NOcrDb
                    _maxWrongPixels == other._maxWrongPixels &&
                    _deepSeek == other._deepSeek &&
                    _lastDitch == other._lastDitch &&
+                   _italicFactor.Equals(other._italicFactor) &&
                    _pixels.AsSpan().SequenceEqual(other._pixels);
         }
 
@@ -245,7 +249,7 @@ public class NOcrDb
             var oc = OcrCharactersExpanded[i];
             if (oc.ExpandCount > 1 && oc.Width > w && targetItem.X + oc.Width < nikseBitmap.Width &&
                 oc.LinesForeground.Count + oc.LinesBackground.Count >= MinLinesForExpandedMatch &&
-                IsExpandedLineMatch(oc, targetItem, nikseBitmap))
+                IsExpandedLineMatch(oc, targetItem, nikseBitmap, list, listIndex))
             {
                 var size = GetTotalSize(listIndex, list, oc.ExpandCount);
                 if (Math.Abs(size.X - oc.Width) < 3 && Math.Abs(size.Y - oc.Height) < 3)
@@ -271,7 +275,7 @@ public class NOcrDb
                 if (Math.Abs(heightToWidthPercent - oc.HeightToWidthPercent) < 15 &&
                     Math.Abs(size.X - oc.Width) < 25 && Math.Abs(size.Y - oc.Height) < 20 &&
                     IsScaleRatioSane(size.X, oc.Width) && IsScaleRatioSane(size.Y, oc.Height) &&
-                    IsExpandedLineMatchScaled(oc, targetItem, nikseBitmap, size.X, size.Y))
+                    IsExpandedLineMatchScaled(oc, targetItem, nikseBitmap, size.X, size.Y, list, listIndex))
                 {
                     return oc;
                 }
@@ -310,7 +314,7 @@ public class NOcrDb
     /// trained "fi" pair swallowing "t"+"i") runs at 9%+. An area-based budget grows with the
     /// group being claimed, so it was loosest exactly for those letter-pair steals.
     /// </summary>
-    private static bool IsExpandedLineMatchScaled(NOcrChar oc, ImageSplitterItem2 targetItem, NikseBitmap2 nikseBitmap, int targetWidth, int targetHeight)
+    private static bool IsExpandedLineMatchScaled(NOcrChar oc, ImageSplitterItem2 targetItem, NikseBitmap2 nikseBitmap, int targetWidth, int targetHeight, List<ImageSplitterItem2> list, int listIndex)
     {
         var errors = 0;
         var points = 0;
@@ -325,7 +329,7 @@ public class NOcrDb
                 var p = new OcrPoint(point.X + targetItem.X, point.Y + originY);
                 // Out-of-bounds foreground points can't be on text - count them as errors.
                 if (p.X < 0 || p.Y < 0 || p.X >= nikseBitmap.Width || p.Y >= nikseBitmap.Height ||
-                    nikseBitmap.GetAlpha(p.X, p.Y) <= 150)
+                    !IsGroupForeground(list, listIndex, oc.ExpandCount, p.X, p.Y))
                 {
                     errors++;
                 }
@@ -354,7 +358,7 @@ public class NOcrDb
         return errors <= Math.Max(4, points / 20);
     }
 
-    private static bool IsExpandedLineMatch(NOcrChar oc, ImageSplitterItem2 targetItem, NikseBitmap2 nikseBitmap)
+    private static bool IsExpandedLineMatch(NOcrChar oc, ImageSplitterItem2 targetItem, NikseBitmap2 nikseBitmap, List<ImageSplitterItem2> list, int listIndex)
     {
         foreach (var op in oc.LinesForeground)
         {
@@ -370,7 +374,7 @@ public class NOcrDb
                     return false;
                 }
 
-                if (nikseBitmap.GetAlpha(p.X, p.Y) <= 150)
+                if (!IsGroupForeground(list, listIndex, oc.ExpandCount, p.X, p.Y))
                 {
                     return false;
                 }
@@ -398,6 +402,38 @@ public class NOcrDb
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Foreground test for an expanded candidate: the parent-bitmap pixel at (x, y) counts only
+    /// when it belongs to one of the splitter items the candidate would claim. Sampling the
+    /// parent bitmap directly let ink of a neighbouring, already-matched glyph satisfy the
+    /// candidate's lines - in italic "I'll" the apostrophe sits inside the x-range of the first
+    /// "l", so a trained "'ll" still matched when the scan started at that "l", and the
+    /// apostrophe came out twice (#14768). Every group item is a disjoint cut of the parent
+    /// bitmap, so its own pixels are the group's ink.
+    /// </summary>
+    private static bool IsGroupForeground(List<ImageSplitterItem2> list, int listIndex, int count, int x, int y)
+    {
+        var end = Math.Min(list.Count, listIndex + count);
+        for (var i = listIndex; i < end; i++)
+        {
+            var item = list[i];
+            var bmp = item.NikseBitmap;
+            if (bmp == null)
+            {
+                continue;
+            }
+
+            var localX = x - item.X;
+            var localY = y - item.Y;
+            if (localX >= 0 && localY >= 0 && localX < bmp.Width && localY < bmp.Height && bmp.GetAlpha(localX, localY) > 150)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static OcrPoint GetTotalSize(int listIndex, List<ImageSplitterItem2> items, int count)
@@ -444,14 +480,19 @@ public class NOcrDb
         return new OcrPoint(maximumX - minimumX, maximumY - minimumY);
     }
 
-    public NOcrChar? GetMatch(NikseBitmap2 parentBitmap, List<ImageSplitterItem2> list, ImageSplitterItem2 item, int topMargin, bool deepSeek, int maxWrongPixels, bool lastDitch = false)
+    /// <param name="italicFactor">
+    /// When greater than zero, a glyph that matches nothing upright is de-slanted by this factor
+    /// and matched again; a hit is returned as italic. Italic subtitles otherwise fail to match
+    /// against upright characters. Pass 0 to disable.
+    /// </param>
+    public NOcrChar? GetMatch(NikseBitmap2 parentBitmap, List<ImageSplitterItem2> list, ImageSplitterItem2 item, int topMargin, bool deepSeek, int maxWrongPixels, bool lastDitch = false, double italicFactor = 0)
     {
         if (item.NikseBitmap == null)
         {
             return null;
         }
 
-        var key = new MatchCacheKey(item.NikseBitmap, topMargin, deepSeek, maxWrongPixels, lastDitch);
+        var key = new MatchCacheKey(item.NikseBitmap, topMargin, deepSeek, maxWrongPixels, lastDitch, italicFactor);
         MatchCacheEntry? cached;
         lock (_lock)
         {
@@ -491,6 +532,23 @@ public class NOcrDb
         // GetMatchSingle re-scanned the whole single-character list a second time for every
         // glyph that wasn't an exact match.
         var single = GetMatchSingle(item.NikseBitmap, topMargin, deepSeek, maxWrongPixels, lastDitch, skipExactCheck: true);
+
+        if (single == null && italicFactor > 0)
+        {
+            // Nothing matched upright. Straighten the glyph and try once more - this is how an
+            // italic 'l' stops being read as an 'i'. A hit is italic by construction, so flag a
+            // copy; the database entry itself must stay upright.
+            var unItalic = item.NikseBitmap.UnItalic(italicFactor);
+            if (unItalic.Width > 0 && unItalic.Height > 0)
+            {
+                var italicMatch = GetMatchSingle(unItalic, topMargin, deepSeek, maxWrongPixels, lastDitch);
+                if (italicMatch != null)
+                {
+                    single = new NOcrChar(italicMatch) { Italic = true };
+                }
+            }
+        }
+
         CacheMatch(key, new MatchCacheEntry { SingleMatch = single });
         return single;
     }

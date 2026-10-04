@@ -1,5 +1,1432 @@
-
+﻿
 Subtitle Edit Changelog
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta20 (3rd of October 2026)
+
+* Add burn-in for selected lines (grid context menu) - thx rookes
+* Add Crisp ASR Index-Echo (Chinese speech to English/Japanese/Spanish text) - thx Oplay66
+* Add Fix common errors rule for apostrophes misread as double quotes (OCR, English) - thx WAusJackBauer
+* Add text selection opacity setting - thx kadrimarzouki
+* Add option to show the full file path in the title bar - thx GrampaWildWilly
+* Add "Remove (one each time)" behavior to surround-with slots - thx kadrimarzouki
+* Custom shortcut slots: choose where they are active, new focus and text box start/end commands - thx GrampaWildWilly
+* Settings: Alt+Left/Right goes back/forward through visited categories, video player download buttons kept together - thx GrampaWildWilly
+* Auto-translate: add DeepLX back to the engine list - thx gambar3
+* Improve time codes: no overlaps or lines ending too early, honours timing rules (max CPS, max duration), lines can be adjusted in the waveform
+* Speech to text on selected lines: keep the transcribed lines when some clips fail, and offer to retry the failed ones - thx Marooo1122
+* Prevent sleep while speech to text, text to speech or burn-in runs - thx wixfigur
+* Text to speech: voice sample text box is multi-line and stretchable - thx subof
+* OCR: keep the edited row in view, add Cut/Copy/Paste to the text box menu - thx gojetablade
+* Open Matroska PGS tracks with the same timing as the extracted .sup - thx gmariani
+* IMSC 1.1: detect .ttml and .dfxp files regardless of the extension they were saved with
+* ASSA: comment blocks ({...}) are not counted in CPS and line length, and are dropped from exports to other formats - thx Tom2681
+* Fix waveform not drawing the lines after a dense burst of ASSA lines - thx Tom2681
+* Fix ASSA Set position/Set background measuring wrong on lines with a fade - thx Tom2681
+* Fix grid double-click seeking to the same line after Sort - thx Tom2681
+* Fix empty ASSA \N lines counted in "too many lines" - thx kadrimarzouki
+* Fix Shortcuts and OCR windows not opening when text measuring fails (macOS 27) - thx leesuhyung-sudo
+* Fix Netflix check: Japanese single line max length is 13, not 23 - thx JuergenFleiss
+* Binary Edit: show and set the frame rate a sup is written at - thx Lukewarm1141
+* Update CrispASR to v0.8.41
+* Update Portuguese (Brazil) translation - thx igorruckert
+* Update Turkish translation - thx bilimiyorum
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta19 (2nd of October 2026)
+
+* Add custom shortcut slots built from steps (run commands, insert text, find and replace) - thx kadrimarzouki
+* Add behavior (toggle/add/remove) and "works on" options to surround-with slots, like SE 4 - thx kadrimarzouki
+* Add "Whole word" option to Multiple replace rules (also in Batch convert and seconv) - thx rosilucia-hub
+* Add Index-Translate 2B/9B to the curated llama.cpp translate models - thx Oplay66
+* Add Phonon-2 models to Crisp ASR Parakeet, and warn when an English-only model is used with another language
+* Add opt-in setting "Select current subtitle also while paused" (default off, like SE 4) - thx accessallareas
+* Compare: alignment by timing on large files, distant lines with the same text no longer misalign the list, sync points are undoable
+* llama.cpp translate: retry lines that come back untranslated
+* Remux video: refuse audio sources without audio, re-encode audio MP4/MOV cannot hold, use MKV for video MP4 cannot hold (VP8)
+* Binary Edit: take a Blu-ray sup's frame rate from its time codes, not the often wrong stored value
+* Export Blu-ray sup: use the open video's frame rate for the frame grid
+* Fix moving a word between the lines of the current subtitle: keep the user's line break, cycle like SE 4 - thx accessallareas
+* Fix Shift+Space not following "allow single-letter shortcuts in text box" - thx zbik1
+* Fix subtitles not shown on their first frame in the mpv preview and burn-in - thx accessallareas
+* Fix "keep gap if close" nudges settling on minimum gap + 1 frame - thx accessallareas
+* Fix moving all shot changes one frame not being saved
+* Fix Save as dropping the subtitle's language tag (e.g. ".en") after a format change - thx ukdtom
+* Fix "_" shown in Find/Replace window titles
+* Fix startup grid focus stealing focus from the text box or menu
+* Fix Settings crash when the Themes folder is missing
+* Fix Apply duration limits: OK did not always apply the current limits
+* Fix DVD import hanging on an empty VOB file, ripping every angle of multi-angle titles, and missing lower case file names on Linux
+* Fix CEA-608 space before punctuation after a styled word, a lost CEA-708 caption, and a one-character CEA-608 caption merged into the next
+* Fix Blu-ray sup export writing time stamps backwards for cues shorter than half a frame
+* Fix FFmpeg player showing a negative duration for transport streams without a known duration
+* Update CrispASR to v0.8.40 (Intel Mac legacy build for older CPUs) - thx tolikdgan
+* Update Italian translation - thx bovirus
+* Update Japanese translation - thx hisui3393
+* Update Korean translation
+* Update Polish translation - thx potplayer-fanpack
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta18 (1st of October 2026)
+
+* Add import of subtitles from DVD (IFO/VOB) with title picker, fast rip and exact cell timing (SE 4 parity)
+* Add reading of PSP UMD Video subtitles (.MPS/.PMF and .subs dumps)
+* Add reading of HD-DVD sup subtitles
+* Add reading of DVD "SP" sup in Batch convert and seconv
+* Add reading of CEA-608 captions from .m2v
+* Open transport streams saved with a video extension like .mp4 (GUI, Batch convert, seconv)
+* Open more files found in a scan of real issue files (UTF-16 without BOM, styles-only ASS, IMSC1 and more)
+* seconv: read the SE 4 formats the GUI opens again, and follow the "use word split list" OCR setting
+* OCR: access keys for Start/Pause/Edit-export, and OK is blocked while OCR runs - thx skylinekiller
+* Remux video: accept every video container as an audio source - thx MaxBunny1786
+* Blu-ray sup: write PTS on the video frame grid - thx Lukewarm1141
+* Toolbar: hide right-side items instead of overlapping icons when the window is narrow - thx hisui3393
+* Fix image export dropping glyphs like ♪ missing from the font (falls back to a system font) - thx JoaoGri
+* Fix Linux: copy text via xclip/wl-copy to keep accented characters - thx Pemicope
+* Fix Batch convert not keeping the source's UTF-8 BOM choice - thx Pemicope
+* Fix transport stream subtitles being off by the file's start time in the players
+* Fix FFmpeg player: play on the file's own timestamps, like mpv
+* Fix MP4 closed captions: 1 ms early cues, UI freeze on large files, CEA-608 roll-up
+* Fix CEA-708 pop-on caption timing, and keep the space around mid-row styled words in CEA-608/708
+* Fix Spanish "Fix common OCR errors" splitting forms of "sobrevalorar"
+* Update audio.cpp to v0.9.0 (lower GPU memory use for Higgs, Fish and ACE-Step)
+* Update CrispASR to v0.8.39 (fixes macOS 14 and older "exit code 134" crash) - thx YujKodato
+* Update Chinese Traditional translation - thx love80312
+* Update Korean translation - thx 12si27
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta17 (30th of September 2026)
+
+* Add reading of EZTitles binary project files (.ezt), with italic, color and alignment
+* Add reading of CEA-608 closed captions from DVD .vob / program stream .mpg video
+* Add export of the shot changes list to a file
+* Add "Check with speech-to-text" to Improve time codes: confirm or undo the aligner's large moves and first sync subtitles that are seconds off or drifting
+* Add "Move to category" on the Multiple replace rule context menu - thx Shae-Clark
+* Remux video: embed subtitles as A/53 CEA-608 closed captions in .mpg - thx MaxBunny1786
+* Open the load-only text formats again from File > Open and Batch convert (SE 4 parity)
+* Open Adobe Premiere projects (.prproj), ARIB STD-B36 files and image-list subtitle files for OCR again (SE 4 parity)
+* seconv: add DVD sup and IMSC image outputs, and refuse formats that can only be read
+* Subtitle grid: keep the error color visible on the selected row - thx Ingo
+* Improve performance of opening large non-subtitle files, VobSub reading, auto-translate, fix names and more
+* Fix transport stream subtitle reading (PGS in .ts, multi-program timing, PTS wrap, partial DVB pages, teletext without PTS, CEA-708 Korean)
+* Fix EZTitles XML: decode cues with the time code standard, not the video frame rate
+* Fix IMSC image export: write the PNGs as files
+* Fix Merge: keep line breaks when merging with an empty line - thx maknol
+* Fix waveform taking focus on mouse over while the window is inactive - thx mariajuferreira1958-creator
+* Fix Linux: startup could hang on fonts without a family name
+* Fix PAC code-page detection (Greek, Thai, short English lines), Cut video of .ts/.mpg/.vob ranges and more from a bug hunt
+* Update French translation - thx Need74
+* Update Korean translation - thx 12si27
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta16 (29th of September 2026)
+
+* Add reading of CEA-608/708 closed captions from video in .ts, .mkv, H.265 .mp4, fragmented .mp4 and .mxf (SMPTE 436M) files
+* Add CEA-608 channel / CEA-708 service picker when opening captions from MP4/MKV
+* Add "Multilingual" language option for Purfview Faster Whisper XXL speech to text - thx fointypinger
+* Add "Only subtitles with a too-long line" and more options to Batch convert split/rebalance long lines - thx xyv1997
+* Compare: include duration in HTML export - thx andor1999
+* Compare: show file names using the space the header has - thx vertigo220
+* Remux: tag subtitle tracks with the language from the file name - thx MaxBunny1786
+* MCC: read CEA-608 captions when there is no CEA-708 text
+* OCR: "use word split list" is now off by default - thx WAusJackBauer
+* Fix CEA-708: handle CR, BS, FF and HCR control codes (roll-up lines no longer run together)
+* Fix MP4: merge CEA-608 roll-up/paint-on screens into one cue per line
+* Fix waveform, speech to text and alignment: keep gaps in audio timestamps - thx sherkhan30452
+* Fix Batch convert to EBU STL writing invalid files
+* Fix Batch convert ASSA to other formats not converting tags like Save as - thx Slava46
+* Fix Compare window not remembering size and position - thx vertigo220
+* Fix Shortcuts search for a lone modifier like "ctrl" - thx Surlime
+* Update CrispASR to v0.8.38
+* Update Czech translation - thx Matěj Fouma
+* Update Japanese translation - thx hisui3393
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta15 (28th of September 2026)
+
+* Add Compare merge view: edit the current subtitle while comparing - thx perkesfurmah-collab
+* Add "Set style..." quick-pick shortcut with preview, and "Set style 1-10" shortcuts - thx hisui3393
+* Add optional "Shot in"/"Shot out" columns in the subtitle grid
+* Add waveform grid color setting (also in waveform color themes) - thx mariajuferreira1958-creator
+* Remux video: embed CEA-608 closed captions (.scc) in .mov - thx MaxBunny1786
+* Merge continuation lines: merge unless the line ends a sentence (SE4 parity)
+* Fix CEA-608/708: keep italics when decoding embedded captions - thx MaxBunny1786
+* Fix MP4/MOV: read c608 closed caption tracks correctly - thx MaxBunny1786
+* Update Italian translation - thx bovirus
+* Update Japanese translation - thx hisui3393
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta14 (27th of September 2026)
+
+* Add "Detect speakers" (Sortformer diarization) for Crisp ASR
+* Add customizable order and visibility of the video player controls - thx maknol
+* Add AI review prompt templates, reference context and AI-generated context - thx Morv55555
+* Add PAC secondary code page for lines in another script (open, Export PAC and seconv)
+* Add Cheetah Caption ASC format, and load ELR Studio .ela/.elb, ELR json, timing-only SAMI and Timed Images xml (for OCR)
+* seconv: convert Manzanita DVB bitmap dumps
+* PAC: detect the code page when opening files (was always Latin)
+* OCR fix: split run-together words like SE4 does, and fill nOCR's unknown glyphs
+* Cut video: much faster opening and generating (seek to ranges instead of decoding the whole video)
+* Open large RTF subtitles ~8x faster
+* TTS add-to-video: warn when the video stream comes out truncated - thx laszlolaszlo
+* ASSA styles storage: category fixes (name clashes, "Remove all", Export, rename/move, case-insensitive names) and import of Subtitle Edit 4 category exports (.template)
+* ASSA/SSA styles: block OK/Apply on empty or duplicate style names, and border type combo now follows the current style
+* YouTube Transcript: read markdown-bold time codes and skip spoken time codes
+* Fix duplicate Ctrl+Shift+V default shortcut (voice manager vs. fill selected lines) - thx GrampaWildWilly
+* Fix ASSA/SSA styles: Cancel after Apply applied the dialog again
+* Fix Batch convert ASSA dropping fonts embedded from the styles dialog
+* Fix common errors: fix overlap for equal end/start never applied
+* Fix nOCR hand-drawn lines landing on the neighbor pixel
+* Fix OCR italics moving spaced closing punctuation into the next italic word
+* Fix PAC: one "secondary code page" line turning a whole file Latin
+* Fix seconv nOCR/BinaryOCR giving only "*" on PGS input
+* Fix Shot changes list not copying rows to the clipboard
+* Fix two formats throwing on detection (Video CD DAT, CLQTT JSON)
+* Fix English OCR fix splitting some valid words
+* Update Latin nOCR database
+* Update Italian translation - thx bovirus
+* Update Polish translation - thx potplayer-fanpack
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta13 (26th of September 2026)
+
+* Add TikTok/YouTube Shorts (1-3 words) rule profile - thx hardpenguin
+* Add brightness (tone) bar to the color picker - thx bichitoxxx
+* Add "Toggle screen privacy" shortcut: hide file names, then also blur texts - thx kadrimarzouki
+* Add Crisp ASR Parakeet Ultra models
+* Add OpenAI-compatible text to speech output format (Auto/MP3/PCM) - thx laszlolaszlo
+* Add Remux option to turn off "Optimize for web streaming" (faststart)
+* Burn-in: show a "videos generated" dialog after batch mode
+* ASSA styles: ask to overwrite on copy to storage/file, and allow reordering storage styles - thx bichitoxxx
+* Open original/import/insert file pickers now start in the current subtitle's folder - thx bichitoxxx
+* Speech to text: merging short lines now respects the rule profile's number of lines - thx hardpenguin
+* Fix Alt+Decimal shortcuts (e.g. toggle dashes) never firing - thx kadrimarzouki
+* Fix second subtitle settings not re-styling from the loaded file - thx kadrimarzouki
+* Fix dragged text box height reset after Settings OK/Apply - thx kadrimarzouki
+* Fix text commands (delete, surround with) acting on display-only reference rows, and empty original lines shown as reference rows - thx kadrimarzouki
+* Fix duplicate recent colors in the color picker - thx bichitoxxx
+* Fix Burn-in batch mode only burning the logo into the first video
+* Fix Burn-in Logo/video position windows not maximizing
+* Fix batch video tools showing "_Done" as job status
+* Fix subtitle text boxes using the UI font instead of the subtitle text box font - thx Surlime
+* Update CrispASR to v0.8.37
+* Update audio.cpp runtime to v0.8.2-audio8-perf-hotfix
+* Update Czech translation - thx Matěj Fouma
+* Update Dutch translation - thx CmdSpock
+* Update Italian translation - thx bovirus
+* Update Korean translation - thx 12si27
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta12 (25th of September 2026)
+
+* Add OpenAI-compatible text to speech engine (OpenAI, OpenRouter, custom server) - thx laszlolaszlo
+* Add Cut video transitions between segments and fade from/to black
+* Add Crisp ASR Parakeet ReazonSpeech and parakeet-ctc-1.1b-ja Japanese models - thx jodilife
+* Add Beautify time codes: save, load and delete custom profiles - thx TB54
+* Add Auto-translate option to keep lines in music symbols untranslated - thx fraternl
+* Add "Merge with line after and unbreak" shortcut - thx stppnw0lf
+* Add justify lines option for the second subtitle - thx muaz978/kadrimarzouki
+* Number boxes: accept both "." and "," as decimal separator
+* Improve performance of paragraph creation and video preview refresh
+* Fix Auto-translate sending ASSA drawings and line-global tags to the engine - thx MrGoraj
+* Fix Cut video picture running ahead of sound when a cut starts inside a held picture
+* Fix video preview box border style for WebVTT (one box per line) - thx GrampaWildWilly
+* Fix UI font not applied to checkbox/radio button labels and other controls - thx Surlime
+* Update Hungarian translation - thx Zityi
+* Update Italian translation - thx bovirus
+* Update Japanese translation - thx hisui3393
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta11 (24th of September 2026)
+
+* Add syntax highlighting in Source view for WebVTT, LRC and SCC, and basic coloring for every other text format
+* Remux: mix audio files into one track with per-file volume - thx ghostminhtoan
+* TTS review: show the waveform position, click it to go to a position - thx subof
+* Batch convert: prevent sleep while converting - thx verbal666
+* Remember "Merge continuation lines" max gap and max characters
+* SenseVoice: offer to re-download models from before the CMVN fix
+* Speech to text: explain a CUDA run on a CPU-only build - thx Marooo1122
+* Improve performance of OCR fix, fix casing and video preview ticks
+* Fix saving a subtitle opened from an audio file overwriting the audio - thx MG240
+* Fix LRC header replaced by the default header, and Source view losing an edited header/footer - thx MG240
+* Fix Source view: crash on OK when the format throws, silently taking lines that parse as another format, and a deleted header coming back
+* Fix Source view highlighting: a number-only SubRip text line styled as a cue number, unclosed XML comments
+* Fix speech to text with Purfview Faster Whisper XXL and the "anime.ja" model (and hide translate for it) - thx dustwanderer
+* Fix speech to text batch statuses not reset on each run - thx Marooo1122
+* Fix undocked full screen video player leaving full screen when Alt+F4 minimizes it - thx GrampaWildWilly
+* Fix native file pickers opening off screen / on another monitor - thx GrampaWildWilly
+* Fix Remux "finalizing" progress animation not stopping when ffmpeg exits - thx GrampaWildWilly
+* Update CrispASR to v0.8.36
+* Update llama.cpp to b11149
+* Update Japanese translation - thx hisui3393
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta10 (23rd of September 2026)
+
+* Add "Edit second subtitle settings..." to the Video menu (restyle the second subtitle without the file picker) - thx GrampaWildWilly
+* Add EBU STL to the "Save as" format list - thx Triathlon-rally
+* Add audio track picker for the FFmpeg video player - thx fraternl
+* Find/Replace: show the replace count in the window, add button icons and a search history dropdown - thx fraternl
+* Remux: show each audio/subtitle file's folder, and a "finalizing" phase while the mp4 index is moved to the front - thx GrampaWildWilly
+* Speech separation ("Remove original speech", "Isolate speech", speech-only waveform): show progress and time left - thx to285
+* Shot changes: allow sensitivity 0.05-0.95 in 0.01 steps like SE 4 - thx kadrimarzouki
+* seconv: --no-language-suffix keeps "forced" and stream labels, drops only the language code - thx Mafuyu0
+* Refresh auto-translate API model lists (DeepSeek, Anthropic, Gemini, OpenAI, Perplexity)
+* Improve idle performance: main window tick pumps only run while a video is loaded - thx ivandrofly
+* Fix waveform shaking/jerky cursor on Windows (16 ms tick pump ran at 31 ms with the default timer resolution) - thx mariajuferreira1958-creator
+* Fix keyboard focus staying in the main window when a non-modal window (e.g. Remux) opens - thx GrampaWildWilly
+* Fix Enter on a split button (Remux, Burn-in, Batch convert, ...) running the window's default button instead - thx GrampaWildWilly
+* Fix Alt+Space system menu opening partially off-screen or on the wrong monitor - thx GrampaWildWilly
+* Fix change frame rate "From" not preset with the current frame rate, and frame rate combo boxes using the OS decimal separator - thx fointypinger
+* Fix ASSA styles dialog losing every style for headers without an exact "ScriptType: v4.00+" and for "*"-prefixed style names - thx hisui3393
+* Fix VobSub position ignoring the image crop (seconv ASSA alignment auto-detect tagged every cue {\an7}/{\an8}) - thx gambar3
+* Fix WhisperX model dots always green, redundant download button, distil-large-v3.5/anime.ja model names, and the Lightning checkpoint message - thx GitGianluc
+* Update WhisperX standalone to build 103
+* Update Avalonia to 12.1.3
+* Update Czech translation - thx Matěj Fouma
+* Update Italian translation - thx bovirus
+* Update Chinese Traditional translation - thx love80312
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta9 (22nd of September 2026)
+
+* Add TranslatePsy-AfriSLM 4B (English <-> 19 African languages) to the llama.cpp auto-translate models
+* Add Romanian OCR fix replace list (cedilla ş/ţ to comma below ș/ț) - thx Gabriel
+* Batch convert: OCR language per file from the container track or file name (e.g. "Movie [fra].sup") - thx Gabriel
+* Remux: show durations, elapsed/remaining time, and load the remuxed video when done - thx ghostminhtoan
+* OCR: remember the spell check dictionary per language (no more jumping back to "English (Australia)") - thx Gabriel
+* Clone from video: offer speech-to-text for the clips when the TTS engine needs transcripts (OmniVoice) - thx nielka98
+* Point sync via other subtitle: browse from the current subtitle's folder - thx fraternl
+* seconv: add --ocr-auto-detect-assa-alignment - thx gambar3
+* seconv: add --no-language-suffix to write auto-translated files without the language code - thx Mafuyu0
+* Improve performance of binary OCR matching, select-all timing commands, merge lines and the "Remove text for HI" dialog
+* Fix ASSA/SSA styles dialog changing the style of other lines when an original subtitle is loaded - thx hisui3393
+* Fix "Remove text for hearing impaired" changing dashes/spaces with no option selected - thx kadrimarzouki
+* Fix WebVTT to SubRip wrapping every line in a font tag with the player's default text color - thx maknol
+* Fix "Remove color tags" leaving garbage for rgba() colors
+* Fix Matroska subtitle extraction failing on busy network shares (short reads) - thx shotfirer
+* Fix seconv DVB-sub image export placing images at twice the offset, and MKV DVB-sub going through OCR
+* Fix audio clip extraction on zero/negative duration lines (ffmpeg -t 0 = whole file) in extract audio, clone voice and speech-to-text on selected lines
+* Fix FFmpeg video player stuck at the end after playing to it, and frame step keys dead on audio-only files
+* Fix layout 14 filmstrip going blank near the end of the video
+* Fix "Show speech only" waveform reverting to the full mix after undocking, and drifting with SMPTE timing
+* Fix second subtitle "Remember these settings" failing with audio-only media
+* Fix settings import bringing back old shortcut defaults (e.g. Cmd+H for Replace on macOS)
+* Fix OCR language auto-detect taking title words like "No"/"It"/"Be" for language codes (Dr.No.sup as Norwegian)
+* Fix "Generate background music" discarding the clip just listened to and generating a new one
+* Fix "Improve time codes" moving end times with "Adjust end times" off
+* Fix text to speech casting listing Zonos without an install
+* Update llama.cpp to b11070
+* Update FFmpeg (Windows) to 9.0.2
+* Update Italian translation - thx bovirus
+* Update Polish translation - thx potplayer-fanpack
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta8 (21st of September 2026)
+
+* Add editor-style layout 14 with a track timeline (video row and subtitle rows above the waveform)
+* Add sound on Linux to the FFmpeg video player (PulseAudio / PipeWire)
+* FFmpeg video player: real frame index, seek-free frame stepping (also variable frame rate) and faster scrubbing
+* Add "Move lines: shorten previous/next line instead of overlapping it" option - thx gambar3
+* Add width setting for the "initial text of selected line" waveform toolbar box - thx kadrimarzouki
+* WhisperX: new standalone build with live output (no more "hang" at "Performing transcription..."), and an update prompt - thx gambar3
+* Batch convert: lock Add/Remove/Clear while converting - thx yozongu
+* OCR "Add character" windows: show subtitle images on the image preview background - thx Nino-kun
+* Fix many ffmpeg video generation bugs (burn-in, cut, re-encode, remux, write chapters, blank video, add/remove embedded subtitles)
+* Fix "Add/remove embedded subtitles" dropping extra audio tracks and font attachments
+* Fix burn-in of Blu-ray sup showing subtitles too early when the first subtitle starts late
+* Fix window position lost when closing SE with a minimized window - thx GrampaWildWilly
+* Fix format properties button missing after restart - thx GrampaWildWilly
+* Fix waveform subtitle blocks vanishing when scrolling in TTS review / Improve time codes - thx gambar3
+* Fix underscores missing from file, audio track and plugin names in menus
+* Fix error log flooded with "disposed mpv player" entries after closing Visual sync / Point sync
+* Update Chinese (Simplified) translation - thx emsb8888-prog
+* Update Japanese translation - thx hisui3393
+* Update Korean translation - thx 12si27
+* Update Polish translation - thx potplayer-fanpack
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta7 (20th of September 2026)
+
+* Add "Improve time codes (forced alignment)" in Tools: re-time a roughly synced subtitle with a Crisp ASR forced aligner, with waveform preview
+* Add "Isolate speech" option to Crisp ASR speech-to-text (removes music/noise before transcribing)
+* Add "Show speech only" waveform option
+* Add "Remove original speech" option to text to speech
+* Add Supertonic-3 (Crisp ASR) text to speech engine
+* Add Voxtral F16 model to Crisp ASR speech-to-text
+* Add "Move text after cursor, go to next, play and pause at end" shortcut - thx kadrimarzouki
+* Add optional "initial text of selected line" box to the waveform toolbar - thx kadrimarzouki
+* Add two "line break" items to the waveform toolbar (choose where the toolbar wraps)
+* Remember the second subtitle file after restart - thx kadrimarzouki
+* Point sync: open at the line selected in the main window - thx TristisOris
+* Settings backup: interval 0 = backup at every start, unchanged settings are skipped - thx GrampaWildWilly
+* Spell check: accept capitalized lowercase-only words at sentence start (e.g. Dutch "Oktober") - thx fraternl
+* OCR word split and auto-break of 3+ lines now find the best split - thx ivandrofly
+* Zonos (Crisp ASR) is no longer presented as a voice-cloning engine
+* Fix Google Translate V2 API adding the detected source language to the translation - thx DaTim69
+* Fix waveform play-head jumping to the start when changing settings/docking - thx kadrimarzouki
+* Fix text to speech "add audio to video" failing with TrueHD audio - thx nielka98
+* Fix text to speech "generate video" failing on XviD video without time stamps
+* Fix white title bar on some dialogs in dark theme - thx Surlime
+* Fix tooltips not showing when another SE window is active (undocked) - thx GrampaWildWilly
+* Fix error log being written on every start with routine diagnostics - thx GrampaWildWilly
+* Fix plain text import "split to four lines" leaving long text unbroken
+* Fix seconv reading an MP4 without subtitle tracks as text - thx Ro-meo
+* Fix untranslatable strings in waveform themes and OCR "Add character" windows
+* Update Crisp ASR to v0.8.34 (Linux CUDA builds are back)
+* Update Japanese translation - thx hisui3393
+* Update Polish translation - thx potplayer-fanpack
+* Update Turkish translation - thx bilimiyorum
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta6 (19th of September 2026)
+
+* Add actor picker, actor shortcuts now work everywhere and keep a stable order - thx zbik1
+* Add optional "go to changed line" on undo/redo - thx kadrimarzouki
+* Add "Set end and go to next" and "Play from just before text" to the waveform toolbar - thx JonEvanCook
+* Add two missing SE4 options to Settings > Tools (remember "Use always" list, short display times may move start time) - thx ChocOranger
+* Spell check: accept Spanish imperative + pronoun forms (dímelo, cuéntame, ...) - thx fraternl
+* Text to speech: a failed per-line voice clone line falls back to a neighbouring line's reference clip - thx nielka98
+* Waveform toolbar wraps to a second row instead of clipping - thx JonEvanCook
+* Space always types in text boxes, even with single-letter shortcuts allowed - thx kadrimarzouki
+* Pastel theme: refresh palette
+* Fix auto-translate "No usable translation" with KoboldCpp (llama.cpp advanced engine) - thx Giorgio800
+* Fix edit text box scrollbar covering the text - thx kadrimarzouki
+* Fix invisible toolbar icons in the Pastel theme
+* Fix misspelled entries in the Spanish SE word list
+* Update Japanese translation - thx hisui3393
+* Update Polish translation - thx potplayer-fanpack
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta5 (18th of September 2026)
+
+* Add "Generate background music" (ACE-Step, local) in Video > More and in the text to speech window
+* Add "Delete selection (everywhere)" shortcut - thx ruonghieu
+* Add burn-in of subtitles into half side-by-side / top-bottom 3D video
+* Add 3D subtitle export at the depth from a 3D Blu-ray's 3D-Plane (.ofs) file
+* Add "Search rules..." box to Fix common errors - thx zcraber
+* Add search icon and clear button to all search/filter boxes
+* Add FFmpeg parameter editing and M4A input to Remux - thx pdjdev
+* Add reorder, undelete, context menu, file sizes and video drop to "Add/remove embedded subtitles"
+* Second subtitle dialog: remember style, optionally skip the dialog - thx kadrimarzouki, muaz978
+* Frame mode: snap re-timed lines to frames automatically - thx Ingo
+* Split at text cursor: cursor at the end now splits at the line break - thx hisui3393
+* Return focus to the opening control when a dialog closes - thx Shaima-Almarzooqi
+* Settings: Ctrl+PageUp/Down also works with focus on a setting - thx Shaima-Almarzooqi
+* Video OCR: "Test current frame" result readable by screen readers - thx Shaima-Almarzooqi
+* Fix Perplexity translate always returning no translation
+* Update audio.cpp runtime to v0.8.0
+* Update Italian translation - thx bovirus
+* Update Korean translation - thx 12si27
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta4 (17th of September 2026)
+
+* Add "Translate in place" option and a model drop-down to auto-translate - thx fointypinger
+* Add 22 missing languages (Malayalam, Tamil, Telugu, ...) to the AI auto-translate engines - thx zcraber
+* Allow frame-based values in Bridge gaps - thx Ina-Ch
+* Use macOS-standard default shortcuts on macOS (Replace, Find next/previous, Go to line) - thx shotfirer, GitGianluc
+* Auto-translate selected lines with only one subtitle open now makes the subtitle the original - thx fointypinger
+* Settings: show one category at a time, Ctrl+PageUp/Down switches category - thx Shaima-Almarzooqi
+* Screen readers: readable names for list rows and combo box values - thx Shaima-Almarzooqi
+* Keep Lambda Cap ruby/tate-chu-yoko and vertical columns in Netflix IMSC 1.1 Japanese export
+* Fix freeze/100% CPU from mpv's clipboard thread on Linux Wayland - thx zbcoding
+* Fix auto-translate hanging on Gemini replies without text - thx fointypinger
+* Fix auto-translate target language opening on German for short lines - thx fointypinger
+* Fix video position when reopening a file with a video offset
+* Fix DVB teletext export not including the video offset
+* Fix actor rename not being undoable
+* Fix burn-in AMF quality falling back to blank for settings stored by older versions
+* Fix mirrored Latin words and digits in RTL lines in the fast waveform renderer
+* Fix "click to generate waveform" hint disappearing when switching waveform renderer
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta3 (16th of September 2026)
+
+* Add "Guess start and end time from waveform" shortcut - thx m0ck69
+* Add optional "move lines" button groups to the waveform toolbar - thx gambar3
+* Add 3D image export (half side-by-side / top-bottom) from SE 4, also in seconv
+* Add an NVENC tune list to burn-in (hq/ll/ull/lossless)
+* Add experimental fast waveform renderer (SkiaSharp) - Options > Settings > Waveform
+* Add "Auto translate" for selected lines with only one subtitle open - thx fointypinger
+* Ask before auto-opening a video that is stored online only - thx FredOldenburg
+* Settings: name file type check boxes, download buttons and favorites list buttons - thx Shaima-Almarzooqi
+* Settings: picking a category moves focus into its section - thx Shaima-Almarzooqi
+* Fix auto-translate target language defaulting to Abkhaz instead of the last used or UI language - thx RealRUFUS
+* Fix freeze when opening a subtitle next to an online-only Dropbox video - thx FredOldenburg
+* Fix waveform jump and the cursor running a frame ahead when playback starts after a seek - thx mariajuferreira1958-creator
+* Fix Video OCR dropping everything after the 4th line of a frame - thx MengDaGBoss
+* Fix burn-in failing with the NVENC presets ffmpeg 9 no longer accepts - thx bichitoxxx
+* Fix the edit box "Hide" time code ignoring the video offset
+* Fix a remembered video offset being lost from the recent-file entry
+* Fix subtitle preview margin not allowing 0
+* Update Crisp ASR to v0.8.33
+* Update Italian translation - thx bovirus
+* Update Japanese translation - thx hisui3393
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta2 (15th of September 2026)
+
+* Add API Route auto-translate engine - thx DennyHo0917
+* Add "Rename..." to the subtitle grid's Actors context menu - thx ghostminhtoan
+* Add "all lines" and custom-milliseconds move shortcuts - thx gambar3
+* Add "OpenAI Compatible API" engine to batch convert auto-translate
+* Add Apple Vision OCR engine to seconv (--ocr-engine:applevision) - thx Hansie9999
+* Video offset: save the grid's time codes to the file, like SE 4
+* Accessible names for content buttons and text-less check boxes - thx Shaima-Almarzooqi
+* Fix Google Vision OCR splitting words on large fonts and adding a space before French "." - thx Codling
+* Fix OCR reading uppercase "I" as lowercase "l" in all-caps words (MlSSlSSlPPl) - thx Codling
+* Fix nOCR punctuation voting a line italic - thx Codling
+* Fix playhead hidden for a few seconds after seeking to where the video already is - thx Surlime
+* Fix waveform playhead not drawn at 0 s (e.g. after Stop)
+* Fix auto-translate moving a closing guillemet or curly quote to the next line - thx gambar3
+* Fix text-navigation shortcuts not firing in RTL text when opted in - thx kadrimarzouki
+* Fix Export custom text format writing the original time codes and text instead of the edited ones
+* Fix time up/down controls drawn past the edit section with End time or Layer shown
+* Fix eight FFmpeg video player teardown, seek and clock defects
+* Fix merge of roll-up captions creating zero-length lines and losing lines
+* Fix Restore auto-backup wiping all settings when a settings backup is not valid
+* Fix Remux video leaving ffmpeg running when the window closes, and metadata escaping
+* Fix batch burn-in skipping a row again after a subtitle was picked for it
+* Fix Move captions showing a 0 px bar height for the 2.39:1 preset
+* Fix a plugin missing from the Plugins menu when two plugins share a shortcut action name
+* Fix "_Plugins" group label in Options > Shortcuts
+* Fix voice pack install progress not updating on the UI thread
+* Update CrispEmbed to v0.17.11
+* Update whisper.cpp to v1.9.4
+* Update Italian translation - thx bovirus
+* Update Japanese translation - thx hisui3393
+
+-----------------------------------------------------------------------------------------------------
+
+v5.3.0-beta1 (14th of September 2026)
+
+* Add FFmpeg video player (FFmpeg.AutoGen) with VideoToolbox (macOS) and D3D11VA/DXVA2 (Windows) hardware decoding
+* Add "Remux video" (Video > More) for video, multi-track audio and soft subtitles - thx ghostminhtoan
+* Add Text to speech voice manager: waveform, transcripts, copy voices between engines and voice packs
+* Add "Rename voice..." to the Text to speech voice combo box context menu
+* Add Voikko (libvoikko) backend for Finnish spell checking, bundled in Flatpak and macOS builds
+* Add layouts 12 and 13 with the text box below the video player - thx tuming2025
+* Add "Font scale (%)" setting next to UI scale - thx tuming2025
+* Add auto-backup of Settings.json with a Settings tab in "Restore auto-backup"
+* Add shortcuts to move selected lines X ms back/forward - thx gambar3
+* Add per-plugin shortcuts in Options > Shortcuts (like SE 4)
+* Add "Do not ask again" to the plugin apply-to-which-lines prompt - thx fointypinger
+* Add "Show formatting, keep non-visual tags" subtitle grid mode
+* Add "Adjust durations...", "Apply duration limits..." and "Change formatting..." to the "Selected lines" context menu
+* Add settings UI for the hidden rc-stage settings (text-navigation shortcuts, Google Cloud speech to text) - thx kadrimarzouki
+* Add "use only front center channel" setting for 5.1 audio - thx willian-as
+* Add calculator button (frames to milliseconds) in "Apply minimum gap" - thx kadrimarzouki
+* Add configurable spell check unknown-word highlight color - thx mnerec
+* Add SE 4 EBU STL "Box" toggle to the grid and text box context menus, also drawn in the video preview
+* Add Transport Stream output settings to batch convert (SE 4 "TS settings...")
+* Add "Add folder recursive..." to batch convert
+* Add "Move captions" and "Remove fade in/out" to the image-based edit (BDSup2Sub features)
+* Add engine settings/info dialog for every video OCR engine
+* Add merge of roll-up (scrolling) captions to "Merge lines with same text"
+* AI review + Auto-translate: edit the suggested text in place in the grid
+* AI review: show the previous and next line under the selected suggestion - thx fraternl
+* Auto-translate: keep DeepL's sentence split on the row boundary - thx fraternl
+* Netflix check: allow applying the "Two lines maximum" fix - thx gambar3
+* Settings: redesign toolbar settings as an icon toggle grid - thx pdjdev
+* Accessible names for inputs, lists and grid rows in all tool windows - thx Shaima-Almarzooqi
+* Wire the help shortcut in 110 more dialogs
+* Video player: show the GL renderer in the badge and log software-rendering fallback - thx zbcoding
+* macOS: new macOS-style rounded app icon - thx nitrodox
+* Improve Turkish (Windows-1254) encoding auto-detection - thx feuer133
+* Faster language auto-detection (single tokenizing pass)
+* Source-generated LibraryImport and async file I/O in view models - thx ivandrofly
+* Fix edit box growing when a long text is pasted - thx kadrimarzouki
+* Fix single-line-length labels pushing the main view layout on long texts - thx kadrimarzouki
+* Fix split line losing ASSA tags and keeping the dialog dash on tagged lines - thx VaLvOnAuTa1981
+* Fix AI review prompt editor not scrollable, so long prompts could not be saved - thx Morv55555
+* Fix burn-in failing in ffmpeg when generating a video without subtitles - thx zbcoding
+* Fix spell check flagging valid Dutch words (WeCantSpell COMPOUNDRULE comment bug) - thx FredOldenburg
+* Fix nOCR double-detecting a glyph via expanded match on neighbour ink - thx Lukewarm1141
+* Fix OCR replace lists turning "toi" into "tol" (trailing i->l rule needs a 3-letter stem) - thx fraternl
+* Fix waveform min-gap clamp landing one frame early with snap to frames
+* Fix EBU STL teletext line width (37) being applied in the grid for open subtitling files
+* Fix open-subtitling EBU STL preview using a different row count than the writer
+* Fix source view selection with extra original rows - thx pdjdev
+* Fix missing gap between the text and original text boxes
+* Track pickers: show subtitle count with thousands separator
+* Docs: bring the user documentation up to date with 5.2, explain start-time sorting in Join subtitles
+* Update Croatian OCR fix replace list - thx diomed
+* Update Italian translation - thx bovirus
+* Update Korean translation - thx 12si27
+* Update Turkish translation - thx bilimiyorum
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0 (10th of September 2026)
+
+Subtitle Edit 5.2 collects the work of 32 betas and 7 release candidates.
+A summary of the changes since v5.1.0 (full details in the pre-release entries below):
+
+New features:
+* Assisted split and Assisted move - ranked one-click suggestions with full previews
+* Chapter editor with Matroska/MP4/OGM chapter formats (Video > More > Chapters)
+* Edit original - edit the original reference rows in place, open a non-matching original as a read-only reference, and show the original subtitle on the waveform
+* Forced narrative lines - a "Forced" column and "Save forced lines as..."
+* Error list with summary cards (Tools > List errors..., batch convert) - export to clipboard, text, Excel or web page
+* Statistics dashboard with tiles, meters, checks and a CPS histogram
+* Subtitle grid: "Columns..." dialog to reorder/hide columns, "Hide tags" formatting mode, and type-to-search in all combo boxes
+* Text boxes: drag-and-drop text (e.g. original to working text), configurable "Search via" shortcuts, "Google it", macOS "Look up", "Sentence case" and more "Surround with" slots
+* Waveform: guess start/end time from the waveform, snap to shot changes, editable video position box, per-track audio picker, and copy/paste at the video/waveform position
+* Beautify time codes using the video's real frame times, and in batch convert
+* Video offset remembers recent offsets; "Open recent video" and "Go to video position..." in the Video menu
+* Multiple replace: import/export rule categories, select all/none/invert, move shortcuts and regex match timeouts
+* Image-based subtitle editor: open DVD sup, XSUB, MP4 VobSub and more, "Video resolution..." scaling, and burn in Blu-ray sup
+* Update check settings with a stable/beta channel and a startup notification
+* Default save location, auto-break "do not break after" lists with an editor, and cut the subtitle with "Cut video"
+
+SE 4 parity:
+* Train nOCR, the minimum gap frame rate calculator, and "Remove/replace Unicode characters" (SE 4 plugin port)
+* WebVTT style manager, voices and browser preview, and configurable WebVTT cue settings
+* Import an SE 4 Settings.xml, and 22 more SE 4 shortcuts on shortcut import
+* Shortcuts: go to next empty line, go to first/last line, bookmarks, underline, toggle custom tags, recalculate duration, go to next/prev subtitle (play translate), move first word to previous subtitle, break at first space from cursor
+* Layout 10 (edit box under the waveform), "Center text in subtitle grid", the four grid double-click actions, and a toolbar frame rate that works like SE 4's
+* "Set up like Subtitle Edit 4" also arranges the waveform toolbar; "Open second subtitle file..." is back in SE 4's Video menu spot
+* Remove blank lines when opening a subtitle, full frame image export, regex snippet context menu in Find/replace, and Alt+F/Alt+R in Replace
+* Tesseract OCR: SE 4's 10 px margin and resize retry passes
+* Copy-to-clipboard grid menu items and plain text column paste are back
+
+Auto-translate and AI:
+* New "llama.cpp advanced" and "Ollama advanced" engines with batch context, system prompt and schema-forced output - also in batch convert and seconv (--translate-prompt)
+* MiLMMT-46 translation models; DeepL offers every API language; Google Translate retries via a fallback endpoint when the free service is blocked
+* Re-break translated rows that break the line profile, keep the chosen languages when the engine changes, and the original text is no longer lost after translating
+* AI review: in the grid context menu, apply suggestions in passes, Play current, start/stop the llama.cpp server, delay between requests, and new models (Gemma 4 E2B, EuroLLM, Granite 4.1)
+
+Speech to text:
+* New engines and models: WhisperX (standalone, no Python), Google Cloud Speech-to-Text v2, Voxtral (Crisp ASR) and anime-whisper for Japanese
+* Transcription quality report with non-speech and repeated-line removal
+* Crisp ASR: "Auto detect" language on all backends, a VAD off switch and a retry without VAD; live progress for WhisperX
+* The MLX Whisper engine was removed
+
+Text to speech:
+* New engines: IndexTTS 2.5, Higgs Audio v3, Fish Audio S2 Pro and FireRedTTS3 (audio.cpp), dots.tts, Confucius4-TTS and Pocket TTS (Crisp ASR), plus VibeVoice again, CosyVoice3 RL models and multilingual Chatterbox V3 (23 languages)
+* Voice cloning from the video - "Find voices in video and clone them all", and per-line cloning on Qwen3, audio.cpp, VibeVoice, MOSS-TTS, CosyVoice3 and VoxCPM2 - with a consent prompt before the first clone
+* Speaker-name detection, "leave sound/music lines silent", a Zonos language picker and custom Piper voice models
+
+OCR:
+* New engines and models: Apple Vision OCR (macOS), Paddle OCR 3.7 (PP-OCRv6), CrispEmbed PP-OCRv6 and DeepSeek-OCR-2, and llama.cpp HunyuanOCR 1.5, LFM2.5-VL 3B and custom vision models
+* Video OCR (burned-in subtitles): far more subtitles read, better text and start times, CrispEmbed engine, OCR fix engine and spell check coloring
+* OCR fix engine: new Spanish/Portuguese/Italian and Cyrillic rules, around 115 repaired replace list entries, and apostrophe straightening
+* Auto-detect the OCR language, open the matching video after OCR, "Save all images with HTML index", and faster nOCR matching
+
+Subtitle formats:
+* New: EBU-TT (Tech 3350), Manzanita DVB teletext (.dvbttx), Csv Excel, CANVASs SSTG1 (.sdb), Wistia json, DVD Junior SPC, Sonic DVD Producer, YouTube srv3 (.ytt), DaVinci Resolve marker EDL and Adobe Premiere markers
+* New exports: Final Cut Pro Xml Captions, BDN/xml 8-bit and Audacity/Tenacity labels
+* Read subtitles from fragmented MP4 (DASH/CMAF), ARIB STD-B24 captions from transport streams, and SMPTE-TT bitmap captions
+* Much better import of unknown formats (generic XML importer), "Import plain text" from the unknown format prompt, and spreadsheets from File > Open
+* EBU STL/teletext: color picker, alignment dialog, TT column, video preview with box/justification/double height, and frame-based time codes
+* SCC: colors as CEA-608 mid-row codes, a line length warning, and frame-accurate import timing
+* ASSA: embed and trim fonts, offer resampling on a resolution mismatch, new advanced effects, and "Change ASSA style properties" in batch convert
+* Ruby and emphasis in Lambda Cap and Netflix IMSC 1.1 Japanese; font colors in EBU-TT-D and IMSC Rosetta
+
+Video and image export:
+* Image-based export: advanced text effects (gradient, neon glow, 3D extrude), per-line ASSA colors and outlines, inline font face/size, and Blu-ray sup fades and overlapping subtitles
+* Burn-in: VideoToolbox hardware encoders on macOS, .webm/.ts output, letter spacing and libass style previews
+* Sync dialogs: subtitle on the video, resizable waveform, and the selected audio track
+* Smoother waveform/video cursor with mpv, faster scrubbing on long-GOP video, and fixed audio dropouts when pausing or seeking
+
+Batch convert and seconv:
+* Batch convert: Beautify time codes, convert colors to dialog, snap time codes to frames, "Add folder...", translation progress, keep the source file date/time, and every teletext page per PID
+* seconv: --json output and --help-json, --ocr-prompt, --translate-prompt, --override-position, --output-filename-append, full frame image export, .avi/XSUB reading and batched Paddle OCR
+
+Translations and engines:
+* New UI languages: Central Kurdish and Azerbaijani - and all language files synced with English
+* Updated engines: Crisp ASR v0.8.32, llama.cpp b10840, whisper.cpp v1.9.3, CrispEmbed v0.17.9, Paddle OCR 3.7, Tesseract 5.5.3, ffmpeg 9.0.1 (Windows), libmpv 20260814 (Windows) and yt-dlp 2026.08.19
+
+A big thank you to everyone who tested the pre-releases, reported issues and
+contributed code and translations - and a special thanks to Anthropic for
+sponsoring a Claude subscription used in the development of this release :)
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-rc7 (9th of September 2026)
+
+* Add CANVASs SSTG1 (.sdb) subtitle import - thx magsmike
+* Add opt-in setting to let shortcuts fire on Ctrl+Left/Right and Home/End in a text box - thx kadrimarzouki
+* Merge short lines: add an "Apply" checkbox column to pick which lines to merge - thx ghostminhtoan
+* Auto-translate: re-break translated rows that break the line profile - thx ruudhaf02-lgtm
+* Fix SCC import timing - apply control codes at their frame within the line - thx magsmike
+* Fix grid paste overlapping the selected line in time - thx rosilucia-hub
+* Fix Blu-ray sup save from the binary editor dropping the first line and duplicating the last - thx Lukewarm1141
+* Fix video preview not refreshing when right-to-left mode is toggled - thx kadrimarzouki
+* Fix repeated shortcuts while holding modifiers, and restore focus after undo/redo - thx ghostminhtoan
+* Export image: right/center justify Arabic lines precisely - thx kadrimarzouki
+* OCR: keep a row selected after deleting lines - thx FLAV1N
+* OCR fix engine: apostrophe straightening honors "use hardcoded rules"
+* Tesseract OCR: match retry-merge unknown words whole, not as substrings
+* Qwen3 ASR CPP: opening quotes and dialog dashes start the next cue
+* Waveform original overlay: keep a long cue overlapped by a shorter one visible
+* seconv: don't parse input paths in the parameter table as markup - thx TWiStErRob
+* Add Azerbaijani translation - thx jamalkamaladdin
+* Update German translation - thx FunkyKnilch
+* Update Italian translation - thx bovirus
+* Update Japanese translation - thx hisui3393
+* Update Korean translation - thx 12si27/sinfancy
+* Update Portuguese (Brazil) translation - thx igorruckert
+* Update Turkish translation - thx bilimiyorum
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-rc6 (8th of September 2026)
+
+* Add option to show the original subtitle on the waveform - thx pdjdev
+* Add "remember window size and position" to the Matroska/MP4/transport stream/VobSub track pickers
+* Add --override-position and --output-filename-append to seconv
+* Tesseract OCR: add SE 4's 10 px margin and resize retry passes, and merge the retry word-wise - thx andor1999
+* OCR fix engine: straighten typographic apostrophes, keep "didn't" as one word, and capitalize a line after a finished sentence
+* Compare: keep the word-level diff marking in the HTML export
+* Batch convert: convert every teletext page per PID in transport streams
+* seconv: use the GUI's PaddleOCR install and add a run timeout - thx tekk42
+* FireRedTTS3: require the reference transcript instead of generating noise - thx invio-a11y
+* Fix "Undo" unexpectedly removing the original subtitle - thx Surlime
+* Fix subtitle numbering after batch OCR - thx tekk42
+* Fix Qwen3 ASR CPP cue segmentation (break on sentence punctuation, no spaces in CJK) - thx tuming2025/TheOriginalNedKelly
+* Fix memory leaks in video preview dialogs, row handlers, spectrogram and auto-backup
+* Faster subtitle format detection, "convert colors to dialog", CJK character counts and more
+* Update llama.cpp to b10840
+* Update Bulgarian translation - thx jekovcar
+* Update Central Kurdish translation - thx dkakaie
+* Update Chinese (Traditional) translation - thx love80312
+* Update German translation - thx FunkyKnilch
+* Update Hungarian translation - thx Zityi
+* Update Japanese translation - thx hisui3393
+* Update Russian translation - thx jekovcar
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-rc5 (7th of September 2026)
+
+* Add FireRedTTS3-Base as an audio.cpp text to speech engine (zero-shot voice cloning in 24 languages)
+* Add "Import plain text" to the unknown subtitle format prompt, and open plain .txt files in the importer paired with a matching audio file - thx NiggleHub
+* Toggle dialog dashes: only the focused text box, per-column direction, and no stacked dashes - thx kadrimarzouki
+* Transcription: append the language code to the unsaved file name when "Save as: append language code" is on - thx GrampaWildWilly
+* Text to speech: per-line voice cloning from the video no longer echoes the reference clip (Fish Audio S2 Pro, CosyVoice3) - thx invio-a11y
+* Text to speech: Confucius4-TTS switches language without reloading the model
+* audio.cpp: offer a runtime update when the installed build lacks the engine's model family
+* Fix "guess start from waveform" moving the whole line instead of trimming the start on long text - thx m0ck69
+* Fix "guess start/end from waveform" giving up silently, staying put when the cue is more than 1 s off, or stopping at the first matching boundary - thx muaz978
+* Fix the undocked audio visualizer staying behind the main window after "Open original" - thx GrampaWildWilly
+* Fix a closed "New window" editor keeping its timers and undo polling running
+* Fix 46 bugs found in random-file hunts (subtitle format round-trips and detection, CSV/TSV quoting, ARIB B24 tables, ASSA style usages, SE 4 shortcut import, batch convert min gap)
+* Faster Timed Text/Rosetta/Netflix Japanese reading, TTML saving, "merge lines with same text", statistics, pre-translation and name list lookups
+* Update Italian translation - thx bovirus
+* Update Korean translation - thx 12si27
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-rc4 (6th of September 2026)
+
+* Add Google Cloud Speech-to-Text v2 as an online speech-to-text engine (lossless audio, dynamic batching, word-timed cues) - thx muaz978
+* Add "Video resolution..." to the image-based subtitle editor (Tools menu), scaling images and positions like BDSup2Sub
+* Add per-line voice cloning to VibeVoice, MOSS-TTS, CosyVoice3 and VoxCPM2 (Crisp ASR) - thx invio-a11y
+* Add Spanish (Mexico), (Argentina) and (Latin America / US) spell check dictionaries
+* Add keyboard navigation between changes in Beautify time codes
+* Add live progress, elapsed time and estimate for WhisperX speech-to-text
+* Show a drop-target bar while dragging text in the subtitle text boxes
+* Make the OK button the default in dialogs so Enter accepts them (e.g. Multiple replace) - thx rRobis
+* Fix short durations: also run after split/merge, and always extend the duration - thx andor1999
+* Generate blank video: theme-aware, larger time code with a contrast box, and no window resizing while generating
+* Burn-in: smaller fixed-height preview player without empty bands around the video
+* Fix "guess start/end from waveform" not working on quiet audio - thx m0ck69
+* Fix text drag-and-drop shrinking the selection, and space the drop like SE4 - thx ruonghieu
+* Fix undocked windows staying above other applications that took the foreground - thx cvrle77
+* Fix Higgs Audio v3 voice clone hiss at the end of clips - thx invio-a11y
+* Remove the Vietnamese Parakeet model from Crisp ASR speech to text (quality too poor) - thx ruonghieu
+* Update Chinese (Simplified) translation - thx emsb8888-prog
+* Update Italian translation - thx bovirus
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-rc3 (5th of September 2026)
+
+* Add text drag-and-drop in the subtitle text boxes (e.g. from original to working text) - thx bichitoxxx
+* Add "Move first word to previous subtitle" shortcut, and make the word-moving shortcuts follow the focused text box - thx saltarob
+* Add "Export..." to the transcription quality report - thx andor1999
+* Add the Vietnamese Parakeet model to Crisp ASR speech to text - thx ruonghieu
+* Add LFM2.5-VL 3B to the llama.cpp OCR model list
+* Accept OpenRouter transcription models that reject verbose_json - thx muaz978
+* Batch convert: hide the main window while the tool window is open - thx m0ck69
+* Let a user-assigned Alt+Space shortcut beat the Windows system menu - thx kadrimarzouki
+* macOS: change the default "Open Subtitle Edit folder" shortcut to Ctrl+Option+Shift+Cmd+D - thx GitGianluc
+* Sync/Cut video: zoom the waveform on Shift + main-row plus/minus too - thx perkesfurmah-collab
+* Text to speech: per-line voice clone pads short references, and audio.cpp engines can share a models folder - thx invio-a11y
+* Fix waveform cursor and time display freezing during playback, and play starting away from the cursor - thx Davanix
+* Fix undo/redo scrolling the current subtitle to the top of the grid - thx saltarob
+* Fix auto-translate rows shifting when an abbreviation period is added to a merged row - thx claudemartin
+* Fix "Show Plugins menu" not toggling the native macOS Plugins menu - thx GitGianluc
+* Fix OCR fix word list rejecting case variants of an existing word - thx Pemicope
+* Fix Generate button unreachable in burn-in/transparent video dialogs on short screens - thx sukuna0322
+* Fix audio.cpp TTS server not restarting after an engine update
+* Update whisper.cpp to v1.9.3
+* Update Crisp ASR to v0.8.32
+* Update audio.cpp TTS runtime (Higgs Audio v3 end-of-clip hiss fix)
+* Update French translation - thx Need74
+* Update Italian translation - thx bovirus
+* Update Japanese translation - thx hisui3393
+* Update Portuguese (Brazil) translation - thx igorruckert
+* Update Turkish translation - thx bilimiyorum
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-rc2 (4th of September 2026)
+
+* Add waveform vertical zoom shortcuts to the Point sync and Visual sync dialogs - thx perkesfurmah-collab
+* Add "Auto detect" language to the remaining Crisp ASR backends (Ark, Canary, Cohere, FireRed, Fun-ASR Nano, Granite, Kyutai) - thx subof
+* Add "Guess end time from waveform", and offsets for both guess commands - thx m0ck69
+* Add the subtitle type (normal / hearing impaired) to the DVB teletext export
+* Burn in Blu-ray sup subtitles from the image-based editor and in batch convert - thx josemorgado107
+* Export image: honor inline <font face> and <font size> per segment - thx Victory61
+* Second subtitle: follow the preview font and add a Bold option - thx GrampaWildWilly
+* Keep "Open second subtitle file..." available while a second subtitle is shown - thx GrampaWildWilly
+* Text to speech: judge silence relative to the clip's peak so quiet voice clones keep their last word - thx invio-a11y
+* Fix "guess start time from waveform" only firing while the waveform had focus - thx m0ck69
+* Fix the subtitle grid churning and slowing down when merging with a read-only original - thx torvchen
+* Fix the grid selection and view jumping after merging lines with the same text / time codes
+* Fix an extra character from DVD OCR when the leftmost glyph has a descender - thx FunkyKnilch
+* Update Catalan translation - thx jmontane
+* Update Italian translation - thx bovirus
+* Update Japanese translation - thx hisui3393
+* Update Korean translation - thx 12si27
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-rc1 (3rd of September 2026)
+
+* Add "Open recent video" to the Video menu - thx ghostminhtoan
+* Add "Break at first space from cursor position" text box shortcuts - thx saltarob
+* Text to speech: per-line voice cloning on the audio.cpp engines (IndexTTS 2.5, Higgs Audio v3, Fish Audio S2 Pro) - thx invio-a11y
+* Text to speech: a language picker for Zonos (CrispASR) - thx subof
+* Ask before the first voice clone in Confucius4-TTS and Pocket TTS too
+* Blu-ray sup export: render overlapping subtitles together instead of dropping one - thx josemorgado107
+* Sync dialogs: make the waveform under the video drag-resizable - thx perkesfurmah-collab
+* Waveform: offer the ffmpeg download instead of failing silently when ffmpeg is missing - thx Marethyu2000
+* Source view: use the appearance font and readable light-mode syntax colors - thx GrampaWildWilly
+* JSON syntax highlighting: color string values that follow a property name
+* Update llama.cpp to b10760
+* Fix the waveform cursor landing a GOP away and hopping a frame forward on click and mouse wheel - thx bichitoxxx
+* Fix "Set position" previewing rotation differently from libass - thx bichitoxxx
+* Fix split and merge not keeping an editable original in sync - thx saltarob
+* Fix closing Settings jumping back to the first subtitle - thx saltarob
+* Fix recalculate duration landing just over max CPS, and the CPS readouts disagreeing - thx saltarob
+* Fix a plugin result dropping the original column - thx fraternl
+* Fix the spell check staying on the old language after a translation - thx fraternl
+* Fix the video player not opening files on Windows paths longer than MAX_PATH - thx HindiAnimeVerse
+* Fix the beautify time codes profile editor clipping its numeric fields - thx matmaggi
+* Fix Compare lining the two grids up before the mirrored selection had scrolled
+* Fix "set end time and go to next" firing on key down instead of key up - thx ghostminhtoan
+* Fix the SMPTE preview stretch not reaching the VLC reloader and the secondary subtitle - thx ghostminhtoan
+* Fix the theme not following OS light/dark changes after the first switch
+* Fix 16 bugs found in a random-file hunt (subtitle formats, Google Lens, speech to text, TMPGEnc)
+* Minor performance improvements from immutable brushes and pens for every static color
+* Update French translation - thx Need74
+* Update Italian translation - thx bovirus
+* Update Japanese translation - thx hisui3393
+* Update Portuguese (Brazil) translation - thx igorruckert
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta32 (2nd of September 2026)
+
+* Add a "Columns..." dialog to reorder and hide subtitle grid columns - thx m0ck69
+* Export the "List errors" report to clipboard, text file, Excel or web page - thx AuroraMartell
+* Binary edit: open DVD sup, XSUB (avi), MP4 VobSub, image based WebVTT/TTML and more transport streams, and export DVD sup and D-Cinema
+* ASSA: offer to resample the subtitle when the video resolution differs from the script resolution - thx hisui3393
+* Add Confucius4-TTS (CrispASR), Higgs Audio v3 and Fish Audio S2 Pro (audio.cpp) voice cloning TTS engines
+* "Point sync via other subtitle": a gap column that highlights likely sync points - thx alexchexes
+* Move "Open second subtitle file..." to SE 4's spot in the Video menu - thx m0ck69
+* macOS: open Finder files in a new window, and start the video picker in the subtitle's own folder - thx muaz978
+* seconv: add the full frame image export option - thx smt-joen
+* Faster waveform scrubbing on long-GOP video - thx GrampaWildWilly
+* Faster Sami and IMSC 1.1 reading, PAC/EBU STL/D-Cinema saving and Blu-ray image export
+* Fix audio dropouts when pausing or seeking - the beta 31 mpv option did nothing - thx GrampaWildWilly
+* Fix Alt+Tab still not bringing undocked windows to the foreground - thx GrampaWildWilly
+* Fix the playhead jumping when repeat playback wraps to the next line - thx marcpbailey
+* Fix the "Guess time codes" window losing its buttons at a high UI scale
+* Update Italian translation - thx bovirus
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta31 (1st of September 2026)
+
+* New subtitle format: Csv Excel - thx matmaggi
+* Mark lines as forced narrative, with a "Forced" column and "Save forced lines as..." - thx matmaggi
+* New subtitle format: EBU-TT (Tech 3350), carrying teletext colors, boxing, rows and the GSI metadata
+* EBU-TT-D and IMSC Rosetta: read and write font colors - thx Scryper
+* DVB teletext (.dvbttx): write Level 2.5 colors, and make it a toolbar format with alignment picker, video preview and batch convert - thx René
+* Add Pocket TTS (CrispASR) voice cloning, and offer VibeVoice again
+* CrispASR: update to v0.8.31, and offer Windows CUDA 13
+* Subtitle image previews: a configurable background color, and a Blu-ray sup overlay that scales with the video - thx Lukewarm1141
+* Advanced TTS settings: hint icons instead of a wall of text, so the window fits the screen again - thx nielka98
+* Fix audio dropouts by keeping the mpv audio device open while paused - thx GrampaWildWilly
+* Fix Alt+Tab not bringing undocked windows to the foreground - thx GrampaWildWilly
+* Fix playing selected lines in repeat mode replaying a line at the cue boundary - thx marcpbailey
+* Fix the subtitle grid jumping to the end of the list after cut + auto-break - thx St0rmXtr00per
+* Fix the Matroska track picker opening twice on macOS - thx marcpbailey
+* Update Italian translation - thx bovirus
+* Update Japanese translation - thx hisui3393
+* Update Korean translation - thx 12si27
+* Update Turkish translation - thx bilimiyorum
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta30 (31st of August 2026)
+
+* Read Wistia json, DVD Junior SPC, Sonic DVD Producer and YouTube srv3 (.ytt) subtitles
+* Add "Center text in subtitle grid" (SE 4 parity) - thx matmaggi
+* Settings import: accept an SE 4 Settings.xml - thx JDario16
+* Teletext: write G2 characters like the music note, and read the national option sub-set and the Level 2.5 colours - thx René
+* Make dialogs keyboard-navigable: initial focus and Tab, across the UI - thx GrampaWildWilly
+* ASSA style window: scale the preview with the window and give it the whole panel
+* Auto-translate: make Enter press the default button
+* Keep ASSA override blocks out of auto-translate too - thx MrGoraj
+* Sort the OCR fix list alphabetically in Options - Word lists - thx Anth70
+* seconv: give Ollama OCR the same generation limits as the GUI - thx gmariani
+* Fix seconv reporting its version as 5.0.0 - thx gmariani
+* Fix the mouse wheel setting the video position with the option turned off - thx rookes
+* Fix Compare's ignore options, and remember its settings - thx FunkyKnilch
+* Fix the video preview showing EBU STL (and TTML positions) after the format was changed
+* Fix 20 bugs found in a code sweep
+* Update French translation - thx Need74
+* Update Italian translation - thx bovirus
+* Update Japanese translation - thx hisui3393
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta29 (30th of August 2026)
+
+* Add configurable "Search via X" shortcuts, with a "Search via" submenu in the text box context menu - thx kadrimarzouki
+* Add "toggle translation and original in video/audio preview" shortcut - thx Surlime
+* Add shortcut to copy the text of the selected lines to the original - thx hisui3393
+* Add macOS "Look up" to the subtitle text box context menu - thx routineCode
+* Video offset: remember recently used offsets, and an "Apply" that keeps the window open - thx kadrimarzouki
+* EBU STL: a font picker with a preview sample in the save options, color shortcuts snapping to the nearest teletext color, and clearer labels in the teletext alignment dialog
+* Waveform: give right-to-left text the direction its letters ask for - thx kadrimarzouki
+* seconv: per-image OCR progress, and percentages on OCR and translate - thx gmariani
+* Fix the waveform cursor drifting off the frame when stepping forward - thx rookes
+* Fix "one frame forward/back (with play)" not stepping smoothly - thx rookes
+* Fix waveform seek drift at SMPTE frame rates, unpinned nudges and a mixed-up blip clock - thx Davanix
+* Fix the mpv seek target being dropped after a click in the waveform - thx Davanix
+* Fix Compare no longer scrolling the two grids together - thx Davanix
+* Fix the subtitle grid not centering on the last prev/next-line paths - thx St0rmXtr00per
+* Fix the blank waveform and the rest of the rewinding after leaving Settings - thx GrampaWildWilly
+* Fix .dvbttx files with a preamble over 200 KB reading back as empty
+* Fix a translation being re-split inside a number - thx fraternl
+* Fix WebVTT cues placed in different vertical bands being merged - thx MrAnter
+* Fix six more bugs found in a code sweep
+* Update Bulgarian translation - thx jekovcar
+* Update Italian translation - thx bovirus
+* Update Japanese translation - thx hisui3393
+* Update Persian translation - thx rmtjokar
+* Update Russian translation - thx jekovcar
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta28 (29th of August 2026)
+
+* Read and write Manzanita DVB teletext files (.dvbttx) - thx René
+* EBU STL video preview: draw the box, the justification, double height rows and an optional custom font
+* Surround with: more slots, and fix the slots getting lost in settings export/import - thx kadrimarzouki
+* SCC: write colors as CEA-608 mid-row codes instead of putting the color tags on screen - thx Jessecar96
+* Video OCR: a better default prompt for two-line subtitles, and "--ocr-prompt" for seconv - thx tekk42
+* Update CrispASR to v0.8.30
+* Fix the subtitle grid not centering on the selected row during prev/next navigation - thx St0rmXtr00per
+* Fix "inverse selection" selecting a single row and jumping to the top of the file
+* Fix the video rewinding after leaving Settings - thx GrampaWildWilly
+* Fix the duration field in frame mode not accepting a value typed without the colon - thx René
+* Blu-ray sup: fix the export of bitmaps over 64 KB
+* Update Italian translation - thx bovirus
+* Update Japanese translation - thx hisui3393
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta27 (28th of August 2026)
+
+* Add "Assisted split" and "Assisted move" windows, with ranked one-click suggestions and full previews - thx GitGianluc
+* Add "Justify lines" for the mpv video preview in Options - Settings - Video - thx kadrimarzouki
+* Image based export: let the line justification follow the alignment tag - thx smt-joen
+* Much better import of unknown subtitle formats - a new generic XML importer plus a dozen JSON fixes
+* Netflix check: measure gaps, bridges and shot changes at the video's frame rate, and fix two "spell out numbers" defects
+* Fix "generate video with burned-in subtitles" silently doing nothing when the output file already existed - thx rRobis
+* Fix the waveform cursor jumping away a moment after a click - thx Davanix
+* Fix the undocked waveform window taking the foreground when another program is closed - thx GrampaWildWilly
+* Fix around 290 more bugs found in 13 code sweeps - subtitle formats, batch convert, seconv, dialogs, settings, binary edit and core helpers
+* Update Chinese (simplified) translation - thx emsb8888-prog
+* Update Italian translation - thx bovirus
+* Update Japanese translation - thx hisui3393
+* Update Korean translation - thx 12si27
+* Update Polish translation - thx potplayer-fanpack
+* Update Portuguese (Brazil) translation - thx igorruckert
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta26 (27th of August 2026)
+
+* Video OCR: read far more subtitles, with much better text and start times - thx caiweihan
+* Video OCR: run the OCR fix engine and spell check coloring on the lines, plus an edit dialog and a context menu
+* Video OCR: order the engines best-measured first, add setting hints, a dictionary download button and window layout polish
+* Add "Change ASSA style properties" (spacing and alignment) to batch convert - thx adeltalon
+* Add "Play current" to spell check, so you can hear the line a flagged word is in - thx fraternl
+* Add "Google it" to the subtitle text box context menu
+* Add the SE 4 "go to next/prev subtitle (play translate)" shortcuts - thx kadrimarzouki
+* Add Central Kurdish translation - thx dkakaie
+* Spreadsheets (csv/xlsx/ods) can now be opened from File - open, and the import is documented - thx GrampaWildWilly
+* Lambda Cap: read and write ruby, emphasis dots and positioning control codes - thx magsmike
+* EBU STL: keep the colors when the header claims open subtitling
+* Split long lines: keep a sentence-ending line break as an event boundary - thx AuroraMartell, Triathlon-rally
+* "Fix RTL via Unicode" now wraps the sentence inside the tags, and closes the embedding
+* Netflix check and fix: the timing fixes (min/max duration, gaps, shot changes) are now actually applied
+* Faster XML format detection, Timed Text saving and DVB/VobSub image decoding
+* WSB is now import only - Subtitle Edit could not read back the files it wrote
+* Fix "apply minimum gap", "change formatting" and "sort by" clearing the subtitle when OK was pressed quickly
+* Fix the first save after a translation overwriting the source file's ASSA styles
+* Fix cancelling "save as" saving anyway, and "save original as" using the wrong format
+* Fix a crash when dropping an mkv file on the subtitle grid, and the doubled "parsing Matroska file" wait
+* Fix Arabic subtitle text showing up as boxes in the subtitle grid - thx adeltalon
+* Fix auto-translate blanking every untranslated line when pressing OK after a partial translation
+* Fix "play current and pause" running past the end of the line - thx kadrimarzouki
+* Fix Multiple replace losing the selection when moving a rule up or down - thx madsoft-ha
+* Fix the undocked waveform window coming to the front instead of the main window - thx GrampaWildWilly
+* Fix export/import of settings resetting video settings and rules, and wiping shortcuts
+* Fix "whole word" find and replace matching inside words
+* Fix spell check losing user words, names and "use always" entries
+* Fix speech to text losing word level highlighting, and cancel not stopping a batch
+* Fix text to speech review edits dropping italics and line breaks
+* Fix several burn-in and transparent video bugs (cut length, target file size, output properties)
+* Fix image based export duplicating text after a "<", and ASSA fade-outs exporting fully transparent
+* Fix five bugs in the csv/xlsx/ods importers (pipe separator, merged cells, sheet order)
+* Fix shot changes import losing precision, decimal commas and "frame_time" files
+* Fix CEA-608 roll-up captions scrolling the wrong rows
+* Fix around 200 more bugs found in six code sweeps - subtitle formats, dialogs, settings, OCR, downloads and core helpers
+* Update German translation - thx FunkyKnilch
+* Update Italian translation - thx bovirus
+* Update Polish translation - thx potplayer-fanpack
+* Update Turkish translation - thx bilimiyorum
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta25 (26th of August 2026)
+
+* Add advanced text effects to image based export - gradient, neon glow, 3D extrude and more
+* Add speaker-name detection and a "leave sound/music lines silent" prompt to text to speech - thx subof
+* Add "Clone from video" to Qwen3 TTS, so each line can be dubbed in the voice heard in the video - thx invio-a11y
+* Add an editable video position box to the waveform toolbar - thx 95Midnight
+* Add custom llama.cpp vision models to the OCR model list
+* Add the "Ollama advanced" translate engine to batch convert
+* Add "--translate-prompt" to seconv for the local LLM translate engines - thx Makar8000
+* Image based export now honors per-line ASSA colors and outline/shadow widths
+* EBU STL: show frame-based time codes while the format is active - thx Triathlon-rally
+* "Normalize strings" now folds curly quotes, dashes and ellipsis to plain ASCII - thx fraternl
+* DeepL: offer all the languages the API supports, and use the host that matches the key
+* Google Translate: use the right language list for the free and the paid engine, and drop two broken entries
+* Auto-translate: take the CrispASR MADLAD language list from the model - thx ecotycoon
+* OCR: list the most accurate llama.cpp models first
+* Italian OCR: fix "E'" to "È" - thx GitGianluc
+* Speech to text: say when Crisp ASR was killed instead of reporting no speech - thx marwanlhabti5-coder
+* Update llama.cpp to b10625
+* Fix the original text being erased after translating - thx fraternl
+* Fix EBU STL export doing nothing when a font color tag has no quotes, and remember the save options
+* Fix regenerating a cloned line after importing a text to speech session - thx invio-a11y
+* Fix "find voices in video and clone" not setting actors when a subtitle is open - thx subof
+* Fix "convert actors" missing a speaker tag split across a line break - thx subof
+* Fix OCR removing the French space before "?" and "!"
+* Fix Microsoft Translator throwing an error when the language list cannot be fetched
+* Update Italian translation - thx bovirus
+* Update Japanese translation - thx hisui3393
+* Update Polish translation - thx potplayer-fanpack
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta24 (25th of August 2026)
+
+* Add dots.tts text to speech engine with voice cloning
+* Add WhisperX speech to text engine, standalone - no Python needed - thx muaz978
+* Add Apple Vision OCR on macOS
+* Add a format properties button next to the subtitle format picker
+* Add "List errors..." to the Tools menu
+* Add the SE 4 bookmark, underline and "guess start" shortcuts
+* macOS: add the standard Window menu, close menu-bar gaps and fix the file types the app registers
+* macOS: let Ctrl+click open the shortcuts list's Import/Export menu
+* Blu-ray sup export can now fade lines in/out via ASSA "{\fad}" tags
+* Update Paddle OCR to 3.7 (PP-OCRv6)
+* Google Translate: show a clear message when Google blocks the free service, and retry via a fallback endpoint - thx kadrimarzouki
+* Speech to text advanced: the parameter buttons now toggle their parameter on and off - thx thealainpaul
+* Fix EBU STL save options being silently lost or corrupted
+* Fix subtitle times drifting by one millisecond while editing - thx Davanix
+* Fix the original text disappearing after applying a tool dialog's result - thx madsoft-ha
+* Fix "Open with" on an mkv sometimes opening only the subtitle, not the video - thx wixfigur
+* Fix "convert actors" not writing the actor column for inline "Name: text" lines - thx rotj
+* Fix Faster Whisper XXL, CTranslate2 and Const-me asking to install again every time - thx senaplz
+* Fix Qwen 3.5 leaking "thinking" text into llama.cpp translate and AI review
+* Fix Whisper suggesting int8 again after cuBLAS rejected the compute type
+* Update Russian translation - thx jekovcar
+* Update Bulgarian translation - thx jekovcar
+* Update Chinese Traditional translation - thx love80312
+* Update Italian translation - thx bovirus
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta23 (24th of August 2026)
+
+* OCR: add accent, l/I and preposition-split rules for Spanish, Portuguese and Italian
+* OCR: fix Latin letters and digits misread inside Cyrillic words (Russian, Macedonian)
+* OCR: repair about 115 broken, dead or duplicated entries in the fix replace lists
+* Faster Scenarist Closed Captions export (5x), Netflix quality checks and "remove text for hearing impaired"
+* Faster Blu-ray palette decoding, transport stream scanning and Cavena 890 reading
+* Fix ASSA attachments being written with the last two bytes zeroed
+* Fix DVD Studio Pro "with space" files failing to load
+* Fix csv lines containing a semicolon being dropped
+* Fix ASSA resampling giving up on tags with a space, like "\pos (10,11)"
+* Fix words per minute being reported as infinity for zero duration lines
+* Fix "convert actors" losing the name and mangling lines with leading spaces
+* Fix crashes and wrong results when parsing malformed MP4, transport stream and RIFF files
+* Fix WebVTT thumbnail sprite sheets in .jpeg being rejected
+* Fix video OCR ending a subtitle too early after an unreadable frame
+* Fix teletext line length errors missing from the error lists in the main window and batch convert
+* Fix beautify time codes using a cancelled or failed frame time extraction when the video duration is unknown
+* Fix the speech to text quality report naming the wrong line for removed repeats
+* Fix Netflix "spell out leading number" doing nothing outside Windows
+* Fix Unknown 33/34/59 writing 00:00:60 instead of 00:01:00
+* Fix Matroska SSA lines with fewer commas than expected throwing an error
+* Fix plain text import hanging when the max line length setting is zero
+* Fix OpenRouter speech to text with GPT transcription models - thx muaz978
+* Update German translation - thx FunkyKnilch
+* Update Japanese translation - thx hisui3393
+* Update Korean translation - thx 12si27
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta22 (23rd of August 2026)
+
+* Beautify time codes can now use the video's real frame times instead of assuming a constant frame rate - thx warrentc3
+* Add a transcription quality report to speech to text, plus non-speech and repeated-line removal - thx l0uev4-lab
+* Add an error list with summary cards and per-error rows, in the main window and in batch convert
+* Add shot-change snap distances to Settings
+* Snap to the nearest shot change in the waveform when a cue is close - thx m0ck69
+* Warn before saving SCC when lines exceed 32 characters or 4 lines
+* Add a "Use external server" toggle for llama.cpp in batch convert, independent of the main setting - thx emsb8888-prog
+* Remember the batch convert "Remove formatting" check boxes - thx matake31
+* Use the selected audio track in the sync windows - thx dmist
+* Use display dimensions for rotated video when burning in subtitles - thx thealainpaul
+* Speed up tag counting in the subtitle grid - thx ivandrofly
+* Fix split long lines producing overlong lines, gaps between split events and duplicate numbers - thx Triathlon-rally
+* Fix selecting a text to speech review line by clicking or grabbing its waveform block - thx cvrle77
+* Fix Google Translate failing on transient server errors instead of retrying - thx JoaoDuarte-code
+* Fix the subtitle grid scroll position jumping while the reference projection rebuilds - thx torvchen
+* Fix the minimum gap not being kept when nudging a cue one frame - thx m0ck69
+* Fix the AI review sending ASSA override blocks, and send actor/style as context - thx MrGoraj
+* Fix continuation style fixes being applied twice to each line
+* Update Italian translation - thx bovirus
+* Update Polish translation - thx potplayer-fanpack
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta21 (22nd of August 2026)
+
+* Add an option to keep the source file's date/time on converted files (batch convert + seconv) - thx TucocoTucoco
+* Add a Start/Stop server button to the AI review window, and stop llama-server when a review is cancelled - thx emsb8888-prog
+* Snap whole-paragraph waveform drags to shot changes - thx m0ck69
+* Update yt-dlp to 2026.08.19
+* Fix "snap to shot change" ignoring the cue gap and often doing nothing at all - thx m0ck69
+* Fix waveform edge drags running away when the video position is centered - thx GrampaWildWilly
+* Fix OCR reading "l" as "i" or "I" without "try to guess unknown words" turned on - thx Miggu82
+* Fix the subtitle grid jumping after merging lines with a read-only original open - thx torvchen
+* Fix focus, scroll and selection in the subtitle grid after delete, insert and merge commands
+* Fix WebVTT showing a line twice when the same cue is repeated with the same time codes
+* Update Chinese (simplified) translation - thx emsb8888-prog
+* Update French translation - thx Need74
+* Update Italian translation - thx bovirus
+* Update Japanese translation - thx hisui3393
+* Update Korean translation - thx 12si27
+* Update Polish translation - thx potplayer-fanpack
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta20 (21st of August 2026)
+
+* Add "Go to sub position and pause" to the video shortcuts - thx BBB2K
+* Add a teletext color picker with a "No color" option for EBU STL - thx Triathlon-rally
+* Add the minimum gap frame rate calculator from SE 4 - thx m0ck69
+* Add the SE 4 "toggle custom tags" and recalculate-duration shortcuts - thx m0ck69
+* Layout 10: put the edit box under the waveform like SE 4/Aegisub - thx Surlime
+* Let the preview subtitle use the letterbox bars - thx m0ck69
+* Keep the chosen languages when the translate engine changes - thx GrampaWildWilly
+* Apply new waveform colors without restarting SE - thx m0ck69
+* Retry a Crisp ASR clip without VAD when it comes back empty - thx Davanix
+* Explain the cuBLAS compute type failure and offer the fix - thx tomelephant-git
+* Smooth the waveform/video cursor and take mpv work off the UI thread
+* Teletext/EBU STL: preview follows row changes, header round-trip, TS charset crash/leak fixes, honest TT column
+* Hide burn-in codecs the bundled ffmpeg lacks (Flatpak) - thx zbcoding
+* Keep the settings column out of the video generating progress bar row - thx zbcoding
+* Docs: add the chapters page, rebuild the settings page, refresh the engine/format/shortcut lists
+* Update CrispEmbed to v0.17.9
+* Update Italian translation - thx bovirus
+* Perf: vectorize the OCR bitmap primitives and the spectrogram pixel write
+* Fix Whisper XXL failing to load on glibc 2.41+ (Fedora 42, Arch, Ubuntu 25.10) - thx zbcoding
+* Fix the grid color guard dropping legible colors - thx St0rmXtr00per
+* Fix the position slider jumping while dragging during playback - thx Davanix
+* Fix clipboard managers failing to paste into text boxes on Windows
+* Fix a working Crisp ASR build not being downloaded on Intel Macs - thx tolikdgan
+* Fix update-metainfo-version.sh flattening the AppStream release history, and re-pin the Flathub manifest to v5.1.0 - thx CaptechOmar
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta19 (20th of August 2026)
+
+* Add a Teletext alignment dialog, a TT grid column, and better EBU STL Teletext handling - thx Triathlon-rally
+* Add "Save all images with HTML index" to the OCR window - thx WAusJackBauer
+* Use the position the subtitle file itself carries when previewing on the video (TTML/PAC/EBU STL) - thx gavinhonl
+* Remember which "Multiple replace" categories are expanded - thx KaDeeKe
+* Let the user own the llama.cpp launch flags in batch convert - thx emsb8888-prog
+* Start the text-to-speech export folder picker in the subtitle's own folder - thx cvrle77
+* Delete the temporary files text-to-speech and ffmpeg leave behind - thx subof
+* Let clipboard managers paste into the focused text box on Windows (WM_PASTE)
+* Update the pinned llama.cpp build to b10507
+* Fix black video and no sound on GPUs without a Vulkan runtime - thx jugorakita-creator
+* Fix the batch convert window freezing after minimize/restore, and llama-server surviving cancel - thx emsb8888-prog
+* Fix the UI freezing during OCR, and line editing breaking after a minimize - thx FunkyKnilch
+* Fix the Delete key doing nothing after a shift+click range selection in a scrolled grid - thx Davanix
+* Fix ruby and bouten not being read from real Netflix IMSC 1.1 Japanese files - thx w72k24
+* Fix D-Cinema XML two-line events collapsing into one line - thx clundible
+* Fix Gemma 4 models returning empty translations - thx Oplay66
+* Fix the Chatterbox crash after switching to another cloned voice - thx subof
+* Fix black in-progress status text in the batch convert file list
+* Update Italian translation and installer - thx bovirus
+* Update Japanese translation - thx hisui3393
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta18 (19th of August 2026)
+
+* Add a "Hide tags" mode for formatting in the subtitle grid - thx MrGoraj
+* Add letter spacing to "Generate video with burned-in subtitles" and "Generate transparent subtitle"
+* Add a shortcut for pasting clipboard text to a new waveform selection - thx Xenos71
+* Add custom server parameters, a stall watchdog, and a token cap to llama.cpp translate - thx emsb8888-prog
+* Add completion-format translate prompts to LM Studio, KoboldCpp, Ollama and the other local engines - thx subof
+* Add a way to switch VAD off in Crisp ASR (use --chunk-seconds) - thx AmineI
+* Apply AI review suggestions in passes instead of applying and closing - thx fraternl
+* Make Shift+Delete cut in every text box, not only the main edit boxes - thx GrampaWildWilly
+* Import 22 more SE 4 shortcuts, and fix the four "keep gap" frame moves always being skipped
+* Render the style previews with libass in the burn-in, transparent video, and ASSA styles dialogs
+* Show the text of tag-heavy lines in the grid's "show formatting" mode - thx MrGoraj
+* Extend to shot change: stop at the first cut, and never shorten a line - thx m0ck69
+* Find OCR replace lists that only have a "_User" file, and use them everywhere - thx Lentzeris
+* Retry the update check like downloads do, and log why it failed
+* Keep the waveform responsive while shot changes are auto-extracted
+* Speed up waveform generation for 16-bit stereo audio
+* Update the audio.cpp IndexTTS 2.5 engine to the 2026-08-18 build
+* Fix speech to text doing nothing at all when ffmpeg cannot be started - thx GrampaWildWilly
+* Fix "key 'DYLD_LIBRARY_PATH' was not present" starting whisper.cpp on macOS - thx GitGianluc
+* Fix speech to text not finding the Purfview XXL output when using own --output_dir - thx GrampaWildWilly
+* Fix crash in batch auto-translate when the API key is missing - thx wjcarpenter
+* Fix "Remove text for HI" check boxes changing state after a partial Apply - thx Davanix
+* Fix Netflix IMSC 1.1 Japanese files without bouten being read as EBU-TT-D - thx w72k24
+* Fix the subtitle list jumping to the top/bottom after replace or "delete empty lines" - thx St0rmXtr00per
+* Fix the waveform cursor falling behind the audio during long playback - thx hisui3393
+* Fix OCR reading words with more than one "l" as uppercase "I" - thx Miggu82
+* Update Chinese (traditional) translation - thx love80312
+* Update German translation - thx Need74
+* Update Korean translation - thx 12si27
+* Update Polish translation - thx potplayer-fanpack
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta17 (18th of August 2026)
+
+* Trim embedded ASSA fonts to the characters actually used (attachments, font collector, batch convert) - thx hisui3393
+* Add show/hide settings for the format specific toolbar icons - thx GrampaWildWilly
+* Add a "Select none" button to the AI review window - thx fraternl
+* Add the CosyVoice3 RL talker models in both quantizations - thx subof
+* Show the subtitle on the video in "Visual sync" and "Set sync point" - thx gabiacas-ops
+* Make the toolbar frame rate usable like the SE 4 one - thx smt-joen
+* Use an index-mapped scrollbar for the subtitle list in the OCR window
+* Update ffmpeg to 9.0.1 (Windows) / 9.0 (macOS arm), Tesseract to 5.5.3, whisper.cpp to v1.9.2, libmpv to shinchiro 20260814, and Paddle OCR standalone to v1.4.0
+* Fix Shift+Delete still not cutting in a text box - thx GrampaWildWilly
+* Fix per-line voice cloning hanging on Windows - thx invio-a11y
+* Fix capitalization after "EE.UU." and other doubled Spanish abbreviations - thx fraternl
+* Fix the Spanish OCR replace rule for "clón" breaking words like "ciclón" - thx fraternl
+* Fix audio clip extraction progress jumping after Subtitle Edit regains focus - thx Davanix
+* Fix speech to text failing on videos where the audio is not the first stream - thx emsb8888-prog
+* Fix speech to text transcribing a different audio track than the engine picks on multi-track files
+* Fix the main window being stuck on screen when a modal dialog is minimized - thx emsb8888-prog
+* Fix text to speech losing the whole run when a local engine crashes mid-generation - thx subof
+* Fix the waveform cursor running ahead of the audio when playback resumes - thx hisui3393
+* Fix ASSA styles from the style storage changing values after OCR - thx FunkyKnilch
+* Update Bulgarian translation - thx jekovcar
+* Update German translation - thx Need74
+* Update Italian translation - thx bovirus, GitGianluc
+* Update Japanese translation - thx hisui3393
+* Update Russian translation - thx jekovcar
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta16 (17th of August 2026)
+
+* Add a chapter editor with Matroska/MP4/OGM chapter formats (Video > More > Chapters) - thx alex64-pb
+* Add "Find voices in video and clone them all", plus cloning the voice of each line from the video - thx invio-a11y
+* Add the Voxtral backend to Crisp ASR speech to text - thx AmineI
+* Add "Final Cut Pro Xml Captions" export
+* Add DaVinci Resolve marker EDL import/export
+* Add reading of Adobe Premiere Pro "Markers" panel csv exports
+* Add text box "Copy (alternative)"/"Paste (alternative)" shortcuts, and make Shift+Delete really cut - thx GrampaWildWilly
+* Add .avi/XSUB reading to "seconv"
+* Add reading of IEEE float and WAVE_FORMAT_EXTENSIBLE wav files for the waveform
+* Open BDN xml and Final Cut Pro image xmeml from the main window (via OCR)
+* Show translation progress in batch convert - thx emsb8888-prog
+* Name batch auto-translated files after the target language - thx emsb8888-prog
+* Name forced container tracks with a ".forced" token in "seconv"
+* Update Crisp ASR to v0.8.29, and Chatterbox to the versioned V3 models with cross-lingual voice cloning
+* Improve container support after sweeps of MP4Box, ffmpeg, mkvmerge, TSDuck and Bento4 output
+* Improve broadcast format round-trips (PAC, Cavena 890, SCC, Cheetah, MacCaption, EBU-TT-D, Ayato, CapMaker Plus, IMSC 1.1)
+* Improve Apple format support - read Final Cut Pro captions and current fcpxml versions
+* Improve Adobe format support - read the EDLs and XMP markers Premiere/After Effects write, fix Encore round-trips
+* Fix negative time codes being zeroed when selecting a line - thx DexKen
+* Fix reading of Matroska files on a network share still being slower than in beta 13 - thx 1476523
+* Fix Ctrl+V in the subtitle grid not selecting/scrolling to the pasted lines - thx Davanix
+* Fix Ctrl/Cmd+V not overwriting the selected lines in the subtitle grid - thx rosilucia-hub
+* Fix Sub Station Alpha (.ssa) style colors being written as unreadable 32-bit values - thx schabau
+* Fix speech to text clipping the audio sent to the engine - thx AmineI
+* Fix Faster-Whisper XXL/CTranslate2 getting the extracted wav instead of the source file - thx popoche
+* Fix DVB subtitle timing when a cue starts at the video's first frame
+* Fix the DaVinci Resolve csv "Play" flag being read from the wrong column
+* Update Bulgarian translation - thx jekovcar
+* Update French translation - thx Need74
+* Update Polish translation - thx potplayer-fanpack
+* Update Russian translation - thx jekovcar
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta15 (16th of August 2026)
+
+* Add IndexTTS 2.5 as a text to speech engine, with emotion and speaking rate control
+* Add MiLMMT-46 translation models to the llama.cpp translate engine
+* Add HunyuanOCR 1.5 to the llama.cpp OCR model list
+* Add the "llama.cpp advanced" engine to batch convert, with custom prompt and parameters - thx emsb8888-prog
+* Add "Convert colors to dialog", "Snap time codes to frames" and "Add folder..." to batch convert
+* Add a "Play current" button to the AI review window
+* Add a reset-to-default button for the auto-translate prompt
+* Add an engine download/update button to the llama.cpp OCR settings - thx fraternl
+* Ask before the first voice clone in "Text to speech"
+* Open SMPTE-TT files with bitmap captions
+* Show "List shot changes" whenever shot changes exist, and keep edits made in the list
+* Show the errors that could not be fixed in "Fix common errors" - thx radektuma
+* Make "seconv" fail on unknown options, and add --json output everywhere plus --help-json
+* Improve subtitle format detection and reading after a sweep of the VideoLAN/CCExtractor sample files
+* Improve OCR line splitting with an adaptive minimum line height, plus an un-italic retry in nOCR
+* Fix reading of Matroska files on a network share being much slower in beta 14 - thx 1476523
+* Fix whisper.cpp not starting on Linux - thx keremyavuz
+* Fix crash when closing "Text to speech" after reviewing audio - thx cvrle77
+* Fix new lines in ASSA getting the first style in the header instead of the neighbouring one - thx Khaztaroth
+* Fix changing format to Advanced Sub Station Alpha ignoring the default styles storage category - thx windias
+* Fix column paste going to the wrong row when the rows were selected top-to-bottom - thx rosilucia-hub
+* Fix "Remove text for hearing impaired" removing dialog dashes in 3-line subtitles - thx ubeccp6a
+* Fix "Remove text for hearing impaired" with a speaker name on a line of its own - thx ubeccp6a
+* Fix speech to text with Qwen3 ASR failing with a JSON error on comma-decimal locales - thx zielinou
+* Fix switching audio track generating a waveform even with auto-generate off - thx Davanix
+* Fix italic OCR losing word spacing and reading "l" as "i" with binary image compare - thx Miggu82
+* Fix OCR replace lists dropping all but the first "if spelled correctly" section - thx Miggu82
+* Fix six small regressions found in the previous day's changes
+* Update Korean translation - thx 12si27
+* Update Polish translation - thx potplayer-fanpack
+* Update Portuguese (Brazil) translation - thx igorruckert
+* Minor performance improvements in seconv and auto-break
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta14 (15th of August 2026)
+
+* Add back .webm output for "burn-in subtitle", add .ts, and offer only containers the codec can use
+* Let "Visual sync" find or open a video when only a subtitle is open
+* Show install status dots for llama.cpp in the OCR window engine and model lists
+* Fix OCR with llama.cpp returning nothing but blank lines - thx fraternl
+* Fix "AI review" pairing corrections with the wrong lines - thx coreyjv
+* Fix undo stepping back through a waveform drag instead of to before it - thx thelabcat
+* Fix overlapping lines from speech to text with Crisp ASR and Parakeet - thx perkesfurmah-collab
+* Fix the subtitle grid jumping away from the line being edited when a row changes height - thx radektuma
+* Fix column shortcuts not working while the text box has focus - thx SiaL8er
+* Fix speech to text failing to extract audio with "-map 0:1 matches no streams" - thx slothsh
+* Fix "Fix short display time" listing fixes that change nothing - thx Pemicope
+* Fix Google Translate V1 inserting blank lines in multi-line texts - thx radektuma
+* Fix "Keep partial transcription?" discarding the transcribed lines anyway
+* Fix cancelling speech to text not stopping the rest of a batch
+* Fix engine and ffmpeg processes left running after closing the speech to text window
+* Improve reading of Matroska files on a network share further, now walking clusters in parallel - thx 1476523
+* Update German translation - thx Need74
+* Update Japanese translation - thx hisui3393
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta13 (14th of August 2026)
+
+* Add an "Edit original" mode, and make the original reference rows editable in place - thx bichitoxxx
+* Add back the SE4 option to remove blank lines when opening a subtitle - thx Morv55555
+* Add Ctrl+Shift+End/Home and friends for extending the selection in the subtitle grid
+* Make WebVTT cue settings configurable again - thx apartmandairesi
+* Make the default waveform paragraph backgrounds more visible
+* Give the subtitle grid an index-mapped scroll bar so the thumb no longer jitters - thx St0rmXtr00per
+* Update the speech-to-text advanced parameter help to match the engine versions being downloaded
+* Fix waveform dragging not following the pointer through mid-drag scrolls - thx bichitoxxx
+* Fix "Remove text for hearing impaired" reporting pasted multi-line text as changed - thx Davanix
+* Fix slow reading of Matroska files on a network share - thx 1476523
+* Update Japanese translation - thx hisui3393
+* Update Polish translation - thx potplayer-fanpack
+* Minor performance improvements in waveform scrubbing, video loading, OCR and text handling - thx ivandrofly
+
+-----------------------------------------------------------------------------------------------------
+
+v5.2.0-beta12 (13th of August 2026)
+
+* Add CrispEmbed as an engine for "OCR burned-in subtitle", with its own settings dialog - thx tal-maker
+* Add Chatterbox Base in F16 and Q4_K alongside Q8_0 - thx subof
+* Add select all/none/invert to the "Multiple replace" preview list - thx Davanix
+* Show what each engine is in the "OCR burned-in subtitle" engine list
+* Remember the numbers and formats seven more tool dialogs ask for
+* Use the usual tick-all shortcuts in the "Multiple replace" rule category picker
+* Make the AI review window a little wider
+* Keep Google Lens OCR going when a single image fails instead of stopping the run - thx fartle
+* Fix crash when closing "Text to speech" after reviewing audio - thx cvrle77
+* Fix undocked video player being in front of the main window at startup - thx GrampaWildWilly
+* Fix "Multiple replace" freezing on a slow regular expression rule
+* Fix batch convert failing every file when one replace rule does not compile
+* Fix the same original line being shown on two rows when opening a non-matching original
+* Fix transparent subtitles ignoring the output folder picked in its own settings dialog
+* Fix Perplexity API key, model and URL being forgotten on restart
+* Fix "Apply minimum gap" mixing up frames and milliseconds
+* Fix "Export plain text" saving its settings when cancelled
+* Fix "OCR burned-in subtitle" repeating a line, and saving engine settings while browsing the lists
+* Fix "OCR burned-in subtitle" running to the end without reporting a broken CrispEmbed/llama.cpp server
+* Fix batch convert dialogs showing the main window's file name in the title bar
+* Fix hardcoded English in the transparent video, burn-in and batch convert output folder pickers
+* Fix Chatterbox retrying an impossible reference voice repair once per line
+* Fix timers and preview images left running after closing several dialogs
+* Update Japanese translation - thx hisui3393
+* Update Korean translation - thx 12si27
+* Update Chinese (Traditional) translation - thx love80312
+* Update French translation - thx Need74
+* Minor performance improvements in string handling
 
 -----------------------------------------------------------------------------------------------------
 

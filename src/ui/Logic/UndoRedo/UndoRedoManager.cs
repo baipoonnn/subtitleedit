@@ -20,6 +20,9 @@ public sealed class UndoRedoManager : IUndoRedoManager
     // under _lock for ordering vs other field mutations.
     private volatile IUndoRedoClient? _undoRedoClient;
     private volatile bool _isChangeDetectionActive;
+    // Set by SuspendChangeDetection: ticks do nothing while it is set, whatever
+    // Start/StopChangeDetection calls happen in between.
+    private volatile bool _isChangeDetectionSuspended;
     // Int (instead of `volatile bool`) so Dispose() can use Interlocked.Exchange
     // to atomically check-and-set — concurrent Dispose() calls can't both pass
     // the gate and double-dispose the timer. Reads outside the lock use
@@ -149,6 +152,16 @@ public sealed class UndoRedoManager : IUndoRedoManager
         }
     }
 
+    public void SuspendChangeDetection()
+    {
+        _isChangeDetectionSuspended = true;
+    }
+
+    public void ResumeChangeDetection()
+    {
+        _isChangeDetectionSuspended = false;
+    }
+
     // -------------------------------------------------------------------------
     // Core Do / Undo / Redo
     // -------------------------------------------------------------------------
@@ -257,7 +270,7 @@ public sealed class UndoRedoManager : IUndoRedoManager
         // even if SetupChangeDetection races with us. `_undoRedoClient` is
         // volatile so this read isn't torn.
         var client = _undoRedoClient;
-        if (client is null || !_isChangeDetectionActive || Volatile.Read(ref _disposed) != 0)
+        if (client is null || !_isChangeDetectionActive || _isChangeDetectionSuspended || Volatile.Read(ref _disposed) != 0)
         {
             return;
         }
@@ -282,17 +295,30 @@ public sealed class UndoRedoManager : IUndoRedoManager
             var currentHash = client.GetFastHash();
 
             bool alreadyTracked;
+            UndoRedoItem? lastRecorded;
             lock (_lock)
             {
                 alreadyTracked = IsAlreadyTracked(currentHash);
+                lastRecorded = _undoList.LastOrDefault();
             }
             if (alreadyTracked)
             {
                 return;
             }
 
+            client.OnChangeDetected(lastRecorded);
+
             var snapshot = client.MakeUndoRedoObject("Changes detected");
             if (snapshot is null)
+            {
+                return;
+            }
+
+            // Re-check: the user may have started a continuous edit while this tick was hashing
+            // and snapshotting (both marshal to the UI thread). Without this, a tick that slipped
+            // through the gate above right as a waveform drag began recorded a state from a few
+            // frames into the drag - an undo step landing in the middle of the drag (#13636).
+            if (client.IsUserEditing())
             {
                 return;
             }
@@ -386,6 +412,7 @@ public sealed class UndoRedoManager : IUndoRedoManager
                 o.Extra != n.Extra ||
                 o.Actor != n.Actor ||
                 o.Layer != n.Layer ||
+                o.MarginV != n.MarginV ||
                 o.Number != n.Number;
 
             if (!textChanged && !timingChanged && !bookmarkChanged && !metadataChanged)

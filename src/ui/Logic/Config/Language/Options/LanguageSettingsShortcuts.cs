@@ -14,6 +14,28 @@ public class LanguageSettingsShortcuts
     public string CategoryVideo { get; set; }
     public string CategorySync { get; set; }
     public string CategoryAi { get; set; }
+    public string CategoryCustom { get; set; }
+    public string EditCustomShortcut { get; set; }
+    public string CustomShortcutTextBoxKeyHint { get; set; }
+    public string CustomShortcutNumberX { get; set; }
+    public string CustomShortcutNumberXY { get; set; }
+    public string CustomShortcutStep { get; set; }
+    public string CustomShortcutSteps { get; set; }
+    public string CustomShortcutStepRunCommand { get; set; }
+    public string CustomShortcutStepInsertText { get; set; }
+    public string CustomShortcutStepReplace { get; set; }
+    public string CustomShortcutInsertAtCursor { get; set; }
+    public string CustomShortcutInsertAtStart { get; set; }
+    public string CustomShortcutInsertAtEnd { get; set; }
+    public string CustomShortcutSummaryRunCommandX { get; set; }
+    public string CustomShortcutSummaryInsertXY { get; set; }
+    public string CustomShortcutSummaryReplaceXY { get; set; }
+    public string CustomShortcutSummaryReplaceRegexXY { get; set; }
+    public string CustomShortcutPickCommand { get; set; }
+    public string CustomShortcutEnterText { get; set; }
+    public string CustomShortcutEnterFind { get; set; }
+    public string CustomShortcutInvalidRegexX { get; set; }
+    public string CustomShortcutStepsHint { get; set; }
     public string ActiveIn { get; set; }
     public string ActiveInEverywhere { get; set; }
 
@@ -22,16 +44,21 @@ public class LanguageSettingsShortcuts
     public string GeneralUnbreakNoSpaceCjk { get; set; }
     public string GeneralMergeSelectedLinesBilingual { get; set; }
     public string GeneralToggleTranslationMode { get; set; }
+    public string GeneralToggleTranslationAndOriginalInPreviews { get; set; }
     public string GeneralChooseLayout { get; set; }
     public string GeneralGoToNextSubtitle { get; set; }
+    public string GeneralGoToNextSubtitlePlayTranslate { get; set; }
     public string GeneralGoToNextSubtitleCursorAtEnd { get; set; }
     public string GeneralGoToPrevSubtitle { get; set; }
+    public string GeneralGoToPrevSubtitlePlayTranslate { get; set; }
     public string GeneralGoToFirstLine { get; set; }
     public string GeneralGoToLastLine { get; set; }
     public string AlsoSetVideoPosition { get; set; }
     public string GeneralGoToVideoPosition { get; set; }
     public string GeneralToggleItalic { get; set; }
     public string GeneralToggleBold { get; set; }
+    public string GeneralToggleUnderline { get; set; }
+    public string GeneralToggleBox { get; set; }
 
     public string FileOpen { get; set; }
     public string FileOpenKeepVideo { get; set; }
@@ -50,6 +77,7 @@ public class LanguageSettingsShortcuts
 
     public string ListInverseSelection { get; set; }
     public string ListDeleteSelection { get; set; }
+    public string DeleteSelectionEverywhere { get; set; }
     public string RippleDeleteSelection { get; set; }
 
     public string Assigned { get; set; }
@@ -70,11 +98,17 @@ public class LanguageSettingsShortcuts
     public string ResetShortcutsDetail { get; set; }
     public string TogglePlayPause { get; set; }
     public string ToggleLockTimeCodes { get; set; }
+    public string ToggleScreenPrivacy { get; set; }
+    public string ScreenPrivacyFileNamesHidden { get; set; }
+    public string ScreenPrivacyFileNamesAndTextsHidden { get; set; }
+    public string ScreenPrivacyOff { get; set; }
     public string DuplicateSelectedLines { get; set; }
     public string SourceView { get; set; }
     public string AddOrEditBookmark { get; set; }
     public string ToggleBookmark { get; set; }
+    public string ToggleForcedSelectedLines { get; set; } = string.Empty;
     public string GoToNextBookmark { get; set; }
+    public string ClearBookmarks { get; set; }
     public string GoToNextEmptyLine { get; set; }
     public string ToggleWaveformToolbar { get; set; }
     public string ToggleSubtitleGridFormatting { get; set; }
@@ -86,6 +120,9 @@ public class LanguageSettingsShortcuts
     public string MoveFirstWordFromNextLineUpCurrentSubtitle { get; set; }
     public string MoveTextFromCursorToNextAndGoToNext { get; set; }
     public string MoveTextFromCursorToNextAndGoToNextAndPlay { get; set; }
+    public string MoveTextFromCursorToNextAndGoToNextAndPlayAndPause { get; set; }
+    public string BreakAtFirstSpaceFromCursor { get; set; }
+    public string BreakAtFirstSpaceFromCursorAndGoToNext { get; set; }
     public string ToggleFocusGridAndWaveform { get; set; }
     public string ToggleFocusTextBoxAndWaveform { get; set; }
     public string ToggleFocusTextBoxAndGrid { get; set; }
@@ -99,7 +136,9 @@ public class LanguageSettingsShortcuts
     public string TextBoxCut { get; set; }
     public string TextBoxCut2 { get; set; }
     public string TextBoxPaste { get; set; }
+    public string TextBoxPaste2 { get; set; }
     public string TextBoxCopy { get; set; }
+    public string TextBoxCopy2 { get; set; }
     public string TextBoxSelectAll { get; set; }
     public string SubtitleGridCut { get; set; }
     public string SubtitleGridCopy { get; set; }
@@ -111,6 +150,7 @@ public class LanguageSettingsShortcuts
     public string ListViewColumnTextUp { get; set; }
     public string ListViewColumnTextDown { get; set; }
     public string AutoTranslateSelectedLines { get; set; }
+    public string AutoTranslateSelectedLinesNoPrompt { get; set; }
     public string SetAssaResolution { get; set; }
     public string SetShortcutForX { get; set; }
     public string CommandFileNewKeepVideo { get; set; }
@@ -160,8 +200,12 @@ public class LanguageSettingsShortcuts
     public string ChooseRuleProfile { get; set; }
     public string VideoFullScreen { get; set; }
     public string CopyTextFromOriginalSelectedLines { get; set; }
+    public string CopyTextToOriginalSelectedLines { get; set; }
     public string TextBoxRemoveAllFormatting { get; set; }
     public string TextBoxItalic { get; set; }
+    public string TextBoxBold { get; set; }
+    public string TextBoxUnderline { get; set; }
+    public string TextBoxBox { get; set; }
     public string ResetWaveformZoomAndSpeed { get; set; }
     public string TogglePlaybackSpeed { get; set; }
     public string PlaybackSpeedSlower { get; set; }
@@ -171,7 +215,11 @@ public class LanguageSettingsShortcuts
     public string SeekSilence { get; set; }
     public string SeekSilenceBack { get; set; }
     public string SeekSilenceForward { get; set; }
+    public string WaveformGuessStart { get; set; }
+    public string WaveformGuessEnd { get; set; }
+    public string WaveformGuessStartAndEnd { get; set; }
     public string SetVideoPositionCurrentSubtitleStart { get; set; }
+    public string GoToSubtitlePositionAndPause { get; set; }
     public string SetVideoPositionCurrentSubtitleEnd { get; set; }
     public string ToggleAudioTracks { get; set; }
     public string GoToNextError { get;set; }
@@ -182,6 +230,19 @@ public class LanguageSettingsShortcuts
     public string ColorX { get; set; }
     public string SurroundWith { get; set; }
     public string SurroundWithXY { get; set; }
+    public string SurroundWithNumberX { get; set; }
+    public string SurroundWithBehavior { get; set; }
+    public string SurroundWithBehaviorToggle { get; set; }
+    public string SurroundWithBehaviorAdd { get; set; }
+    public string SurroundWithBehaviorRemove { get; set; }
+    public string SurroundWithBehaviorRemoveOnce { get; set; }
+    public string SurroundWithWorksOn { get; set; }
+    public string SurroundWithScopeSelectionOrText { get; set; }
+    public string SurroundWithScopeEachLine { get; set; }
+    public string SearchVia { get; set; }
+    public string SearchViaX { get; set; }
+    public string SearchViaNumberX { get; set; }
+    public string SearchViaUrlHint { get; set; }
     public string MoveVideoPositionMilliseconds { get; set; }
     public string ImportShortcutsTitle { get; set; }
     public string ExportShortcutsTitle { get; set; }
@@ -197,6 +258,7 @@ public class LanguageSettingsShortcuts
     public string ChooseSubtitleFormat { get; set; }
     public string TrimWhitespaceSelectedLines { get; set; }
     public string WaveformInsertNewSelection { get; set; }
+    public string WaveformNewSelectionPasteFromClipboard { get; set; }
     public string WaveformHorizontalZoomInCommand { get; set; }
     public string WaveformHorizontalZoomOutCommand { get; set; }
     public string WaveformVerticalZoomInCommand { get; set; }
@@ -204,6 +266,11 @@ public class LanguageSettingsShortcuts
     public string CopySubtitlePathToClipboard { get; set; }
     public string CopySubtitleOriginalPathToClipboard { get; set; }
     public string FocusTextBox { get; set; }
+    public string FocusSubtitleListView { get; set; }
+    public string FocusWaveform { get; set; }
+    public string FocusOriginalTextBox { get; set; }
+    public string TextBoxGoToStart { get; set; }
+    public string TextBoxGoToEnd { get; set; }
     public string SortByNumber { get; set; }
     public string SortByStartTime { get; set; }
     public string SortByEndTime { get; set; }
@@ -218,6 +285,7 @@ public class LanguageSettingsShortcuts
     public string SortByActor { get; set; }
     public string SortByStyle { get; set; }
     public string VideoToggleBrightness { get; set; }
+    public string VideoToggleContrast { get; set; }
     public string DuplicatesFound { get; set; }
     public string CopyTextToClipboard { get; set; }
     public string CopyTextFromOriginalToClipboard { get; set; }
@@ -240,9 +308,9 @@ public class LanguageSettingsShortcuts
     public string SelectionToSentenceCase { get; set; }
     public string SelectionToggleCasing { get; set; }
     public string GoogleIt { get; set; }
-    public string SetActorXY { get; set; }
+    public string SetActorX { get; set; }
     public string SetNewActor { get; set; }
-    public string SetActorSlotXTitle { get; set; }
+    public string SetStyleX { get; set; }
     public string ToggleDialogDashes { get; set; }
     public string MergeWithLineBeforeAsDialog { get; set; }
     public string MergeWithLineAfterAsDialog { get; set; }
@@ -254,6 +322,22 @@ public class LanguageSettingsShortcuts
     public string MoveStartOneFrameForwardKeepGapPrev { get; set; }
     public string MoveEndOneFrameBackKeepGapNext { get; set; }
     public string MoveEndOneFrameForwardKeepGapNext { get; set; }
+    public string MoveStartXMsBack { get; set; }
+    public string MoveStartXMsForward { get; set; }
+    public string MoveEndXMsBack { get; set; }
+    public string MoveEndXMsForward { get; set; }
+    public string MoveSelectedLinesXMsBack { get; set; }
+    public string MoveSelectedLinesXMsForward { get; set; }
+    public string MoveSelectedLinesAndForwardXMsBack { get; set; }
+    public string MoveSelectedLinesAndForwardXMsForward { get; set; }
+    public string MoveAllLinesXMsBack { get; set; }
+    public string MoveAllLinesXMsForward { get; set; }
+    public string MoveSelectedLinesCustomMsBack { get; set; }
+    public string MoveSelectedLinesCustomMsForward { get; set; }
+    public string MoveSelectedLinesAndForwardCustomMsBack { get; set; }
+    public string MoveSelectedLinesAndForwardCustomMsForward { get; set; }
+    public string MoveAllLinesCustomMsBack { get; set; }
+    public string MoveAllLinesCustomMsForward { get; set; }
 
     public LanguageSettingsShortcuts()
     {
@@ -266,6 +350,28 @@ public class LanguageSettingsShortcuts
         CategoryVideo = "Video";
         CategorySync = "Synchronization";
         CategoryAi = "AI";
+        CategoryCustom = "Custom";
+        EditCustomShortcut = "Edit custom shortcut";
+        CustomShortcutTextBoxKeyHint = "Use a key with Ctrl/Alt here - a plain key would no longer type in the text box.";
+        CustomShortcutNumberX = "Custom shortcut #{0}";
+        CustomShortcutNumberXY = "Custom shortcut #{0}: {1}";
+        CustomShortcutStep = "Step";
+        CustomShortcutSteps = "Steps";
+        CustomShortcutStepRunCommand = "Run command";
+        CustomShortcutStepInsertText = "Insert text";
+        CustomShortcutStepReplace = "Find and replace";
+        CustomShortcutInsertAtCursor = "At cursor";
+        CustomShortcutInsertAtStart = "At start of text";
+        CustomShortcutInsertAtEnd = "At end of text";
+        CustomShortcutSummaryRunCommandX = "Run: {0}";
+        CustomShortcutSummaryInsertXY = "Insert \"{0}\" ({1})";
+        CustomShortcutSummaryReplaceXY = "Replace \"{0}\" with \"{1}\"";
+        CustomShortcutSummaryReplaceRegexXY = "Replace regex \"{0}\" with \"{1}\"";
+        CustomShortcutPickCommand = "Please select a command to run.";
+        CustomShortcutEnterText = "Please enter the text to insert.";
+        CustomShortcutEnterFind = "Please enter the text to find.";
+        CustomShortcutInvalidRegexX = "Invalid regular expression: {0}";
+        CustomShortcutStepsHint = "Steps run from top to bottom. Text steps work on the selected lines; commands that open a window continue after it closes.";
         ActiveIn = "Active in";
         ActiveInEverywhere = "Everywhere";
 
@@ -274,16 +380,21 @@ public class LanguageSettingsShortcuts
         GeneralUnbreakNoSpaceCjk = "Unbreak without space (CJK)";
         GeneralMergeSelectedLinesBilingual = "Merge selected lines bilingual";
         GeneralToggleTranslationMode = "Toggle translation mode";
+        GeneralToggleTranslationAndOriginalInPreviews = "Toggle translation and original in video/audio preview";
         GeneralChooseLayout = "Choose layout";
         GeneralGoToNextSubtitle = "Go to next subtitle";
+        GeneralGoToNextSubtitlePlayTranslate = "Go to next subtitle (play translate)";
         GeneralGoToNextSubtitleCursorAtEnd = "Go to next subtitle and set cursor at end";
         GeneralGoToPrevSubtitle = "Go to previous subtitle";
+        GeneralGoToPrevSubtitlePlayTranslate = "Go to previous subtitle (play translate)";
         GeneralGoToFirstLine = "Go to first line";
         GeneralGoToLastLine = "Go to last line";
         AlsoSetVideoPosition = "Also set video position";
         GeneralGoToVideoPosition = "Go to video position";
         GeneralToggleItalic = "Toggle italic";
         GeneralToggleBold = "Toggle bold";
+        GeneralToggleUnderline = "Toggle underline";
+        GeneralToggleBox = "Toggle box (EBU STL)";
 
         FileOpen = "Open";
         FileOpenKeepVideo = "Open (keep video)";
@@ -295,13 +406,14 @@ public class LanguageSettingsShortcuts
         FileExportEbuStl = "Export EBU STL";
         FileExportPac = "Export PAC";
         FileExit = "Exit";
-        OpenSeDataFolder = "Open Subtitle Edit folder";
+        OpenSeDataFolder = "Open Subtitle Edit data folder";
 
         EditFindPrevious = "Find previous";
         FillSelectedLinesWithClipboard = "Fill selected lines with clipboard text";
 
         ListInverseSelection = "Inverse selection";
         ListDeleteSelection = "Delete selection";
+        DeleteSelectionEverywhere = "Delete selection (everywhere)";
         RippleDeleteSelection = "Ripple delete selection";
 
         TogglePlayPause = "Toggle play/pause";
@@ -327,14 +439,20 @@ public class LanguageSettingsShortcuts
         ResetShortcuts = "Reset shortcuts";
         ResetShortcutsDetail = "Do you want to reset all shortcuts to default values?";
         ToggleLockTimeCodes = "Toggle lock time codes";
+        ToggleScreenPrivacy = "Toggle screen privacy (hide file names, then also texts)";
+        ScreenPrivacyFileNamesHidden = "Screen privacy: file names hidden";
+        ScreenPrivacyFileNamesAndTextsHidden = "Screen privacy: file names and texts hidden";
+        ScreenPrivacyOff = "Screen privacy: off";
         DuplicateSelectedLines = "Duplicate selected lines";
         SourceView = "Source view";
         AddOrEditBookmark = "Add or edit bookmark";
         ToggleBookmark = "Toggle bookmark (selected lines, no text)";
+        ToggleForcedSelectedLines = "Toggle forced (selected lines)";
         GoToNextBookmark = "Go to next bookmark";
+        ClearBookmarks = "Clear bookmarks";
         GoToNextEmptyLine = "Go to next empty line";
         ToggleWaveformToolbar = "Toggle waveform toolbar";
-        ToggleSubtitleGridFormatting = "Toggle grid formatting (show formatting/show tags/no formatting)";
+        ToggleSubtitleGridFormatting = "Toggle grid formatting (show formatting/show tags/no formatting/hide tags)";
         WaveformSetStartAndSetEndOfPreviousMinusGap = "Set start and set end of previous minus gap";
         WaveformSetEndAndStartOfNextAfterGap = "Set end and start of next plus gap";
         WaveformSetEndAndStartOfNextAfterGapAndGoToNext = "Set end and start of next plus gap and go to next";
@@ -343,6 +461,9 @@ public class LanguageSettingsShortcuts
         MoveFirstWordFromNextLineUpCurrentSubtitle = "Move first word from next line up (current subtitle)";
         MoveTextFromCursorToNextAndGoToNext = "Move text after cursor position to next subtitle and go to next";
         MoveTextFromCursorToNextAndGoToNextAndPlay = "Move text after cursor position to next subtitle, go to next and play";
+        MoveTextFromCursorToNextAndGoToNextAndPlayAndPause = "Move text after cursor position to next subtitle, go to next, play it and pause at its end";
+        BreakAtFirstSpaceFromCursor = "Break at first space from cursor position";
+        BreakAtFirstSpaceFromCursorAndGoToNext = "Break at first space from cursor position and go to next";
         ToggleFocusGridAndWaveform = "Toggle focus between subtitle grid and waveform/spectrogram";
         ToggleFocusTextBoxAndWaveform = "Toggle focus between text box and waveform/spectrogram";
         ToggleFocusTextBoxAndGrid = "Toggle focus between text box and subtitle grid";
@@ -356,7 +477,9 @@ public class LanguageSettingsShortcuts
         TextBoxCut = "Text box: Cut";
         TextBoxCut2 = "Text box: Cut (alternative)";
         TextBoxPaste = "Text box: Paste";
+        TextBoxPaste2 = "Text box: Paste (alternative)";
         TextBoxCopy = "Text box: Copy";
+        TextBoxCopy2 = "Text box: Copy (alternative)";
         TextBoxSelectAll = "Text box: Select all";
         SubtitleGridCut = "Subtitle grid: Cut";
         SubtitleGridCopy = "Subtitle grid: Copy";
@@ -368,6 +491,7 @@ public class LanguageSettingsShortcuts
         ListViewColumnTextUp = "Column, text up";
         ListViewColumnTextDown = "Column, text down";
         AutoTranslateSelectedLines = "Auto-translate selected lines...";
+        AutoTranslateSelectedLinesNoPrompt = "Auto-translate selected lines (no prompt, use last engine/languages)";
         SetAssaResolution = "Set ASSA resolution (PlayResX/PlayResY)";
         SetShortcutForX = "Set shortcut for \"{0}\"";
         CommandFileNewKeepVideo = "New (keep video)";
@@ -417,8 +541,12 @@ public class LanguageSettingsShortcuts
         ChooseRuleProfile = "Choose rule profile";
         VideoFullScreen = "Video full screen";
         CopyTextFromOriginalSelectedLines = "Copy text from original (selected lines)";
+        CopyTextToOriginalSelectedLines = "Copy text to original (selected lines)";
         TextBoxRemoveAllFormatting = "Text box, remove all formatting";
         TextBoxItalic = "Text box italic";
+        TextBoxBold = "Text box bold";
+        TextBoxUnderline = "Text box underline";
+        TextBoxBox = "Text box box (EBU STL)";
         ResetWaveformZoomAndSpeed = "Reset waveform zoom and playback speed (play rate)";
         TogglePlaybackSpeed = "Toggle playback speed (play rate)";
         PlaybackSpeedSlower = "Playback speed slower (play rate)";
@@ -428,7 +556,11 @@ public class LanguageSettingsShortcuts
         SeekSilence = "Seek silence";
         SeekSilenceBack = "Seek silence back";
         SeekSilenceForward = "Seek silence forward";
+        WaveformGuessStart = "Guess start time from waveform";
+        WaveformGuessEnd = "Guess end time from waveform";
+        WaveformGuessStartAndEnd = "Guess start and end time from waveform";
         SetVideoPositionCurrentSubtitleStart = "Set video position to current line start";
+        GoToSubtitlePositionAndPause = "Go to sub position and pause";
         SetVideoPositionCurrentSubtitleEnd = "Set video position to current line end";
         ToggleAudioTracks = "Toggle audio tracks";
         GoToPreviousError = "GoTo previous error";
@@ -439,6 +571,19 @@ public class LanguageSettingsShortcuts
         ColorX = "Color {0}";
         SurroundWith = "Surround with...";
         SurroundWithXY = "Surround with {0}/{1}";
+        SurroundWithNumberX = "Surround with #{0}";
+        SurroundWithBehavior = "Behavior";
+        SurroundWithBehaviorToggle = "Toggle (add, or remove if present)";
+        SurroundWithBehaviorAdd = "Add (every time)";
+        SurroundWithBehaviorRemove = "Remove (all)";
+        SurroundWithBehaviorRemoveOnce = "Remove (one each time)";
+        SurroundWithWorksOn = "Works on";
+        SurroundWithScopeSelectionOrText = "Selection, else whole text";
+        SurroundWithScopeEachLine = "Each line";
+        SearchVia = "Search via";
+        SearchViaX = "Search via {0}";
+        SearchViaNumberX = "Search via #{0}";
+        SearchViaUrlHint = "The searched text takes the place of {0} in the URL";
         MoveVideoPositionMilliseconds = "Move video position in milliseconds";
         ImportShortcutsTitle = "Import shortcuts";
         ExportShortcutsTitle = "Export shortcuts";
@@ -454,6 +599,7 @@ public class LanguageSettingsShortcuts
         ChooseSubtitleFormat = "Choose subtitle format";
         TrimWhitespaceSelectedLines = "Trim whitespace (selected lines)";
         WaveformInsertNewSelection = "Waveform insert new selection";
+        WaveformNewSelectionPasteFromClipboard = "Waveform paste clipboard text to new selection";
         WaveformHorizontalZoomInCommand = "Waveform horizontal zoom in";
         WaveformHorizontalZoomOutCommand = "Waveform horizontal zoom out";
         WaveformVerticalZoomInCommand = "Waveform vertical zoom in";
@@ -461,6 +607,11 @@ public class LanguageSettingsShortcuts
         CopySubtitlePathToClipboard = "Copy subtitle path to clipboard";
         CopySubtitleOriginalPathToClipboard = "Copy subtitle path of original to clipboard";
         FocusTextBox = "Focus text box";
+        FocusSubtitleListView = "Focus subtitle list view";
+        FocusWaveform = "Focus waveform";
+        FocusOriginalTextBox = "Focus original text box";
+        TextBoxGoToStart = "Text box, go to start";
+        TextBoxGoToEnd = "Text box, go to end";
         SortByNumber = "Sort by number";
         SortByStartTime = "Sort by \"Show\" time";
         SortByEndTime = "Sort by \"Hide\" time";
@@ -475,6 +626,7 @@ public class LanguageSettingsShortcuts
         SortByActor = "Sort by actor";
         SortByStyle = "Sort by style";
         VideoToggleBrightness = "Video: toggle brightness (mpv only)";
+        VideoToggleContrast = "Video: toggle contrast (mpv only)";
         DuplicatesFound = "The following duplicate shortcuts were found:";
         CopyTextToClipboard = "Copy text to clipboard (selected lines)";
         CopyTextFromOriginalToClipboard = "Copy text from original to clipboard (selected lines)";
@@ -497,9 +649,9 @@ public class LanguageSettingsShortcuts
         SelectionToSentenceCase = "Text box: Selection to Sentence case";
         SelectionToggleCasing = "Text box: Toggle casing (UPPER -> lower -> Title Case)";
         GoogleIt = "Google it (selected text)";
-        SetActorXY = "Set actor {0}: {1}";
+        SetActorX = "Set actor: {0}";
         SetNewActor = "Set new actor...";
-        SetActorSlotXTitle = "Actor slot {0}";
+        SetStyleX = "Set style: {0}";
         ToggleDialogDashes = "Toggle dialog dashes";
         MergeWithLineBeforeAsDialog = "Merge with line before as dialog";
         MergeWithLineAfterAsDialog = "Merge with line after as dialog";
@@ -511,5 +663,21 @@ public class LanguageSettingsShortcuts
         MoveStartOneFrameForwardKeepGapPrev = "Move start one frame forward (keep gap to previous if close)";
         MoveEndOneFrameBackKeepGapNext = "Move end one frame back (keep gap to next if close)";
         MoveEndOneFrameForwardKeepGapNext = "Move end one frame forward (keep gap to next if close)";
+        MoveStartXMsBack = "Move start X ms back (X set in Settings, also in Visual Sync)";
+        MoveStartXMsForward = "Move start X ms forward (X set in Settings, also in Visual Sync)";
+        MoveEndXMsBack = "Move end X ms back (X set in Settings, also in Visual Sync)";
+        MoveEndXMsForward = "Move end X ms forward (X set in Settings, also in Visual Sync)";
+        MoveSelectedLinesXMsBack = "Move selected lines X ms back (X set in Settings)";
+        MoveSelectedLinesXMsForward = "Move selected lines X ms forward (X set in Settings)";
+        MoveSelectedLinesAndForwardXMsBack = "Move selected lines and all following X ms back (X set in Settings)";
+        MoveSelectedLinesAndForwardXMsForward = "Move selected lines and all following X ms forward (X set in Settings)";
+        MoveAllLinesXMsBack = "Move all lines X ms back (X set in Settings)";
+        MoveAllLinesXMsForward = "Move all lines X ms forward (X set in Settings)";
+        MoveSelectedLinesCustomMsBack = "Move selected lines, custom milliseconds ({0:#,###,##0}) back, {1}";
+        MoveSelectedLinesCustomMsForward = "Move selected lines, custom milliseconds ({0:#,###,##0}) forward, {1}";
+        MoveSelectedLinesAndForwardCustomMsBack = "Move selected lines and all following, custom milliseconds ({0:#,###,##0}) back, {1}";
+        MoveSelectedLinesAndForwardCustomMsForward = "Move selected lines and all following, custom milliseconds ({0:#,###,##0}) forward, {1}";
+        MoveAllLinesCustomMsBack = "Move all lines, custom milliseconds ({0:#,###,##0}) back, {1}";
+        MoveAllLinesCustomMsForward = "Move all lines, custom milliseconds ({0:#,###,##0}) forward, {1}";
     }
 }

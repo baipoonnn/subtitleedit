@@ -67,7 +67,7 @@ public class SyntaxTextView : Control
 
     private readonly SourceSyntaxLineStyler _styler = new();
     private readonly List<SourceSyntaxSpan> _spanScratch = new();
-    private readonly Dictionary<(Color Color, bool Bold), GenericTextRunProperties> _runPropertiesCache = new();
+    private readonly Dictionary<(Color Color, bool Bold, bool DefaultFont), GenericTextRunProperties> _runPropertiesCache = new();
 
     private readonly List<UndoEntry> _undoStack = new();
     private readonly List<UndoEntry> _redoStack = new();
@@ -78,6 +78,11 @@ public class SyntaxTextView : Control
 
     private Typeface _typeface;
     private Typeface _boldTypeface;
+
+    // Line numbers and time codes are drawn in the platform default font whatever the editor's
+    // family is - see SourceSyntaxSpan.DefaultFont.
+    private Typeface _defaultFontTypeface;
+    private Typeface _defaultFontBoldTypeface;
     private GenericTextRunProperties? _defaultRunProperties;
     private double _measuredFontSize;
     private FontFamily? _measuredFontFamily;
@@ -295,6 +300,9 @@ public class SyntaxTextView : Control
             if (e.LineCountDelta == 0)
             {
                 _lineLayouts.Remove(e.StartLine);
+
+                // The line below may be styled by what is above it (ISourceSyntaxPreviousLineHighlighter).
+                _lineLayouts.Remove(e.StartLine + 1);
             }
             else
             {
@@ -419,6 +427,8 @@ public class SyntaxTextView : Control
         _measuredDarkTheme = isDarkTheme;
         _typeface = new Typeface(FontFamily);
         _boldTypeface = new Typeface(FontFamily, FontStyle.Normal, FontWeight.Bold);
+        _defaultFontTypeface = new Typeface(FontFamily.Default);
+        _defaultFontBoldTypeface = new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.Bold);
 
         // The syntax colors are theme dependent, so the cached layouts and run properties have to
         // go with the theme.
@@ -485,7 +495,7 @@ public class SyntaxTextView : Control
             FontSize,
             Foreground ?? Brushes.Black,
             flowDirection: FlowDirection,
-            textStyleOverrides: BuildLineSpans(text));
+            textStyleOverrides: BuildLineSpans(text, line));
 
         _lineLayouts[line] = layout;
         LayoutsCreated++;
@@ -556,18 +566,21 @@ public class SyntaxTextView : Control
             foregroundBrush: Foreground ?? Brushes.Black);
     }
 
-    private GenericTextRunProperties GetRunProperties(Color color, bool bold)
+    private GenericTextRunProperties GetRunProperties(Color color, bool bold, bool defaultFont)
     {
-        if (_runPropertiesCache.TryGetValue((color, bold), out var properties))
+        if (_runPropertiesCache.TryGetValue((color, bold, defaultFont), out var properties))
         {
             return properties;
         }
 
+        var typeface = defaultFont
+            ? (bold ? _defaultFontBoldTypeface : _defaultFontTypeface)
+            : (bold ? _boldTypeface : _typeface);
         properties = new GenericTextRunProperties(
-            bold ? _boldTypeface : _typeface,
+            typeface,
             FontSize,
             foregroundBrush: new ImmutableSolidColorBrush(color));
-        _runPropertiesCache[(color, bold)] = properties;
+        _runPropertiesCache[(color, bold, defaultFont)] = properties;
         return properties;
     }
 
@@ -575,7 +588,7 @@ public class SyntaxTextView : Control
     /// Sorted, non-overlapping style spans covering the line. The gaps between colored tokens have
     /// to be filled with the default style, otherwise a token's color bleeds into the text after it.
     /// </summary>
-    private IReadOnlyList<ValueSpan<TextRunProperties>>? BuildLineSpans(string lineText)
+    private IReadOnlyList<ValueSpan<TextRunProperties>>? BuildLineSpans(string lineText, int line)
     {
         if (_sourceHighlighter == null || lineText.Length == 0)
         {
@@ -583,7 +596,15 @@ public class SyntaxTextView : Control
         }
 
         _styler.Reset(lineText.Length);
-        _sourceHighlighter.HighlightLine(lineText, _styler);
+        if (_sourceHighlighter is ISourceSyntaxPreviousLineHighlighter previousLineHighlighter)
+        {
+            var previousLine = line > 0 ? _document.GetLine(line - 1) : null;
+            previousLineHighlighter.HighlightLine(lineText, previousLine, _styler);
+        }
+        else
+        {
+            _sourceHighlighter.HighlightLine(lineText, _styler);
+        }
         _spanScratch.Clear();
         _styler.Flatten(0, _spanScratch);
 
@@ -603,7 +624,7 @@ public class SyntaxTextView : Control
                 spans.Add(new ValueSpan<TextRunProperties>(position, span.Start - position, defaultProperties));
             }
 
-            spans.Add(new ValueSpan<TextRunProperties>(span.Start, span.Length, GetRunProperties(span.Color, span.Bold)));
+            spans.Add(new ValueSpan<TextRunProperties>(span.Start, span.Length, GetRunProperties(span.Color, span.Bold, span.DefaultFont)));
             position = span.Start + span.Length;
         }
 
@@ -1197,6 +1218,13 @@ public class SyntaxTextView : Control
                 isNavigation = false;
                 Backspace();
                 break;
+            // Shift+Delete is the classic Windows cut gesture. SE adds it to the native TextBox
+            // keymap at startup, but this editor does its own key handling, so mirror it here -
+            // Cut() already no-ops for a read-only view or an empty selection (#13711).
+            case Key.Delete when e.KeyModifiers == KeyModifiers.Shift:
+                isNavigation = false;
+                Cut();
+                break;
             case Key.Delete:
                 isNavigation = false;
                 DeleteForward();
@@ -1431,6 +1459,11 @@ public class SyntaxTextView : Control
             return;
         }
 
+        // The document normalizes every line break to its own NewLine, so pasting "a\nb" into a
+        // CRLF document grew it by 4 while the undo entry and the caret used the raw length 3 -
+        // undo then removed the wrong number of characters. Normalize first so the two agree.
+        insertText = NormalizeLineBreaks(insertText);
+
         var textLength = _document.TextLength;
         offset = Math.Clamp(offset, 0, textLength);
         removeLength = Math.Clamp(removeLength, 0, textLength - offset);
@@ -1457,6 +1490,20 @@ public class SyntaxTextView : Control
 
         SetCaret(offset + (insertText?.Length ?? 0), extendSelection: false);
         BringCaretIntoView();
+    }
+
+    /// <summary>
+    /// Rewrites every line break to the document's own <c>NewLine</c>, so a string's length matches
+    /// the number of characters the document will actually gain when it is inserted.
+    /// </summary>
+    private string NormalizeLineBreaks(string? text)
+    {
+        if (string.IsNullOrEmpty(text) || text.IndexOfAny(['\r', '\n']) < 0)
+        {
+            return text ?? string.Empty;
+        }
+
+        return text.Replace("\r\n", "\n").Replace('\r', '\n').Replace("\n", _document.NewLine);
     }
 
     private void PushUndo(UndoEntry entry)
@@ -1850,13 +1897,12 @@ public class SyntaxTextView : Control
 
     private async Task CopyAsync()
     {
-        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
-        if (clipboard == null || SelectionLength == 0)
+        if (SelectionLength == 0)
         {
             return;
         }
 
-        await clipboard.SetTextAsync(SelectedText);
+        await ClipboardHelper.SetTextAsync(this, SelectedText);
     }
 
     private async Task CutAsync()

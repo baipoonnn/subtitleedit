@@ -5,6 +5,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using CommunityToolkit.Mvvm.Input;
 using Nikse.SubtitleEdit.Features.Main.Layout;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
@@ -69,15 +70,18 @@ public class BurnInLogoWindow : Window
             Maximum = 100,
             Width = 150,
             VerticalAlignment = VerticalAlignment.Center,
-            [!Slider.ValueProperty] = new Binding("BurnInLogo.Alpha"),
+            [!Slider.ValueProperty] = new Binding($"{nameof(vm.BurnInLogo)}.{nameof(vm.BurnInLogo.Alpha)}"),
         };
         sliderAlpha.ValueChanged += (_, _) => vm.UpdateOverlayOpacity();
 
-        var labelAlphaValue = UiUtil.MakeLabel();
-        labelAlphaValue.VerticalAlignment = VerticalAlignment.Center;
-        labelAlphaValue.Margin = new Thickness(5, 0, 0, 0);
-        labelAlphaValue.MinWidth = 35;
-        labelAlphaValue[!TextBlock.TextProperty] = new Binding("BurnInLogo.Alpha") { StringFormat = "{0}%" };
+        // TextBlock, not UiUtil.MakeLabel: a Label is a ContentControl, so a TextBlock.Text binding on it never shows
+        var labelAlphaValue = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(5, 0, 0, 0),
+            MinWidth = 35,
+            [!TextBlock.TextProperty] = new Binding($"{nameof(vm.BurnInLogo)}.{nameof(vm.BurnInLogo.Alpha)}") { StringFormat = "{0}%" },
+        };
 
         // Logo size slider
         var labelSize = UiUtil.MakeLabel(Se.Language.General.Size);
@@ -90,15 +94,18 @@ public class BurnInLogoWindow : Window
             Maximum = 200,
             Width = 150,
             VerticalAlignment = VerticalAlignment.Center,
-            [!Slider.ValueProperty] = new Binding("BurnInLogo.Size"),
+            [!Slider.ValueProperty] = new Binding($"{nameof(vm.BurnInLogo)}.{nameof(vm.BurnInLogo.Size)}"),
         };
         sliderSize.ValueChanged += (_, _) => vm.UpdateLogoSize();
 
-        var labelSizeValue = UiUtil.MakeLabel();
-        labelSizeValue.VerticalAlignment = VerticalAlignment.Center;
-        labelSizeValue.Margin = new Thickness(5, 0, 0, 0);
-        labelSizeValue.MinWidth = 35;
-        labelSizeValue[!TextBlock.TextProperty] = new Binding("BurnInLogo.Size") { StringFormat = "{0}%" };
+        // TextBlock, not UiUtil.MakeLabel: a Label is a ContentControl, so a TextBlock.Text binding on it never shows
+        var labelSizeValue = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(5, 0, 0, 0),
+            MinWidth = 35,
+            [!TextBlock.TextProperty] = new Binding($"{nameof(vm.BurnInLogo)}.{nameof(vm.BurnInLogo.Size)}") { StringFormat = "{0}%" },
+        };
 
         topPanel.Children.Add(buttonPickLogo);
         topPanel.Children.Add(labelLogoPosition);
@@ -120,6 +127,9 @@ public class BurnInLogoWindow : Window
         var videoPlayerControl = InitVideoPlayer.MakeVideoPlayerPreferNonNative();
         videoPlayerControl.HorizontalAlignment = HorizontalAlignment.Stretch;
         videoPlayerControl.VerticalAlignment = VerticalAlignment.Stretch;
+        // The player's fullscreen button had no command, so it did nothing. A real fullscreen
+        // player would lose the draggable logo overlay - maximizing this window keeps it.
+        videoPlayerControl.FullScreenCommand = new RelayCommand(ToggleMaximized);
         vm.VideoPlayerControl = videoPlayerControl;
         videoGrid.Children.Add(videoPlayerControl);
 
@@ -234,7 +244,12 @@ public class BurnInLogoWindow : Window
 
         Content = grid;
 
-        Activated += delegate { sliderAlpha.Focus(); }; // initial focus on an input, not an action button - a focused button clicks on bare Space
+        UiUtil.FocusOnFirstActivation(this, sliderAlpha); // initial focus on an input, not an action button - a focused button clicks on bare Space
+    }
+
+    private void ToggleMaximized()
+    {
+        WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
     }
 
     protected override void OnLoaded(RoutedEventArgs e)
@@ -246,7 +261,7 @@ public class BurnInLogoWindow : Window
     protected override void OnClosing(WindowClosingEventArgs e)
     {
         base.OnClosing(e);
-        _vm.VideoPlayerControl?.Close();
+        _vm.VideoPlayerControl?.CloseAndDisposePlayer();
     }
 
     protected override void OnKeyDown(KeyEventArgs e)

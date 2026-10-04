@@ -1,4 +1,5 @@
 ﻿using Nikse.SubtitleEdit.Core.BluRaySup;
+using Nikse.SubtitleEdit.Logic;
 using SkiaSharp;
 using System;
 using System.Collections.Generic;
@@ -17,6 +18,41 @@ public class OcrSubtitleBluRay : IOcrSubtitle
         Count = pcsDataList.Count;
     }
 
+    private double? _frameRate;
+
+    /// <summary>
+    /// The frame rate the cues are timed at: the one the first PCS declares when the start times
+    /// are on its frame grid, else the standard rate they fit (the declared byte is often wrong,
+    /// e.g. 25 over 23.976 timing). 0 when no rate fits.
+    /// </summary>
+    public double FrameRate
+    {
+        get
+        {
+            if (_frameRate == null)
+            {
+                var startTimes = new List<long>(_pcsDataList.Count);
+                foreach (var pcsData in _pcsDataList)
+                {
+                    startTimes.Add(pcsData.StartTime);
+                }
+
+                _frameRate = _pcsDataList.Count > 0
+                    ? BluRaySupFrameRateDetector.Detect(startTimes, _pcsDataList[0].FramesPerSecondType)
+                    : 0;
+            }
+
+            return _frameRate.Value;
+        }
+    }
+
+    /// <summary>
+    /// The frame rate the first PCS declares, 0 when there is none or the code is unknown.
+    /// </summary>
+    public double DeclaredFrameRate => _pcsDataList.Count > 0
+        ? BluRaySupPicture.GetFrameRate(_pcsDataList[0].FramesPerSecondType)
+        : 0;
+
     public SKBitmap GetBitmap(int index)
     {
         if (index < 0 || index >= _pcsDataList.Count)
@@ -29,12 +65,13 @@ public class OcrSubtitleBluRay : IOcrSubtitle
 
     public TimeSpan GetStartTime(int index)
     {
-        return TimeSpan.FromMilliseconds(_pcsDataList[index].StartTime / 90.0);
+        // 90 kHz PTS is a fractional millisecond; round to the whole ms subtitle formats store (#14056).
+        return TimeSpanExtensions.FromMillisecondsWholeMilliseconds(_pcsDataList[index].StartTime / 90.0);
     }
 
     public TimeSpan GetEndTime(int index)
     {
-        return TimeSpan.FromMilliseconds(_pcsDataList[index].EndTime / 90.0);
+        return TimeSpanExtensions.FromMillisecondsWholeMilliseconds(_pcsDataList[index].EndTime / 90.0);
     }
 
     public List<OcrSubtitleItem> MakeOcrSubtitleItems()

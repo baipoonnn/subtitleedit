@@ -7,6 +7,7 @@ using Nikse.SubtitleEdit.Features.Shared;
 using Nikse.SubtitleEdit.Features.Shared.PromptTextBox;
 using Nikse.SubtitleEdit.Features.Video.SpeechToText;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.Engines;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.VoiceCloneConsent;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
 using Nikse.SubtitleEdit.Logic.Media;
@@ -58,6 +59,14 @@ public partial class VoiceSettingsViewModel : ObservableObject
             return;
         }
 
+        // Ask before the file picker rather than after, so a user who declines is not first made
+        // to hunt for a recording. The drag-drop path has no such "before", which is why
+        // ImportVoiceFromFileAsync checks again - both funnel through there.
+        if (!await EnsureVoiceCloningConsentAsync())
+        {
+            return;
+        }
+
         string fileName;
         if (_engine is Piper)
         {
@@ -80,6 +89,13 @@ public partial class VoiceSettingsViewModel : ObservableObject
     private async Task ImportVoiceFromFileAsync(string fileName)
     {
         if (Window == null || _engine == null)
+        {
+            return;
+        }
+
+        // The choke point every import passes through - the button above and the drop handler
+        // below. Gating only the button would leave drag-drop cloning unasked.
+        if (!await EnsureVoiceCloningConsentAsync())
         {
             return;
         }
@@ -246,6 +262,79 @@ public partial class VoiceSettingsViewModel : ObservableObject
                 ? omniCrispEngine.ImportVoice(fileName, (result.Text ?? string.Empty).Trim())
                 : omniCrispEngine.ImportVoice(fileName);
         }
+        else if (_engine is FishTtsAudioCpp fishEngine)
+        {
+            // Fish Audio S2 Pro REQUIRES the transcript at synth time — audio.cpp answers a
+            // voice_ref without reference_text with a server error. Always prompt (matching
+            // CosyVoice3's flow), with the sibling-text autofill so existing .txt sidecars
+            // don't force a re-type.
+            var transcript = TryReadSiblingTranscript(fileName) ?? string.Empty;
+            var audioFileName = fileName;
+            var result = await _windowService.ShowDialogAsync<PromptTextBoxWindow, PromptTextBoxViewModel>(Window!, vm =>
+            {
+                vm.Initialize(
+                    Se.Language.Video.TextToSpeech.VoiceCloneTranscriptTitle,
+                    transcript,
+                    500,
+                    150);
+                vm.ConfigureExtraButton(
+                    Se.Language.Video.TextToSpeech.UseSpeechToTextDotDotDot,
+                    () => RunSpeechToTextAsync(audioFileName));
+            });
+
+            if (!result.OkPressed || string.IsNullOrWhiteSpace(result.Text))
+            {
+                return;
+            }
+
+            ok = fishEngine.ImportVoice(fileName, result.Text.Trim());
+        }
+        else if (_engine is HiggsTtsAudioCpp higgsEngine)
+        {
+            // Higgs clones zero-shot from audio alone; a transcription (reference_text) is
+            // optional but improves quality, so prompt like VoxCPM2 while allowing an empty
+            // answer.
+            var transcript = TryReadSiblingTranscript(fileName) ?? string.Empty;
+            var audioFileName = fileName;
+            var result = await _windowService.ShowDialogAsync<PromptTextBoxWindow, PromptTextBoxViewModel>(Window!, vm =>
+            {
+                vm.Initialize(
+                    Se.Language.Video.TextToSpeech.VoiceCloneTranscriptTitle,
+                    transcript,
+                    500,
+                    150);
+                vm.ConfigureExtraButton(
+                    Se.Language.Video.TextToSpeech.UseSpeechToTextDotDotDot,
+                    () => RunSpeechToTextAsync(audioFileName));
+            });
+
+            ok = result.OkPressed
+                ? higgsEngine.ImportVoice(fileName, (result.Text ?? string.Empty).Trim())
+                : higgsEngine.ImportVoice(fileName);
+        }
+        else if (_engine is FireRedTts3AudioCpp fireRedEngine)
+        {
+            // FireRedTTS3 clones zero-shot from audio alone; a transcription (reference_text) is
+            // optional but improves quality, so prompt like VoxCPM2 while allowing an empty
+            // answer.
+            var transcript = TryReadSiblingTranscript(fileName) ?? string.Empty;
+            var audioFileName = fileName;
+            var result = await _windowService.ShowDialogAsync<PromptTextBoxWindow, PromptTextBoxViewModel>(Window!, vm =>
+            {
+                vm.Initialize(
+                    Se.Language.Video.TextToSpeech.VoiceCloneTranscriptTitle,
+                    transcript,
+                    500,
+                    150);
+                vm.ConfigureExtraButton(
+                    Se.Language.Video.TextToSpeech.UseSpeechToTextDotDotDot,
+                    () => RunSpeechToTextAsync(audioFileName));
+            });
+
+            ok = result.OkPressed
+                ? fireRedEngine.ImportVoice(fileName, (result.Text ?? string.Empty).Trim())
+                : fireRedEngine.ImportVoice(fileName);
+        }
         else if (_engine is MossTtsCrispAsr mossEngine)
         {
             // MOSS-TTS clones zero-shot from audio alone; a transcription (ref-text) is optional
@@ -302,6 +391,17 @@ public partial class VoiceSettingsViewModel : ObservableObject
         await MessageBox.Show(Window, Se.Language.Video.TextToSpeech.VoiceImportSuccessTitle, string.Format(Se.Language.Video.TextToSpeech.VoiceXImported, importedFileName));
         RefreshVoices = true;
     }
+
+    /// <summary>
+    /// Shows the first-clone consent dialog when it is still owed, and reports whether cloning may
+    /// go ahead. A no-op once accepted, and for Piper, whose import is a trained model rather than
+    /// somebody's voice.
+    /// </summary>
+    private Task<bool> EnsureVoiceCloningConsentAsync() =>
+        VoiceCloneConsentPrompt.EnsureAsync(
+            _engine,
+            Window!,
+            () => _windowService.ShowDialogAsync<VoiceCloneConsentWindow, VoiceCloneConsentViewModel>(Window!, _ => { }));
 
     internal void OnDragOver(object? sender, DragEventArgs e)
     {
@@ -444,23 +544,20 @@ public partial class VoiceSettingsViewModel : ObservableObject
             e.Handled = true;
             Window?.Close();
         }
+        else if (UiUtil.IsHelp(e))
+        {
+            e.Handled = true;
+            UiUtil.ShowHelp("features/text-to-speech", "engine-settings");
+        }
     }
 
     internal void Initialize(ITtsEngine engine)
     {
         _engine = engine;
-        IsImportVoiceVisible = engine.GetType() == typeof(Piper)
-                               || engine.GetType() == typeof(Qwen3TtsCpp)
-                               || engine.GetType() == typeof(Qwen3TtsCrispAsr)
-                               || engine.GetType() == typeof(VibeVoiceCrispAsr)
-                               || engine.GetType() == typeof(IndexTtsCrispAsr)
-                               || engine.GetType() == typeof(CosyVoice3CrispAsr)
-                               || engine.GetType() == typeof(F5TtsCrispAsr)
-                               || engine.GetType() == typeof(VoxCPM2CrispAsr)
-                               || engine.GetType() == typeof(OmniVoiceCrispAsr)
-                               || engine.GetType() == typeof(MossTtsCrispAsr)
-                               || engine.GetType() == typeof(ZonosTtsCrispAsr)
-                               || engine.GetType() == typeof(ChatterboxTtsCpp)
-                               || engine.GetType() == typeof(OmniVoiceTtsCpp);
+
+        // Every cloning engine imports a reference recording; Piper is the one engine that
+        // imports something else (a trained .onnx voice model), so it is named on its own
+        // rather than counted as cloning.
+        IsImportVoiceVisible = engine.SupportsVoiceCloning || engine is Piper;
     }
 }

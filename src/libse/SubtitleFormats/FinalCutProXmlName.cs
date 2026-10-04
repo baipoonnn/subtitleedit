@@ -100,13 +100,22 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             titleNode.Attributes["name"].InnerText = text;
         }
 
+        public override bool IsMine(List<string> lines, string fileName)
+        {
+            // Paragraphs only come from <title> elements: skip parsing any other XML.
+            if (lines != null && (!AnyLineContains(lines, "<title")))
+            {
+                return false;
+            }
+
+            return base.IsMine(lines, fileName);
+        }
+
         public override void LoadSubtitle(Subtitle subtitle, List<string> lines, string fileName)
         {
             _errorCount = 0;
             FrameRate = Configuration.Settings.General.CurrentFrameRate;
-            var sb = new StringBuilder();
-            lines.ForEach(line => sb.AppendLine(line));
-            var x = sb.ToString();
+            var x = JoinLines(lines);
             var xml = new XmlDocument();
             try
             {

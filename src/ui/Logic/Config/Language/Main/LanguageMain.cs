@@ -45,14 +45,19 @@ public class LanguageMain
     public string LineXTimingChanged { get; set; }
     public string LoadingWaveInfoFromCache { get; set; }
     public string ClickToGenerateWaveform { get; set; }
+    public string WaveformFfmpegNotFoundClickToSetUp { get; set; }
     public string NoTextInClipboard { get; set; }
     public string NumberOfLinesEvenlyDistributedX { get; set; }
     public string OneLineCopiedFromOriginal { get; set; }
+    public string OneLineCopiedToOriginal { get; set; }
+    public string OnlineOnlyVideo { get; set; }
+    public string OnlineOnlyVideoXSizeYDownloadAndOpen { get; set; }
     public string OneLineMerged { get; set; }
     public string OneLineSwitched { get; set; }
     public string OverwriteExistingCells { get; set; }
     public string OverwriteOrShiftCellsDown { get; set; }
     public string ParsingMatroskaFile { get; set; }
+    public string ReadingDvdSubtitles { get; set; }
     public string PasteFromClipboardDotDotDot { get; set; }
     public string RedoPerformed { get; set; }
     public string RedoPerformedXActionLeft { get; set; }
@@ -77,7 +82,9 @@ public class LanguageMain
     public string UnbreakHint { get; set; }
     public string UndoPerformed { get; set; }
     public string UndoPerformedXActionLeft { get; set; }
+    public string VideoAndWaveformPreviewTextX { get; set; }
     public string XLinesCopiedFromOriginal { get; set; }
+    public string XLinesCopiedToOriginal { get; set; }
     public string XLinesMerged { get; set; }
     public string XLinesSelectedOfY { get; set; }
     public string XLinesSwitched { get; set; }
@@ -88,9 +95,14 @@ public class LanguageMain
     public string YoutubeDlOutdatedDownloadNow { get; set; }
     public string InsertUnicodeSymbol { get; set; }
     public string TrimmedXLines { get; set; }
+    public string PastedXLinesOverSelectedLines { get; set; }
+    public string PastedXOfYLinesOverSelectedLines { get; set; }
+    public string InsertedXLinesFromClipboard { get; set; }
     public string OpenOriginalDifferentNumberOfSubtitlesXY { get; set; }
     public string OriginalTextReadOnly { get; set; }
+    public string OriginalTextEditMode { get; set; }
     public string OriginalIsReadOnlyNotSaved { get; set; }
+    public string OriginalIsEmptyNotSaved { get; set; }
     public string OriginalIsReadOnlyReference { get; set; }
     public string AllowEditOfOriginalSubtitle { get; set; }
     public string ShowAllOriginalLinesX { get; set; }
@@ -117,6 +129,7 @@ public class LanguageMain
     public string SortedByActor { get; set; }
     public string SortedByStyle { get; set; }
     public string VideoBrightnessSetTo { get; set; }
+    public string VideoContrastSetTo { get; set; }
     public string ColorHint { get; set; }
     public string RemoveFormattingHint { get; set; }
     public string AssaResolutionResamplerDone { get; set; }
@@ -130,10 +143,19 @@ public class LanguageMain
     public string ReplacedXOccurrences { get; set; }
     public string FfmpegDownloadedAndInstalledToX { get; set; }
     public string NothingToSave { get; set; }
+    public string FormatLimitWarningTitle { get; set; }
+    public string FormatLimitWarningXLinesExceedLimitsOfY { get; set; }
+    public string FormatLimitWarningMaxXCharactersPerLine { get; set; }
+    public string FormatLimitWarningMaxXLines { get; set; }
+    public string FormatLimitWarningTextWillBeRewrapped { get; set; }
+    public string FormatLimitWarningLinesX { get; set; }
+    public string FormatLimitWarningSaveAnyway { get; set; }
+    public string FormatLimitWarningDoNotShowAgain { get; set; }
     public string NothingToSaveOriginal { get; set; }
     public string LiveSpellCheckLanguageXLoaded { get; set; }
     public string DownloadFfmpegTitle { get; set; }
     public string DownloadFfmpegQuestion { get; set; }
+    public string FfmpegNotFoundInstallHint { get; set; }
     public string SelectCurrentSubtitleWhilePlayingOn  { get; set; }
     public string SelectCurrentSubtitleWhilePlayingOff  { get; set; }
     public string SetUpLikeSe4Question { get; set; }
@@ -185,14 +207,19 @@ public class LanguageMain
         LineXTimingChanged = "Line {0}: Timing changed";
         LoadingWaveInfoFromCache = "Loading wave info from cache...";
         ClickToGenerateWaveform = "Click to generate waveform";
+        WaveformFfmpegNotFoundClickToSetUp = "FFmpeg not found - click the waveform to set up FFmpeg and generate the waveform";
         NoTextInClipboard = "No text in clipboard";
         NumberOfLinesEvenlyDistributedX = "Evenly distributed {0} lines";
         OneLineCopiedFromOriginal = "One line copied from original subtitle";
+        OneLineCopiedToOriginal = "One line copied to original subtitle";
+        OnlineOnlyVideo = "Online-only video";
+        OnlineOnlyVideoXSizeYDownloadAndOpen = "The video file \"{0}\" ({1}) is stored online only, for example in Dropbox or iCloud Drive, and has to be downloaded before it can be opened.\n\nDownload and open it now?";
         OneLineMerged = "One line merged";
         OneLineSwitched = "One line switched";
         OverwriteExistingCells = "Overwrite existing cells";
         OverwriteOrShiftCellsDown = "Overwrite/shift cells down";
         ParsingMatroskaFile = "Parsing Matroska file...";
+        ReadingDvdSubtitles = "Reading DVD subtitles...";
         PasteFromClipboardDotDotDot = "Paste from clipboard...";
         RedoPerformed = "Redo performed";
         RedoPerformedXActionLeft = "Redo performed (actions left: {0})";
@@ -217,7 +244,9 @@ public class LanguageMain
         UnbreakHint = "Unbreak selected lines";
         UndoPerformed = "Undo performed";
         UndoPerformedXActionLeft = "Undo performed (actions left: {0})";
+        VideoAndWaveformPreviewTextX = "Video/waveform preview: {0}";
         XLinesCopiedFromOriginal = "{0} lines copied from original subtitle";
+        XLinesCopiedToOriginal = "{0} lines copied to original subtitle";
         XLinesMerged = "{0} lines merged";
         XLinesSelectedOfY = "{0} lines selected of {1}";
         XLinesSwitched = "{0} lines switched";
@@ -228,14 +257,19 @@ public class LanguageMain
         YoutubeDlOutdatedDownloadNow = "\"yt-dlp\" is outdated and may not work with online videos.\n\nDownload the current version now?";
         InsertUnicodeSymbol = "Insert Unicode symbol";
         TrimmedXLines = "Trimmed {0} subtitle lines";
+        PastedXLinesOverSelectedLines = "Pasted {0} line(s) over the selected lines";
+        PastedXOfYLinesOverSelectedLines = "Pasted {0} of {1} line(s) over the selected lines - the rest did not fit the selection";
+        InsertedXLinesFromClipboard = "Inserted {0} line(s) from the clipboard";
         OpenOriginalDifferentNumberOfSubtitlesXY = "The original subtitle file does not have the same number of subtitles as the current subtitle file.\n\n• Original subtitles: {0}\n• Current subtitles: {1}";
         OriginalTextReadOnly = "Original text (read-only)";
+        OriginalTextEditMode = "Original text (edit mode)";
         OriginalIsReadOnlyNotSaved = "The original subtitle is a read-only reference and was not saved";
+        OriginalIsEmptyNotSaved = "The original subtitle has no text at all and was not saved";
         OriginalIsReadOnlyReference = "The original subtitle is open as a read-only reference";
         AllowEditOfOriginalSubtitle = "Allow edit of original subtitle";
         ShowAllOriginalLinesX = "Show all original lines ({0} have no match here)";
         ShowAllOriginalLinesHint = "The lines with no match are shown as extra rows, so you can see what the translation is missing.";
-        ShowAllOriginalLinesNote = "Time codes cannot be changed while these rows are shown";
+        ShowAllOriginalLinesNote = "Type in an extra row to add that line to your subtitle";
         ShowMatchingOriginalLinesX = "Show only the {0} matching original lines";
         ShowMatchingOriginalLinesHint = "The other {0} original lines are not shown anywhere.";
         ShowMatchingOriginalLinesNote = "They stay in the file unless you save the original";
@@ -257,6 +291,7 @@ public class LanguageMain
         SortedByActor = "Sorted by actor";
         SortedByStyle = "Sorted by style";
         VideoBrightnessSetTo = "Brightness: {0}";
+        VideoContrastSetTo = "Contrast: {0}";
         ColorHint = "Color selected lines";
         RemoveFormattingHint = "Remove formatting from selected lines";
         AssaResolutionResamplerDone = "ASSA resolution changed.";
@@ -270,10 +305,19 @@ public class LanguageMain
         ReplacedXOccurrences = "Replaced {0} occurrences";
         FfmpegDownloadedAndInstalledToX = "ffmpeg downloaded and installed to {0}";
         NothingToSave = "Nothing to save";
+        FormatLimitWarningTitle = "Format limits exceeded";
+        FormatLimitWarningXLinesExceedLimitsOfY = "{0} subtitle(s) exceed the limits of the \"{1}\" format:";
+        FormatLimitWarningMaxXCharactersPerLine = "Max {0} characters per line";
+        FormatLimitWarningMaxXLines = "Max {0} lines per subtitle";
+        FormatLimitWarningTextWillBeRewrapped = "When saved, these subtitles will be re-wrapped or truncated to fit, so the file will not match what is shown here.";
+        FormatLimitWarningLinesX = "Lines: {0}";
+        FormatLimitWarningSaveAnyway = "Save anyway";
+        FormatLimitWarningDoNotShowAgain = "Do not show this warning again";
         NothingToSaveOriginal = "Nothing to save (original)";
         LiveSpellCheckLanguageXLoaded = "Live spell check language {0} loaded";
         DownloadFfmpegTitle = "Download FFmpeg?";
         DownloadFfmpegQuestion = "FFmpeg is required for playing online videos and for some video editing features.\n\nDownload FFmpeg now?";
+        FfmpegNotFoundInstallHint = "FFmpeg was not found.\n\nPlease install FFmpeg (e.g. via your package manager) so it is available on the PATH, or set the FFmpeg path in Options -> Settings.";
         SelectCurrentSubtitleWhilePlayingOn = "Select current subtitle while playing: ON";
         SelectCurrentSubtitleWhilePlayingOff = "Select current subtitle while playing: OFF";
         SetUpLikeSe4Question = "This will import Subtitle Edit 4 shortcuts and replace rules and apply the Subtitle Edit 4 theme, toolbar and waveform look.\n\nContinue?";

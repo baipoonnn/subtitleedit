@@ -25,13 +25,28 @@ using Nikse.SubtitleEdit.UiLogic.SpellCheck;
 
 namespace Nikse.SubtitleEdit
 {
-    internal class Program
+    internal partial class Program
     {
         private const string AppName = "Subtitle Edit";
 
         public static string? PendingFileToOpen { get; set; }
         public static string? PendingVideoToOpen { get; set; }
         public static bool FileOpenedViaActivation { get; set; }
+
+        // Set once the first editor window has made its startup file decision - after the
+        // activation grace delay in MainViewModel.OnLoaded. Until then a macOS File
+        // activation belongs to that window (routed via PendingFileToOpen); afterwards it
+        // means "opened while running" and gets a window of its own. lifetime.MainWindow
+        // cannot serve as this test: it is assigned before Start() pumps the run loop that
+        // delivers activations, so it is already non-null when a cold-launch Finder
+        // double-click's activation arrives - which used to send the file to a second
+        // window while the primary one started up empty.
+        public static bool StartupFileDecisionDone { get; set; }
+
+        // Distinguishes a genuine double-click on the Dock icon from the single-click
+        // activation AppKit sends on every Dock click - see the Reopen handling below.
+        private static long _lastReopenActivationTicks = long.MinValue / 2;
+        private const long DoubleClickIntervalMs = 500;
 
         [STAThread]
         public static void Main(string[] args)
@@ -43,6 +58,17 @@ namespace Nikse.SubtitleEdit
             // Must run before Avalonia initializes its X11 backend (which reads these
             // environment variables both from managed code and through native getenv).
             ApplyLinuxDeadKeyInputFix();
+
+            // Must run before Avalonia creates Skia's font manager, which spins forever on a
+            // font without a family name - no window, no error log (Ubuntu 26.04 user report).
+            FontconfigFamilyGuard.Apply();
+
+            // Child processes inherit the error mode, so a crashing Whisper engine/ffmpeg exits
+            // instead of hanging on a Windows "has stopped working" dialog (stalling batch jobs).
+            if (OperatingSystem.IsWindows())
+            {
+                SetErrorMode(0x0001 | 0x0002); // SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX
+            }
 
             try
             {
@@ -169,6 +195,36 @@ namespace Nikse.SubtitleEdit
                             }
                         });
                 }
+                else if (OperatingSystem.IsWindows())
+                {
+                    // Windows was the only platform left without an explicit fallback chain, so a
+                    // glyph the current font lacks had to be resolved by Skia/DirectWrite alone -
+                    // which does not always answer for a run that also carries a style variant. That
+                    // is how italic Arabic in the subtitle grid ("Show formatting" renders {\i1} as
+                    // a real italic run) came out as empty boxes while the same line was fine in the
+                    // text box, waveform and video (issue #14150). Naming the families explicitly
+                    // makes Avalonia resolve the missing glyph itself, before it ever gets there.
+                    // Segoe UI covers Latin/Greek/Cyrillic/Arabic/Hebrew/Thai; the rest fill in the
+                    // scripts it has no glyphs for. A fallback is only consulted for a character the
+                    // requested font cannot render, so this adds candidates without changing any text
+                    // that already renders.
+                    appBuilder = appBuilder
+                        .With(new FontManagerOptions
+                        {
+                            FontFallbacks = new[]
+                            {
+                                new FontFallback { FontFamily = new FontFamily("Segoe UI") },
+                                new FontFallback { FontFamily = new FontFamily("Tahoma") },
+                                new FontFallback { FontFamily = new FontFamily("Arial") },
+                                new FontFallback { FontFamily = new FontFamily("Nirmala UI") },
+                                new FontFallback { FontFamily = new FontFamily("Microsoft YaHei") },
+                                new FontFallback { FontFamily = new FontFamily("Microsoft JhengHei") },
+                                new FontFallback { FontFamily = new FontFamily("Yu Gothic UI") },
+                                new FontFallback { FontFamily = new FontFamily("Malgun Gothic") },
+                                new FontFallback { FontFamily = new FontFamily("Segoe UI Emoji") },
+                            }
+                        });
+                }
 
                 appBuilder = appBuilder
                     .With(new X11PlatformOptions
@@ -208,6 +264,10 @@ namespace Nikse.SubtitleEdit
                 // Setup main window (Batch Convert standalone if requested via CLI)
                 if (HasBatchConvertUiArg(args))
                 {
+                    // No editor window will run OnLoaded to consume PendingFileToOpen, so
+                    // route any macOS File activation straight to a new editor window.
+                    StartupFileDecisionDone = true;
+
                     SetupBatchConvertOnlyWindow(lifetime);
 
                     // Force-terminate the process once the window closes. Under
@@ -244,8 +304,11 @@ namespace Nikse.SubtitleEdit
             }
         }
 
-        [DllImport("libc", SetLastError = true)]
-        private static extern int setenv(string name, string value, int overwrite);
+        [LibraryImport("libc", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
+        private static partial int setenv(string name, string value, int overwrite);
+
+        [LibraryImport("kernel32.dll")]
+        private static partial uint SetErrorMode(uint mode);
 
         /// <summary>
         /// Makes dead-key accents (á, ê, õ, ...) work on Linux. Avalonia's ibus D-Bus client
@@ -361,15 +424,22 @@ namespace Nikse.SubtitleEdit
             // Cancel any tooltip that tries to open on a control whose top-level
             // Window isn't active. Also covers our own child windows: when a
             // dialog is open the inactive main window stops showing hints.
+            // Exception: with no modal dialog open, another SE window being the
+            // active one (e.g. the undocked waveform has focus while hovering a
+            // main window button) still means SE is foreground, so hints stay (#15046).
             ToolTip.IsOpenProperty.Changed.AddClassHandler<Control>((control, e) =>
             {
                 if (e.NewValue is true
                     && TopLevel.GetTopLevel(control) is Window window
-                    && !window.IsActive)
+                    && !window.IsActive
+                    && (WindowService.IsModalDialogOpen || !lifetime.Windows.Any(w => w.IsActive)))
                 {
                     ToolTip.SetIsOpen(control, false);
                 }
             });
+
+            // Shift+Delete cut in every text box, in every window (#13711).
+            NativeKeymap.AddShiftDeleteCut();
         }
 
         private static void SetupNativeMenu(Application app, ClassicDesktopStyleApplicationLifetime lifetime)
@@ -391,6 +461,28 @@ namespace Nikse.SubtitleEdit
 
                 activatable.Activated += (sender, e) =>
                 {
+                    // Clicking the Dock icon while SE is already running delivers a Reopen
+                    // activation on every click, not just a double-click - AppKit uses the same
+                    // callback for "bring the running app to the front" as it does for "the user
+                    // wants a new window" (e.g. Finder, TextEdit). A single click must keep doing
+                    // the former (the OS already brings existing windows forward on its own); only
+                    // a second click landing within the standard double-click window counts as the
+                    // latter, matching every other platform's "open" gesture (a second Windows
+                    // process, a fresh Linux launch) handing the user a new, empty window.
+                    if (e is ActivatedEventArgs reopenArgs && reopenArgs.Kind == ActivationKind.Reopen)
+                    {
+                        var now = Environment.TickCount64;
+                        var isDoubleClick = now - _lastReopenActivationTicks <= DoubleClickIntervalMs;
+                        _lastReopenActivationTicks = now;
+
+                        if (isDoubleClick && lifetime.MainWindow != null)
+                        {
+                            Dispatcher.UIThread.Post(Nikse.SubtitleEdit.Features.Main.Layout.MainWindowFactory.OpenNewWindow);
+                        }
+
+                        return;
+                    }
+
                     if (e is not FileActivatedEventArgs args || args.Kind != ActivationKind.File)
                     {
                         return;
@@ -402,19 +494,26 @@ namespace Nikse.SubtitleEdit
                         if (System.IO.File.Exists(filePath))
                         {
                             FileOpenedViaActivation = true;
-                            var mainView = lifetime.MainWindow == null
-                                ? null
-                                : UiTheme.GetUnscaledContent(lifetime.MainWindow) as MainView;
-                            if (mainView != null)
+                            if (!StartupFileDecisionDone)
                             {
-                                Dispatcher.UIThread.Post(async () =>
-                                {
-                                    await mainView.OpenFile(filePath);
-                                });
+                                // Still starting up - the primary window's startup file
+                                // decision (MainViewModel.OnLoaded) has not run its
+                                // activation grace delay yet, so it will load this file
+                                // itself instead of leaving its window empty.
+                                PendingFileToOpen = filePath;
                             }
                             else
                             {
-                                PendingFileToOpen = filePath;
+                                // Already running: macOS delivers this when a file is opened
+                                // from Finder while SE is running, or dropped on the Dock
+                                // icon. Open it in a new window instead of hijacking whichever
+                                // window happens to be lifetime.MainWindow - matches Windows,
+                                // where each Finder/Explorer open is a separate process and
+                                // never touches existing windows.
+                                Dispatcher.UIThread.Post(async () =>
+                                {
+                                    await Nikse.SubtitleEdit.Features.Main.Layout.MainWindowFactory.OpenNewWindowWithFile(filePath);
+                                });
                             }
 
                             break;

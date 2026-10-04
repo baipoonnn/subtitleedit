@@ -52,14 +52,22 @@ public class PromptUnknownWordWindow : Window
         var image = new Image
         {
             Stretch = Stretch.Uniform,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
             MaxHeight = 200,
             DataContext = vm,
         };
         image.Bind(Image.SourceProperty, new Binding(nameof(vm.Bitmap)));
 
-        grid.Add(image, 0, 0, 1, 2);
+        // subtitle bitmaps are light or dark text on transparent pixels, so without a backdrop they
+        // vanish into the window - white text on the light theme (#15111)
+        var imageBackdrop = new Border
+        {
+            Background = ImagePreviewBackground.CreateBrush(),
+            Child = image,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        grid.Add(imageBackdrop, 0, 0, 1, 2);
         grid.Add(MakeWholeTextView(vm), 1, 0, 1, 2);
         grid.Add(MakeWordView(vm), 2);
         grid.Add(MakeWordSuggestionsView(vm), 2, 1);
@@ -67,7 +75,7 @@ public class PromptUnknownWordWindow : Window
 
         Content = grid;
 
-        Activated += delegate { vm.TextBoxWord.Focus(); }; // hack to make OnKeyDown work
+        UiUtil.FocusOnFirstActivation(this, vm.TextBoxWord); // hack to make OnKeyDown work
         KeyDown += (_, e) => vm.OnKeyDown(e);
         Loaded += vm.Onloaded;
         Closing += vm.OnClosing;
@@ -92,13 +100,14 @@ public class PromptUnknownWordWindow : Window
         };
 
         vm.TextBoxWholeText.Bind(TextBox.TextProperty, new Binding(nameof(vm.WholeText)) { Mode = BindingMode.TwoWay });
+        vm.TextBoxWholeText.WithAccessibleName(Se.Language.Ocr.EditWholeText);
         vm.TextBoxWholeText
             .WithHorizontalAlignmentStretch()
             .WithHeight(88)
             .WithBindIsVisible(nameof(vm.DoEditWholeText));
         if (!string.IsNullOrEmpty(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName))
         {
-            vm.TextBoxWholeText.FontFamily = new FontFamily(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName);
+            vm.TextBoxWholeText.FontFamily = FontFamilyHelper.Make(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName);
         }
 
         vm.PanelWholeText.Width = double.NaN;
@@ -121,7 +130,7 @@ public class PromptUnknownWordWindow : Window
         };
         scrollViewerWholeText.Bind(Border.IsVisibleProperty, new Binding(nameof(vm.DoEditWholeText))
         {
-            Converter = new InverseBooleanConverter(),
+            Converter = InverseBooleanConverter.Instance,
         });
 
         var buttonEditWholeText = new ToggleButton
@@ -170,31 +179,32 @@ public class PromptUnknownWordWindow : Window
 
         vm.TextBoxWord
             .WithHorizontalAlignmentStretch()
-            .WithBindEnabled(nameof(vm.DoEditWholeText), new InverseBooleanConverter())
+            .WithBindEnabled(nameof(vm.DoEditWholeText), InverseBooleanConverter.Instance)
             .Bind(TextBox.TextProperty, new Binding(nameof(vm.Word)) { Mode = BindingMode.TwoWay });
+        vm.TextBoxWord.WithAccessibleName(Se.Language.General.Text);
         if (!string.IsNullOrEmpty(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName))
         {
-            vm.TextBoxWord.FontFamily = new FontFamily(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName);
+            vm.TextBoxWord.FontFamily = FontFamilyHelper.Make(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName);
         }
         var buttonChangeAll = UiUtil.MakeButton(Se.Language.General.ChangeAll, vm.ChangeAllCommand)
             .WithHorizontalAlignmentStretch()
-            .WithBindIsVisible(nameof(vm.DoEditWholeText), new InverseBooleanConverter());
+            .WithBindIsVisible(nameof(vm.DoEditWholeText), InverseBooleanConverter.Instance);
         var buttonChangeOnce = UiUtil.MakeButton(Se.Language.General.ChangeOnce, vm.ChangeOnceCommand)
             .WithHorizontalAlignmentStretch();
         var buttonSkipOne = UiUtil.MakeButton(Se.Language.General.SkipOnce, vm.SkipOnceCommand)
             .WithHorizontalAlignmentStretch();
         var buttonGoogleIt = UiUtil.MakeButton(Se.Language.General.GoogleIt, vm.GoogleItCommand)
             .WithHorizontalAlignmentStretch()
-            .WithBindIsVisible(nameof(vm.DoEditWholeText), new InverseBooleanConverter());
+            .WithBindIsVisible(nameof(vm.DoEditWholeText), InverseBooleanConverter.Instance);
         var buttonSkipAll = UiUtil.MakeButton(Se.Language.General.SkipAll, vm.SkipAllCommand)
             .WithHorizontalAlignmentStretch()
-            .WithBindIsVisible(nameof(vm.DoEditWholeText), new InverseBooleanConverter());
+            .WithBindIsVisible(nameof(vm.DoEditWholeText), InverseBooleanConverter.Instance);
         var buttonAddToNameList = UiUtil.MakeButton(Se.Language.General.AddToNamesListCaseSensitive, vm.AddToNamesListCommand)
             .WithHorizontalAlignmentStretch()
-            .WithBindIsVisible(nameof(vm.DoEditWholeText), new InverseBooleanConverter());
+            .WithBindIsVisible(nameof(vm.DoEditWholeText), InverseBooleanConverter.Instance);
         var buttonAddToUserDictionary = UiUtil.MakeButton(Se.Language.General.AddToUserDictionary, vm.AddToUserDictionaryCommand)
             .WithHorizontalAlignmentStretch()
-            .WithBindIsVisible(nameof(vm.DoEditWholeText), new InverseBooleanConverter());
+            .WithBindIsVisible(nameof(vm.DoEditWholeText), InverseBooleanConverter.Instance);
 
         grid.Add(vm.TextBoxWord, 0, 0, 1, 2);
         grid.Add(buttonChangeAll, 1, 0, 1, 2);

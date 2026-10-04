@@ -4,6 +4,8 @@ using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Features.Shared;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.DownloadTts;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.Engines;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.IndexTts25License;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.ModelLicense;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
 using Nikse.SubtitleEdit.Logic.Download;
@@ -261,6 +263,258 @@ public static class TtsEngineInstaller
             }
 
             return true;
+        }
+
+        if (engine is SupertonicCrispAsr)
+        {
+            if (!await TtsVoiceInstaller.EnsureCrispAsrForSupertonic(window, windowService, forceRedownload: false))
+            {
+                return false;
+            }
+
+            if (!SupertonicCrispAsr.IsModelInstalled())
+            {
+                var answer = await MessageBox.Show(
+                    window,
+                    "Download Supertonic (CrispASR) model?",
+                    $"{Environment.NewLine}\"Supertonic (CrispASR)\" requires a model (~200 MB).{Environment.NewLine}{Environment.NewLine}Download model?",
+                    MessageBoxButtons.YesNoCancel,
+                    MessageBoxIcon.Question);
+
+                if (answer != MessageBoxResult.Yes)
+                {
+                    return false;
+                }
+
+                var dlResult = await windowService.ShowDialogAsync<DownloadTtsWindow, DownloadTtsViewModel>(window, vm => vm.StartDownloadSupertonicCrispAsrModels());
+                if (!dlResult.OkPressed || !SupertonicCrispAsr.IsModelInstalled())
+                {
+                    return false;
+                }
+
+                await Dispatcher.UIThread.InvokeAsync(async () =>
+                {
+                    await refreshVoices();
+                });
+                return true;
+            }
+
+            return true;
+        }
+
+        if (engine is PocketTtsCrispAsr)
+        {
+            if (!await TtsVoiceInstaller.EnsureCrispAsrForPocketTts(window, windowService, forceRedownload: false))
+            {
+                return false;
+            }
+
+            var pocketModelKey = PocketTtsCrispAsr.ResolveModelKey(model);
+            if (!PocketTtsCrispAsr.AreModelsInstalled(pocketModelKey))
+            {
+                // Model key already carries the language and size in its label (e.g.
+                // "German Q8_0 (~124 MB)") so we don't append a separate size.
+                var answer = await MessageBox.Show(
+                    window,
+                    "Download Pocket TTS (CrispASR) model?",
+                    $"{Environment.NewLine}\"Pocket TTS (CrispASR)\" ({pocketModelKey}) requires a model.{Environment.NewLine}{Environment.NewLine}Download model?",
+                    MessageBoxButtons.YesNoCancel,
+                    MessageBoxIcon.Question);
+
+                if (answer != MessageBoxResult.Yes)
+                {
+                    return false;
+                }
+
+                var dlResult = await windowService.ShowDialogAsync<DownloadTtsWindow, DownloadTtsViewModel>(window, vm => vm.StartDownloadPocketTtsCrispAsrModels(pocketModelKey));
+                if (!dlResult.OkPressed || !PocketTtsCrispAsr.AreModelsInstalled(pocketModelKey))
+                {
+                    return false;
+                }
+
+                await Dispatcher.UIThread.InvokeAsync(async () =>
+                {
+                    await refreshVoices();
+                });
+                return true;
+            }
+
+            return true;
+        }
+
+        if (engine is Confucius4TtsCrispAsr)
+        {
+            if (!await TtsVoiceInstaller.EnsureCrispAsrForConfucius4Tts(window, windowService, forceRedownload: false))
+            {
+                return false;
+            }
+
+            var confuciusModelKey = Confucius4TtsCrispAsr.ResolveModelKey(model);
+            if (!Confucius4TtsCrispAsr.AreModelsInstalled(confuciusModelKey))
+            {
+                // Model key already carries the total download size, so no separate size here.
+                var answer = await MessageBox.Show(
+                    window,
+                    "Download Confucius4-TTS (CrispASR) models?",
+                    $"{Environment.NewLine}\"Confucius4-TTS (CrispASR)\" ({confuciusModelKey}) requires models.{Environment.NewLine}{Environment.NewLine}Download models?",
+                    MessageBoxButtons.YesNoCancel,
+                    MessageBoxIcon.Question);
+
+                if (answer != MessageBoxResult.Yes)
+                {
+                    return false;
+                }
+
+                var dlResult = await windowService.ShowDialogAsync<DownloadTtsWindow, DownloadTtsViewModel>(window, vm => vm.StartDownloadConfucius4TtsCrispAsrModels(confuciusModelKey));
+                if (!dlResult.OkPressed || !Confucius4TtsCrispAsr.AreModelsInstalled(confuciusModelKey))
+                {
+                    return false;
+                }
+
+                await Dispatcher.UIThread.InvokeAsync(async () =>
+                {
+                    await refreshVoices();
+                });
+                return true;
+            }
+
+            return true;
+        }
+
+        if (engine is DotsTtsCrispAsr)
+        {
+            if (!await TtsVoiceInstaller.EnsureCrispAsrForDotsTts(window, windowService, forceRedownload: false))
+            {
+                return false;
+            }
+
+            var dotsModelKey = DotsTtsCrispAsr.ResolveModelKey(model);
+            if (!DotsTtsCrispAsr.AreModelsInstalled(dotsModelKey))
+            {
+                // Model key already carries the total download size, so no separate size here.
+                var answer = await MessageBox.Show(
+                    window,
+                    "Download dots.tts (CrispASR) models?",
+                    $"{Environment.NewLine}\"dots.tts (CrispASR)\" ({dotsModelKey}) requires models.{Environment.NewLine}{Environment.NewLine}Download models?",
+                    MessageBoxButtons.YesNoCancel,
+                    MessageBoxIcon.Question);
+
+                if (answer != MessageBoxResult.Yes)
+                {
+                    return false;
+                }
+
+                var dlResult = await windowService.ShowDialogAsync<DownloadTtsWindow, DownloadTtsViewModel>(window, vm => vm.StartDownloadDotsTtsCrispAsrModels(dotsModelKey));
+                if (!dlResult.OkPressed || !DotsTtsCrispAsr.AreModelsInstalled(dotsModelKey))
+                {
+                    return false;
+                }
+
+                await Dispatcher.UIThread.InvokeAsync(async () =>
+                {
+                    await refreshVoices();
+                });
+                return true;
+            }
+
+            return true;
+        }
+
+        if (engine is IndexTts25AudioCpp)
+        {
+            // The model licence gate comes before anything is fetched: the weights are under
+            // the bilibili Model Use License (not open source), so the user has to accept it
+            // once before the first 3.3 GB download rather than after.
+            if (!IndexTts25AudioCpp.IsLicenseAccepted())
+            {
+                var licenseResult = await windowService.ShowDialogAsync<IndexTts25LicenseWindow, IndexTts25LicenseViewModel>(window, _ => { });
+                if (!licenseResult.OkPressed || !IndexTts25AudioCpp.IsLicenseAccepted())
+                {
+                    await MessageBox.Show(
+                        window,
+                        "IndexTTS 2.5",
+                        $"{Environment.NewLine}{Se.Language.Video.IndexTts25LicenseDeclined}",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                    return false;
+                }
+            }
+
+            if (!await TtsVoiceInstaller.EnsureAudioCppRuntime(window, windowService, forceRedownload: false, "IndexTTS 2.5", IndexTts25AudioCpp.FamilyName))
+            {
+                return false;
+            }
+
+            var indexTts25ModelKey = IndexTts25AudioCpp.ResolveModelKey(model);
+            if (!IndexTts25AudioCpp.AreModelsInstalled(indexTts25ModelKey))
+            {
+                // Model key already carries its size (e.g. "Q8_0 (~3.3 GB)").
+                var answer = await MessageBox.Show(
+                    window,
+                    "Download IndexTTS 2.5 model?",
+                    $"{Environment.NewLine}\"IndexTTS 2.5 (audio.cpp)\" ({indexTts25ModelKey}) requires a model.{Environment.NewLine}{Environment.NewLine}Download model?",
+                    MessageBoxButtons.YesNoCancel,
+                    MessageBoxIcon.Question);
+
+                if (answer != MessageBoxResult.Yes)
+                {
+                    return false;
+                }
+
+                var dlResult = await windowService.ShowDialogAsync<DownloadTtsWindow, DownloadTtsViewModel>(window, vm => vm.StartDownloadIndexTts25AudioCppModels(indexTts25ModelKey));
+                if (!dlResult.OkPressed || !IndexTts25AudioCpp.AreModelsInstalled(indexTts25ModelKey))
+                {
+                    return false;
+                }
+
+                await Dispatcher.UIThread.InvokeAsync(async () =>
+                {
+                    await refreshVoices();
+                });
+                return true;
+            }
+
+            return true;
+        }
+
+        if (engine is HiggsTtsAudioCpp)
+        {
+            return await EnsureAudioCppEngineWithLicense(
+                window, windowService, refreshVoices,
+                engineDisplayName: "Higgs Audio v3",
+                requiredFamily: HiggsTtsAudioCpp.FamilyName,
+                licenseDefinition: HiggsTtsAudioCpp.LicenseDefinition,
+                isLicenseAccepted: HiggsTtsAudioCpp.IsLicenseAccepted,
+                modelKey: HiggsTtsAudioCpp.ResolveModelKey(model),
+                areModelsInstalled: HiggsTtsAudioCpp.AreModelsInstalled,
+                startDownloadModels: (vm, key) => vm.StartDownloadHiggsTtsAudioCppModels(key));
+        }
+
+        if (engine is FishTtsAudioCpp)
+        {
+            return await EnsureAudioCppEngineWithLicense(
+                window, windowService, refreshVoices,
+                engineDisplayName: "Fish Audio S2 Pro",
+                requiredFamily: FishTtsAudioCpp.FamilyName,
+                licenseDefinition: FishTtsAudioCpp.LicenseDefinition,
+                isLicenseAccepted: FishTtsAudioCpp.IsLicenseAccepted,
+                modelKey: FishTtsAudioCpp.ResolveModelKey(model),
+                areModelsInstalled: FishTtsAudioCpp.AreModelsInstalled,
+                startDownloadModels: (vm, key) => vm.StartDownloadFishTtsAudioCppModels(key));
+        }
+
+        if (engine is FireRedTts3AudioCpp)
+        {
+            // Apache-2.0 weights: no licence gate, otherwise the same runtime + model flow.
+            return await EnsureAudioCppEngineWithLicense(
+                window, windowService, refreshVoices,
+                engineDisplayName: "FireRedTTS3",
+                requiredFamily: FireRedTts3AudioCpp.FamilyName,
+                licenseDefinition: null,
+                isLicenseAccepted: () => true,
+                modelKey: FireRedTts3AudioCpp.ResolveModelKey(model),
+                areModelsInstalled: FireRedTts3AudioCpp.AreModelsInstalled,
+                startDownloadModels: (vm, key) => vm.StartDownloadFireRedTts3AudioCppModels(key));
         }
 
         if (engine is ZonosTtsCrispAsr)
@@ -787,6 +1041,78 @@ public static class TtsEngineInstaller
         };
     }
 
+    /// <summary>
+    /// The shared install flow for the audio.cpp engines whose weights carry their own licence
+    /// (Higgs Audio v3, Fish Audio S2 Pro): licence gate first — nothing is fetched before the
+    /// user accepts, the weights are not open source — then the shared audio.cpp runtime, then
+    /// the engine's own GGUF. Same shape as the IndexTts25AudioCpp branch above, which predates
+    /// this helper and keeps its own engine-specific licence window.
+    /// </summary>
+    private static async Task<bool> EnsureAudioCppEngineWithLicense(
+        Window window,
+        IWindowService windowService,
+        Func<Task> refreshVoices,
+        string engineDisplayName,
+        string requiredFamily,
+        ModelLicenseDefinition? licenseDefinition,
+        Func<bool> isLicenseAccepted,
+        string modelKey,
+        Func<string?, bool> areModelsInstalled,
+        Action<DownloadTtsViewModel, string> startDownloadModels)
+    {
+        // A null definition means the weights need no acceptance (Apache-2.0 FireRedTTS3).
+        if (licenseDefinition != null && !isLicenseAccepted())
+        {
+            var licenseResult = await windowService.ShowDialogAsync<ModelLicenseWindow, ModelLicenseViewModel>(
+                window, vm => vm.Initialize(licenseDefinition));
+            if (!licenseResult.OkPressed || !isLicenseAccepted())
+            {
+                await MessageBox.Show(
+                    window,
+                    engineDisplayName,
+                    $"{Environment.NewLine}{engineDisplayName} cannot be used until the model license is accepted.",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return false;
+            }
+        }
+
+        if (!await TtsVoiceInstaller.EnsureAudioCppRuntime(window, windowService, forceRedownload: false, engineDisplayName, requiredFamily))
+        {
+            return false;
+        }
+
+        if (!areModelsInstalled(modelKey))
+        {
+            // Model key already carries its size (e.g. "Q8_0 (~4.7 GB)").
+            var answer = await MessageBox.Show(
+                window,
+                $"Download {engineDisplayName} model?",
+                $"{Environment.NewLine}\"{engineDisplayName} (audio.cpp)\" ({modelKey}) requires a model.{Environment.NewLine}{Environment.NewLine}Download model?",
+                MessageBoxButtons.YesNoCancel,
+                MessageBoxIcon.Question);
+
+            if (answer != MessageBoxResult.Yes)
+            {
+                return false;
+            }
+
+            var dlResult = await windowService.ShowDialogAsync<DownloadTtsWindow, DownloadTtsViewModel>(
+                window, vm => startDownloadModels(vm, modelKey));
+            if (!dlResult.OkPressed || !areModelsInstalled(modelKey))
+            {
+                return false;
+            }
+
+            await Dispatcher.UIThread.InvokeAsync(async () =>
+            {
+                await refreshVoices();
+            });
+        }
+
+        return true;
+    }
+
     private static string GetSavedKeyFile(ITtsEngine engine) => engine switch
     {
         GoogleSpeech => Se.Settings.Video.TextToSpeech.GoogleKeyFile,
@@ -799,6 +1125,7 @@ public static class TtsEngineInstaller
         ElevenLabs => Se.Settings.Video.TextToSpeech.ElevenLabsApiKey,
         Murf => Se.Settings.Video.TextToSpeech.MurfApiKey,
         MistralSpeech => Se.Settings.Video.TextToSpeech.MistralApiKey,
+        OpenAiCompatibleSpeech => OpenAiCompatibleSpeech.GetApiKey(OpenAiCompatibleSpeech.SavedProvider),
         _ => string.Empty,
     };
 }

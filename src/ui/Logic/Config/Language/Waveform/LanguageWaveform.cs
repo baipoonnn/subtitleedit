@@ -15,8 +15,20 @@ public class LanguageWaveform
     public string GuessTimeCodesDotDotDot { get; set; }
     public string SeekSilenceDotDotDot { get; set; }
     public string ExtractAudioDotDotDot { get; set; }
+    public string CloneVoiceTo { get; set; }
+    public string CloneVoiceNameTitle { get; set; }
+    public string CloneVoiceExtractFailed { get; set; }
+    public string LineXHasNoDuration { get; set; }
+    public string AudioClipsSkippedLinesX { get; set; }
     public string ToggleShotChange { get; set; }
     public string ResetWaveformZoomAndSpeed { get; set; }
+    public string ShowOriginalSubtitle { get; set; }
+    public string TimelineGroupTracksBy { get; set; }
+    public string TimelineShowThumbnails { get; set; }
+    public string ShowSpeechOnly { get; set; }
+    public string IsolatingSpeechForWaveformX { get; set; }
+    public string IsolatingSpeechForWaveformFailed { get; set; }
+    public string SpeechOnlyWaveformReady { get; set; }
     public object ShowOnlyWaveform { get; set; }
     public object ShowOnlySpectrogram { get; set; }
     public object ShowWaveformAndSpectrogram { get; set; }
@@ -46,10 +58,22 @@ public class LanguageWaveform
         SeekSilence = "Seek silence";
         SeekSilenceDotDotDot = "Seek silence...";
         ExtractAudioDotDotDot = "Extract audio...";
+        CloneVoiceTo = "Clone voice to";
+        CloneVoiceNameTitle = "Name of new voice";
+        CloneVoiceExtractFailed = "Could not extract audio for the selected line.";
+        LineXHasNoDuration = "Line {0} has no duration (the end time is not after the start time), so there is no audio to extract.";
+        AudioClipsSkippedLinesX = "No audio could be extracted for these lines, so they were skipped: {0}";
         MinSilenceDurationSeconds = "Min. silence duration (seconds):";
         MaxSilenceVolume = "Max. silence volume (0.0 - 1.0):";
         ToggleShotChange = "Toggle shot change";
         ResetWaveformZoomAndSpeed = "Reset waveform zoom & speed";
+        ShowOriginalSubtitle = "Show original subtitle";
+        TimelineGroupTracksBy = "Group subtitle tracks by";
+        TimelineShowThumbnails = "Show video thumbnails";
+        ShowSpeechOnly = "Show speech only (slow to generate)";
+        IsolatingSpeechForWaveformX = "Isolating speech for the waveform... {0}";
+        IsolatingSpeechForWaveformFailed = "Could not isolate the speech for the waveform - see the tools log";
+        SpeechOnlyWaveformReady = "The waveform now shows speech only";
         ShowOnlyWaveform = "Show only waveform";
         ShowOnlySpectrogram = "Show only spectrogram";
         ShowWaveformAndSpectrogram = "Show waveform and spectrogram";

@@ -2,6 +2,7 @@
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
+using CommunityToolkit.Mvvm.Input;
 using Nikse.SubtitleEdit.Features.Main.Layout;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
@@ -29,6 +30,9 @@ public class SelectVideoPositionWindow : Window
         vm.VideoPlayerControl.Height = double.NaN;
         vm.VideoPlayerControl.HorizontalAlignment = HorizontalAlignment.Stretch;
         vm.VideoPlayerControl.VerticalAlignment = VerticalAlignment.Stretch;
+        // Without a command the player's fullscreen button did nothing - maximize this window instead.
+        vm.VideoPlayerControl.FullScreenCommand = new RelayCommand(() =>
+            WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized);
 
         var buttonOk = UiUtil.MakeButtonOk(vm.OkCommand);
         var buttonCancel = UiUtil.MakeButtonCancel(vm.CancelCommand);
@@ -58,7 +62,7 @@ public class SelectVideoPositionWindow : Window
 
         Content = grid;
 
-        Activated += delegate { buttonCancel.Focus(); }; // initial focus on an input, not an action button - a focused button clicks on bare Space
+        UiUtil.FocusOnFirstActivation(this, buttonCancel); // initial focus on an input, not an action button - a focused button clicks on bare Space
     }
 
     protected override void OnLoaded(RoutedEventArgs e)
@@ -70,7 +74,7 @@ public class SelectVideoPositionWindow : Window
     protected override void OnClosing(WindowClosingEventArgs e)
     {
         base.OnClosing(e);
-        _vm.VideoPlayerControl?.Close();
+        _vm.VideoPlayerControl?.CloseAndDisposePlayer();
     }
 
     protected override void OnKeyDown(KeyEventArgs e)

@@ -40,6 +40,14 @@ internal static class FixCommonErrorsRunner
         Rules.Select(r => r.Id).Append(OcrFixRuleId).ToArray();
 
     /// <summary>
+    /// Rules that never run as part of "all" (the default, <c>all</c>, or a negation-only spec) and
+    /// only run when named explicitly in <c>--fix-common-errors-rules</c>. Used for rules that can
+    /// change correct text, e.g. <c>FixMisreadQuotes</c> turns British-style 'quotes' into "quotes".
+    /// </summary>
+    public static IReadOnlySet<string> OptInRules { get; } =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { nameof(FixMisreadQuotes) };
+
+    /// <summary>
     /// Rules that only run when the subtitle's language (auto-detected, or forced via
     /// <c>--fce-language</c>) matches the mapped two-letter ISO code. Single source of truth
     /// for both the runtime gate (<see cref="IsLanguageOnlyRule"/>) and the <c>list-fce-rules</c>
@@ -52,6 +60,7 @@ internal static class FixCommonErrorsRunner
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             [nameof(FixAloneLowercaseIToUppercaseI)] = "en",
+            [nameof(FixMisreadQuotes)] = "en",
             [nameof(FixDanishLetterI)] = "da",
             [nameof(FixSpanishInvertedQuestionAndExclamationMarks)] = "es",
             [nameof(FixTurkishAnsiToUnicode)] = "tr",
@@ -89,6 +98,7 @@ internal static class FixCommonErrorsRunner
             [nameof(FixMissingOpenBracket)] = "Fix missing [ or ( in line",
             [nameof(FixMissingPeriodsAtEndOfLine)] = "Add period after lines where next line starts with uppercase letter",
             [nameof(FixMissingSpaces)] = "Fix missing spaces",
+            [nameof(FixMisreadQuotes)] = "Fix apostrophes misread as double quotes (OCR, English)",
             [nameof(FixMusicNotation)] = "Replace music symbols with preferred symbol",
             [nameof(FixOverlappingDisplayTimes)] = "Fix overlapping display times",
             [nameof(FixShortDisplayTimes)] = "Fix short display times",
@@ -134,8 +144,12 @@ internal static class FixCommonErrorsRunner
             return;
         }
 
+        // An EMPTY list means "no rules" - that is exactly what "-all" resolves to (RuleIdSpec
+        // clears the set). Treating empty as null made "--fix-common-errors-rules:-all" run every
+        // rule plus the OCR-fix pass, i.e. the maximum instead of nothing. RemoveFormattingRunner
+        // documents the same distinction.
         HashSet<string>? wanted = null;
-        if (ruleIds != null && ruleIds.Count > 0)
+        if (ruleIds != null)
         {
             wanted = new HashSet<string>(ruleIds, StringComparer.OrdinalIgnoreCase);
         }
@@ -144,7 +158,7 @@ internal static class FixCommonErrorsRunner
         // Spanish/Danish/Turkish file that auto-detects wrong still gets its per-language
         // rule. Falls back to content auto-detection, then "en".
         var language = NormalizeLanguageOverride(languageOverride)
-            ?? LanguageAutoDetect.AutoDetectGoogleLanguageOrNull(subtitle)
+            ?? SubtitleLanguageDetector.DetectOrNull(subtitle)
             ?? "en";
         var callbacks = new EmptyFixCallback
         {
@@ -164,12 +178,12 @@ internal static class FixCommonErrorsRunner
         // condition another rule fixes on the next pass. SE4's batch converter ran the
         // whole suite three times per /FixCommonErrors (issue #11873). Run to convergence
         // here - repeat until a pass changes nothing, capped to avoid pathological loops.
-        var previousSnapshot = Snapshot(subtitle);
+        var previousSnapshot = SubtitleSignature.Compute(subtitle);
         for (var pass = 0; pass < MaxPasses; pass++)
         {
             RunSinglePass(subtitle, wanted, language, callbacks);
 
-            var snapshot = Snapshot(subtitle);
+            var snapshot = SubtitleSignature.Compute(subtitle);
             if (snapshot == previousSnapshot)
             {
                 break;
@@ -250,7 +264,7 @@ internal static class FixCommonErrorsRunner
     {
         foreach (var (id, factory) in Rules)
         {
-            if (wanted != null && !wanted.Contains(id))
+            if (wanted != null ? !wanted.Contains(id) : OptInRules.Contains(id))
             {
                 continue;
             }
@@ -277,34 +291,6 @@ internal static class FixCommonErrorsRunner
         }
     }
 
-    // A signature of the subtitle's timing + text, used to detect when a Fix Common
-    // Errors pass has stopped changing anything (convergence). A 64-bit FNV-1a hash over
-    // the same fields - only compared against the previous pass within this run, so it
-    // avoids building (and discarding) a full-subtitle string on every pass.
-    private static long Snapshot(Subtitle subtitle)
-    {
-        const long fnvPrime = 1099511628211L;
-        var hash = unchecked((long)14695981039346656037UL); // FNV offset basis
-        unchecked
-        {
-            foreach (var p in subtitle.Paragraphs)
-            {
-                hash = (hash ^ BitConverter.DoubleToInt64Bits(p.StartTime.TotalMilliseconds)) * fnvPrime;
-                hash = (hash ^ BitConverter.DoubleToInt64Bits(p.EndTime.TotalMilliseconds)) * fnvPrime;
-
-                var text = p.Text ?? string.Empty;
-                foreach (var c in text)
-                {
-                    hash = (hash ^ c) * fnvPrime;
-                }
-
-                hash = (hash ^ '\n') * fnvPrime;
-            }
-        }
-
-        return hash;
-    }
-
     /// <summary>
     /// Returns true when <paramref name="ruleId"/> is a language-conditional rule
     /// that should not run because the detected language doesn't match. Mirrors
@@ -329,11 +315,12 @@ internal static class FixCommonErrorsRunner
         }
 
         var v = value.Trim();
-        if (v.Length == 2)
-        {
-            return v.ToLowerInvariant();
-        }
 
+        // No unchecked two-letter shortcut: the lookup below already matches a real
+        // TwoLetterISOLanguageName, so "es" still resolves, while a plausible typo like "sp"
+        // used to be accepted verbatim. Being non-null it suppressed the warning and the
+        // auto-detect fallback, then matched no language gate and left the OCR-fix pass -
+        // which needs a valid three-letter code - silently doing nothing.
         var culture = CultureInfo.GetCultures(CultureTypes.NeutralCultures)
             .FirstOrDefault(c =>
                 c.TwoLetterISOLanguageName.Equals(v, StringComparison.OrdinalIgnoreCase)
@@ -346,24 +333,33 @@ internal static class FixCommonErrorsRunner
     /// <summary>
     /// Resolves a comma-separated rule spec into a concrete set of rule IDs. Supports:
     /// <list type="bullet">
-    ///   <item><c>all</c> — every rule (also the default when spec is null/empty/whitespace).</item>
-    ///   <item><c>FixCommas,FixEllipsesStart</c> — explicit allow-list.</item>
+    ///   <item><c>all</c> — every rule except <see cref="OptInRules"/> (also the default when spec is null/empty/whitespace).</item>
+    ///   <item><c>FixCommas,FixEllipsesStart</c> — explicit allow-list (the only way to select an opt-in rule).</item>
     ///   <item><c>all,-FixDanishLetterI</c> — start from all, then subtract.</item>
     ///   <item><c>-FixCommas</c> (negations only) — implied <c>all</c>, then subtract.</item>
     /// </list>
     /// Matching is case-insensitive. Throws <see cref="ArgumentException"/> for unknown IDs.
     /// Returned IDs are in canonical order.
     /// </summary>
-    public static IReadOnlyList<string> ResolveRuleIds(string? spec) =>
-        RuleIdSpec.Resolve(spec, AvailableRuleIds, "FixCommonErrors", "list-fce-rules");
+    public static IReadOnlyList<string> ResolveRuleIds(string? spec)
+    {
+        var resolved = RuleIdSpec.Resolve(spec, AvailableRuleIds, "FixCommonErrors", "list-fce-rules");
+
+        // Opt-in rules are only kept when named explicitly, never via "all"
+        var named = new HashSet<string>(
+            (spec ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            StringComparer.OrdinalIgnoreCase);
+        return resolved.Where(id => !OptInRules.Contains(id) || named.Contains(id)).ToArray();
+    }
 
     /// <summary>
     /// Canonical rule list. Order here defines execution order. <c>FixCommonOcrErrors</c>
     /// is intentionally omitted — it requires an UI-side IOcrFixEngine and SpellCheck
-    /// setup that seconv doesn't carry. The other 38 rules cover most cleanup.
+    /// setup that seconv doesn't carry. The other 40 rules cover most cleanup.
     /// </summary>
     private static IReadOnlyList<(string Id, Func<IFixCommonError> Factory)> BuildRules() =>
     [
+        (nameof(FixMisreadQuotes), () => new FixMisreadQuotes()), // before AddMissingQuotes, which would otherwise add a second quote to "Hello'
         (nameof(AddMissingQuotes), () => new AddMissingQuotes()),
         (nameof(Fix3PlusLines), () => new Fix3PlusLines()),
         (nameof(FixAloneLowercaseIToUppercaseI), () => new FixAloneLowercaseIToUppercaseI()),

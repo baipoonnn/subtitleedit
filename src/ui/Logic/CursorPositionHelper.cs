@@ -6,11 +6,19 @@ using System.Runtime.InteropServices;
 
 namespace Nikse.SubtitleEdit.Logic;
 
-public static  class CursorPositionHelper
+public static partial class CursorPositionHelper
 {
     // Windows API for getting cursor position
-    [DllImport("user32.dll")]
-    private static extern bool GetCursorPos(out POINT lpPoint);
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetCursorPos(out POINT lpPoint);
+
+    [LibraryImport("user32.dll")]
+    private static partial short GetAsyncKeyState(int vKey);
+
+    private const int VkLButton = 0x01;
+    private const int VkRButton = 0x02;
+    private const int VkMButton = 0x04;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT
@@ -24,17 +32,23 @@ public static  class CursorPositionHelper
     private const string ApplicationServicesLib = "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices";
 
 
-    [DllImport(CoreGraphicsLib)]
-    private static extern CGPoint CGEventSourceGetCursorPosition(uint source);
+    [LibraryImport(CoreGraphicsLib)]
+    private static partial CGPoint CGEventSourceGetCursorPosition(uint source);
 
-    [DllImport(CoreGraphicsLib)]
-    private static extern IntPtr CGEventCreate(IntPtr source);
+    [LibraryImport(CoreGraphicsLib)]
+    [return: MarshalAs(UnmanagedType.U1)]
+    private static partial bool CGEventSourceButtonState(int stateId, uint button);
 
-    [DllImport(ApplicationServicesLib)]
-    private static extern CGPoint CGEventGetLocation(IntPtr eventRef);
+    private const int CGEventSourceStateCombinedSessionState = 0;
 
-    [DllImport(CoreGraphicsLib)]
-    private static extern void CFRelease(IntPtr cf);
+    [LibraryImport(CoreGraphicsLib)]
+    private static partial IntPtr CGEventCreate(IntPtr source);
+
+    [LibraryImport(ApplicationServicesLib)]
+    private static partial CGPoint CGEventGetLocation(IntPtr eventRef);
+
+    [LibraryImport(CoreGraphicsLib)]
+    private static partial void CFRelease(IntPtr cf);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct CGPoint
@@ -44,18 +58,19 @@ public static  class CursorPositionHelper
     }
 
     // Linux X11 API for getting cursor position
-    [DllImport("libX11.so.6")]
-    private static extern IntPtr XOpenDisplay(IntPtr display);
+    [LibraryImport("libX11.so.6")]
+    private static partial IntPtr XOpenDisplay(IntPtr display);
 
-    [DllImport("libX11.so.6")]
-    private static extern int XCloseDisplay(IntPtr display);
+    [LibraryImport("libX11.so.6")]
+    private static partial int XCloseDisplay(IntPtr display);
 
-    [DllImport("libX11.so.6")]
-    private static extern bool XQueryPointer(IntPtr display, IntPtr window, out IntPtr root, out IntPtr child,
+    [LibraryImport("libX11.so.6")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool XQueryPointer(IntPtr display, IntPtr window, out IntPtr root, out IntPtr child,
         out int rootX, out int rootY, out int winX, out int winY, out uint mask);
 
-    [DllImport("libX11.so.6")]
-    private static extern IntPtr XDefaultRootWindow(IntPtr display);
+    [LibraryImport("libX11.so.6")]
+    private static partial IntPtr XDefaultRootWindow(IntPtr display);
 
     public static (int X, int Y)? GetCursorPosition()
     {
@@ -94,6 +109,58 @@ public static  class CursorPositionHelper
                     }
 
                     XCloseDisplay(display);
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            Se.LogError(exception);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Whether any mouse button is physically down right now, or null where the buttons cannot
+    /// be sampled (unsupported platform, or the query failed - e.g. no X11 under Wayland).
+    /// Used to tell a window activation the user clicked for apart from one the OS handed over
+    /// (undocked foreground steal, #14168): a click's activation is delivered while the button
+    /// is still down, an OS handover after another application's window closed is not.
+    /// </summary>
+    public static bool? IsAnyPointerButtonDown()
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                // The high bit is "down now". VK_L/RBUTTON are physical buttons, so a swapped
+                // primary button still lands on one of the three.
+                return (((ushort)GetAsyncKeyState(VkLButton) |
+                         (ushort)GetAsyncKeyState(VkRButton) |
+                         (ushort)GetAsyncKeyState(VkMButton)) & 0x8000) != 0;
+            }
+
+            if (OperatingSystem.IsMacOS())
+            {
+                return CGEventSourceButtonState(CGEventSourceStateCombinedSessionState, 0) ||
+                       CGEventSourceButtonState(CGEventSourceStateCombinedSessionState, 1) ||
+                       CGEventSourceButtonState(CGEventSourceStateCombinedSessionState, 2);
+            }
+
+            if (OperatingSystem.IsLinux())
+            {
+                var display = XOpenDisplay(IntPtr.Zero);
+                if (display != IntPtr.Zero)
+                {
+                    var rootWindow = XDefaultRootWindow(display);
+                    var ok = XQueryPointer(display, rootWindow, out _, out _, out _, out _,
+                        out _, out _, out var mask);
+                    XCloseDisplay(display);
+                    if (ok)
+                    {
+                        // Button1Mask | Button2Mask | Button3Mask
+                        return (mask & 0x700) != 0;
+                    }
                 }
             }
         }

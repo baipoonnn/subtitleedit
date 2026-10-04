@@ -7,6 +7,7 @@ using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Features.Shared;
 using Nikse.SubtitleEdit.Logic.Config;
 using Nikse.SubtitleEdit.Logic.Media;
+using Nikse.SubtitleEdit.Logic;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -140,6 +141,11 @@ public partial class ImportImagesViewModel : ObservableObject
         {
             Close();
         }
+        else if (UiUtil.IsHelp(e))
+        {
+            e.Handled = true;
+            UiUtil.ShowHelp("features/file", "images-for-ocr");
+        }
     }
 
     internal void DataGridSelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -192,8 +198,13 @@ public partial class ImportImagesViewModel : ObservableObject
                     var path = file.Path?.LocalPath;
                     if (path != null && File.Exists(path))
                     {
+                        // Compare the extension exactly. GetExtension returns "" for a file with
+                        // no dot in its name, and "*.png".EndsWith("") is true - so every
+                        // extension-less file passed the filter and ended up as a blank OCR line.
+                        // The plain-text import dialog's drop handler gets this right.
                         var ext = Path.GetExtension(path).ToLowerInvariant();
-                        if (!_imageExtensions.Any(x => x.EndsWith(ext)))
+                        if (string.IsNullOrEmpty(ext) ||
+                            !_imageExtensions.Any(x => string.Equals(x.TrimStart('*'), ext, StringComparison.OrdinalIgnoreCase)))
                         {
                             continue;
                         }

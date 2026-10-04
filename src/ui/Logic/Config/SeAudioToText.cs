@@ -11,10 +11,6 @@ public class SeAudioToText
     // matches on ISpeechToTextEngine.Choice/Name, so an unknown value selects no engine at all.
     public string WhisperChoice { get; set; } = WhisperChoices.Cpp;
 
-    public bool WhisperIgnoreVersion { get; set; } = false;
-
-    public bool WhisperDeleteTempFiles { get; set; } = true;
-
     public bool WhisperAddLanguageCodeToFileName { get; set; }
 
     public string? WhisperModel { get; set; } = string.Empty;
@@ -25,28 +21,21 @@ public class SeAudioToText
 
     public string WhisperCtranslate2Location { get; set; } = string.Empty;
 
-    public string WhisperPurfviewFasterWhisperLocation { get; set; } = string.Empty;
-
-    public string WhisperPurfviewFasterWhisperDefaultCmd { get; set; } = string.Empty;
-
     public string WhisperXLocation { get; set; } = string.Empty;
 
     public string WhisperStableTsLocation { get; set; } = string.Empty;
 
     public string WhisperCppModelLocation { get; set; } = string.Empty;
 
-    public string WhisperCustomCommandLineArguments { get; set; } = string.Empty;
-    public bool WhisperCustomCommandLineArgumentsPurfviewBlank { get; set; }
-
     public string CommandLineParameterCpp { get; set; } = string.Empty;
     public string CommandLineParameterCppCuBlas { get; set; } = string.Empty;
     public string CommandLineParameterCppVulkan { get; set; } = string.Empty;
     public string CommandLineParameterConstMe { get; set; } = string.Empty;
     public string CommandLineParameterCTranslate2 { get; set; } = "--vad_filter True";
+    public string CommandLineParameterWhisperX { get; set; } = string.Empty;
     public string CommandLineParameterPurfviewFasterWhisperXxl { get; set; } = "--standard";
     public string CommandLineParameterOpenAi { get; set; } = string.Empty;
     public string CommandLineParameterQwen3AsrCpp { get; set; } = string.Empty;
-    public string CommandLineParameterChatLlm { get; set; } = string.Empty;
     public string CommandLineParameterCrispAsrCanary { get; set; } = "--max-len 50 --split-on-punct";
     public string CommandLineParameterCrispAsrCohere { get; set; } = "--max-len 50 --split-on-punct";
     public string CommandLineParameterCrispAsrFireRed { get; set; } = "--max-len 50 --split-on-punct";
@@ -57,6 +46,10 @@ public class SeAudioToText
     public string CommandLineParameterCrispAsrGigaAm { get; set; } = "--max-len 50 --split-on-punct";
     public string CommandLineParameterCrispAsrGlm { get; set; } = "--max-len 50 --split-on-punct";
     public string CommandLineParameterCrispAsrGranite { get; set; } = "--max-len 50 --split-on-punct";
+    // No --max-len/--split-on-punct: Index-Echo cues are bilingual (Chinese line + translation)
+    // at its own sentence boundaries, and re-splitting them by length turns the two lines into
+    // separate cues with interpolated times, so SE can no longer pick out the translation.
+    public string CommandLineParameterCrispAsrIndexEcho { get; set; } = string.Empty;
     public string CommandLineParameterCrispAsrParakeet { get; set; } = "--max-len 50 --split-on-punct";
     public string CommandLineParameterCrispAsrQwen3 { get; set; } = "--max-len 50 --split-on-punct";
     public string CommandLineParameterCrispAsrOmni { get; set; } = "--max-len 50 --split-on-punct";
@@ -65,13 +58,14 @@ public class SeAudioToText
     public string CommandLineParameterCrispAsrMossDiarize { get; set; } = "--max-len 50 --split-on-punct";
     public string CommandLineParameterCrispAsrSenseVoice { get; set; } = "--max-len 50 --split-on-punct";
     public string CommandLineParameterCrispAsrArk { get; set; } = "--max-len 50 --split-on-punct";
+    public string CommandLineParameterCrispAsrVoxtral { get; set; } = "--max-len 50 --split-on-punct";
     public string CrispAsrForcedAligner { get; set; } = "built-in";
-
-    public string WhisperExtraSettingsHistory { get; set; } = string.Empty;
+    public bool CrispAsrIsolateSpeech { get; set; }
+    public bool CrispAsrDetectSpeakers { get; set; }
+    public string CrispAsrVad { get; set; } = "auto";
+    public bool ForcedAlignerEndsFromIsolatedSpeech { get; set; }
 
     public bool WhisperAutoAdjustTimings { get; set; } = true;
-
-    public bool WhisperUseLineMaxChars { get; set; } = true;
 
     public bool WhisperPostProcessingAddPeriods { get; set; } = false;
 
@@ -83,7 +77,12 @@ public class SeAudioToText
 
     public bool WhisperPostProcessingFixShortDuration { get; set; } = true;
 
+    public bool WhisperPostProcessingRemoveNonSpeechLines { get; set; }
+
+    public bool WhisperPostProcessingRemoveRepeatedLines { get; set; }
+
+    public bool WhisperPostProcessingShowQualityReport { get; set; } = true;
+
     public bool WhisperPostProcessingChangeUnderlineToColor { get; set; }
     public string WhisperPostProcessingChangeUnderlineToColorColor { get; set; } = Colors.Red.FromColorToHex();
-    public string WhisperCppVulkanGpuDevice { get; set; } = string.Empty;
 }

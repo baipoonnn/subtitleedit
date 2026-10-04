@@ -1,4 +1,4 @@
-using Avalonia.Threading;
+﻿using Avalonia.Threading;
 using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Core.SubtitleFormats;
 using Nikse.SubtitleEdit.Features.Main;
@@ -7,6 +7,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,6 +21,15 @@ public interface IAutoBackupService
     void StopAutobackup();
     public List<string> GetAutoBackupFiles();
     public void CleanAutoBackupFolder();
+
+    /// <summary>Copies Settings.json to the settings backup folder if the newest backup is older than the configured interval.</summary>
+    void BackupSettingsIfDue();
+
+    /// <summary>Copies Settings.json to the settings backup folder regardless of the interval; returns the backup path, or null when nothing was written.</summary>
+    string? BackupSettingsNow();
+
+    List<string> GetSettingsBackupFiles();
+    void CleanSettingsBackupFolder();
 }
 
 public partial class AutoBackupService : IAutoBackupService
@@ -71,7 +82,9 @@ public partial class AutoBackupService : IAutoBackupService
             }
 
             var saveFormat = vm.SelectedSubtitleFormat;
-            var subtitle = new Subtitle(vm.GetUpdateSubtitle(), false);
+            // GetSaveSubtitle: a backup is restored by opening it as a file, so it must hold the
+            // time codes a save would write (video offset included).
+            var subtitle = new Subtitle(vm.GetSaveSubtitle(), false);
             Task.Run(() =>
             {
                 try
@@ -121,14 +134,36 @@ public partial class AutoBackupService : IAutoBackupService
 
         var fileName = Path.Combine(folder,
             $"{DateTime.Now.Year:0000}-{DateTime.Now.Month:00}-{DateTime.Now.Day:00}_{DateTime.Now.Hour:00}-{DateTime.Now.Minute:00}-{DateTime.Now.Second:00}{title}{saveFormat.Extension}");
+        // IsTextBased only rules out binary formats; the read-only text formats (WSB, FTE,
+        // DlDd, SPU image...) are "text based" but their ToText throws, and the catch below
+        // then swallowed it - leaving the user with auto-backup silently doing nothing.
+        var format = saveFormat.IsTextBased ? saveFormat : new SubRip();
+        string text;
         try
         {
-            var format = saveFormat.IsTextBased ? saveFormat : new SubRip();
-            File.WriteAllText(fileName, format.ToText(subtitle, string.Empty));
+            text = format.ToText(subtitle, string.Empty);
         }
         catch
         {
-            // ignore
+            try
+            {
+                format = new SubRip();
+                fileName = Path.ChangeExtension(fileName, format.Extension);
+                text = format.ToText(subtitle, string.Empty);
+            }
+            catch
+            {
+                return;
+            }
+        }
+
+        try
+        {
+            File.WriteAllText(fileName, text);
+        }
+        catch
+        {
+            // ignore - a backup that cannot be written must not disturb editing
         }
     }
 
@@ -150,6 +185,201 @@ public partial class AutoBackupService : IAutoBackupService
         }
 
         return result;
+    }
+
+    private const string SettingsBackupSuffix = "_Settings.json";
+    private const string SettingsBackupTimeFormat = "yyyy-MM-dd_HH-mm-ss";
+    private static readonly Lock SettingsBackupLocker = new Lock();
+
+    public void BackupSettingsIfDue()
+    {
+        if (!Se.Settings.General.SettingsBackupOn)
+        {
+            return;
+        }
+
+        // 0 = back up on every start.
+        var intervalDays = Math.Max(0, Se.Settings.General.SettingsBackupIntervalDays);
+        lock (SettingsBackupLocker)
+        {
+            var newestFileName = GetNewestSettingsBackupFile(Se.SettingsBackupFolder);
+            if (newestFileName != null)
+            {
+                var newest = ParseSettingsBackupTime(newestFileName);
+                if (newest.HasValue && newest.Value > DateTime.Now.AddDays(-intervalDays))
+                {
+                    return;
+                }
+
+                if (IsSameSettingsIgnoringRecentFiles(Se.GetSettingsFilePath(), newestFileName))
+                {
+                    return;
+                }
+            }
+
+            CopySettingsToBackupFolder();
+        }
+
+        CleanSettingsBackupFolder();
+    }
+
+    public string? BackupSettingsNow()
+    {
+        string? result;
+        lock (SettingsBackupLocker)
+        {
+            result = CopySettingsToBackupFolder();
+        }
+
+        CleanSettingsBackupFolder();
+        return result;
+    }
+
+    private static string? CopySettingsToBackupFolder()
+    {
+        var settingsFileName = Se.GetSettingsFilePath();
+        if (!File.Exists(settingsFileName))
+        {
+            return null;
+        }
+
+        var folder = Se.SettingsBackupFolder;
+        try
+        {
+            Directory.CreateDirectory(folder);
+            var target = Path.Combine(folder, DateTime.Now.ToString(SettingsBackupTimeFormat, CultureInfo.InvariantCulture) + SettingsBackupSuffix);
+            File.Copy(settingsFileName, target, overwrite: true);
+            return target;
+        }
+        catch (Exception exception)
+        {
+            // A backup that cannot be written must not disturb start-up.
+            Se.LogError(exception, "Could not back up settings");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Time stamp of the newest settings backup, read from the file name rather than the file
+    /// system so a copied or touched backup folder does not postpone the next backup.
+    /// </summary>
+    internal static DateTime? GetNewestSettingsBackupTime(string folder)
+    {
+        var newestFileName = GetNewestSettingsBackupFile(folder);
+        return newestFileName == null ? null : ParseSettingsBackupTime(newestFileName);
+    }
+
+    internal static string? GetNewestSettingsBackupFile(string folder)
+    {
+        string? newestFileName = null;
+        DateTime? newest = null;
+        foreach (var fileName in GetSettingsBackupFiles(folder))
+        {
+            var time = ParseSettingsBackupTime(fileName);
+            if (time.HasValue && (!newest.HasValue || time.Value > newest.Value))
+            {
+                newest = time;
+                newestFileName = fileName;
+            }
+        }
+
+        return newestFileName;
+    }
+
+    /// <summary>
+    /// True when the two settings files hold the same settings. The recent files lists change in
+    /// almost every session, so they are left out - otherwise every start would be "changed" and
+    /// the backups would rotate out without holding anything new. A file that cannot be read or
+    /// parsed counts as different, so it is the backup that is taken when in doubt.
+    /// </summary>
+    internal static bool IsSameSettingsIgnoringRecentFiles(string settingsFileName, string backupFileName)
+    {
+        try
+        {
+            var settings = LoadSettingsWithoutRecentFiles(settingsFileName);
+            var backup = LoadSettingsWithoutRecentFiles(backupFileName);
+            return settings != null && backup != null && JsonNode.DeepEquals(settings, backup);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static JsonNode? LoadSettingsWithoutRecentFiles(string fileName)
+    {
+        using var stream = File.OpenRead(fileName);
+        var root = JsonNode.Parse(stream);
+        foreach (var section in new[] { nameof(Se.File), nameof(Se.Video) })
+        {
+            if (root?[section] is JsonObject sectionObject)
+            {
+                sectionObject.Remove(nameof(SeFile.RecentFiles));
+            }
+        }
+
+        return root;
+    }
+
+    internal static DateTime? ParseSettingsBackupTime(string fileName)
+    {
+        var name = Path.GetFileName(fileName);
+        if (name.Length < SettingsBackupTimeFormat.Length ||
+            !DateTime.TryParseExact(name[..SettingsBackupTimeFormat.Length], SettingsBackupTimeFormat,
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out var time))
+        {
+            return null;
+        }
+
+        return time;
+    }
+
+    public List<string> GetSettingsBackupFiles() => GetSettingsBackupFiles(Se.SettingsBackupFolder);
+
+    internal static List<string> GetSettingsBackupFiles(string folder)
+    {
+        var result = new List<string>();
+        if (!Directory.Exists(folder))
+        {
+            return result;
+        }
+
+        foreach (var fileName in Directory.GetFiles(folder, "*" + SettingsBackupSuffix))
+        {
+            if (RegexFileNamePattern().IsMatch(Path.GetFileName(fileName)))
+            {
+                result.Add(fileName);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>Keeps only the newest <see cref="SeGeneral.SettingsBackupMaxCount"/> settings backups.</summary>
+    public void CleanSettingsBackupFolder()
+    {
+        var keep = Math.Max(1, Se.Settings.General.SettingsBackupMaxCount);
+        lock (SettingsBackupLocker)
+        {
+            foreach (var fileName in GetSettingsBackupFilesToDelete(Se.SettingsBackupFolder, keep))
+            {
+                try
+                {
+                    File.Delete(fileName);
+                }
+                catch
+                {
+                    // ignore
+                }
+            }
+        }
+    }
+
+    internal static List<string> GetSettingsBackupFilesToDelete(string folder, int keep)
+    {
+        var files = GetSettingsBackupFiles(folder);
+        files.Sort((a, b) => string.CompareOrdinal(Path.GetFileName(b), Path.GetFileName(a))); // newest first
+        return files.Count <= keep ? new List<string>() : files.GetRange(keep, files.Count - keep);
     }
 
     private static readonly Lock Locker = new Lock();

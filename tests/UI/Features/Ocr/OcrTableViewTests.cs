@@ -1,11 +1,15 @@
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Headless.XUnit;
+using Avalonia.Layout;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Microsoft.Extensions.DependencyInjection;
 using Nikse.SubtitleEdit;
 using Nikse.SubtitleEdit.Features.Ocr;
 using Nikse.SubtitleEdit.Features.Ocr.OcrSubtitle;
+using Nikse.SubtitleEdit.Logic;
 using SkiaSharp;
 
 namespace UITests.Features.Ocr;
@@ -22,9 +26,13 @@ public class OcrTableViewTests
     {
         public int Count { get; init; }
 
+        // Smaller than the view model's ImageMaxWidth/Height, so the thumbnails are shown at
+        // their natural size; the zoom test asks for a wider one, which the maxes constrain.
+        public SKSizeI BitmapSize { get; init; } = new(120, 40);
+
         public SKBitmap GetBitmap(int index)
         {
-            var bitmap = new SKBitmap(120, 40);
+            var bitmap = new SKBitmap(BitmapSize.Width, BitmapSize.Height);
             using var canvas = new SKCanvas(bitmap);
             canvas.Clear(SKColors.White);
             return bitmap;
@@ -49,14 +57,16 @@ public class OcrTableViewTests
         public SKSizeI GetScreenSize(int index) => new(1920, 1080);
     }
 
-    private static OcrViewModel MakeViewModel(int itemCount)
+    private static OcrViewModel MakeViewModel(int itemCount, SKSizeI? bitmapSize = null)
     {
         var services = new ServiceCollection();
         services.AddSubtitleEditServices();
         var provider = services.BuildServiceProvider();
         var vm = provider.GetRequiredService<OcrViewModel>();
 
-        var source = new FakeOcrSubtitle { Count = itemCount };
+        var source = bitmapSize is { } size
+            ? new FakeOcrSubtitle { Count = itemCount, BitmapSize = size }
+            : new FakeOcrSubtitle { Count = itemCount };
         foreach (var item in source.MakeOcrSubtitleItems())
         {
             item.Text = $"Line {item.Number}";
@@ -68,6 +78,32 @@ public class OcrTableViewTests
 
     private static TableView GetTableView(Window window) =>
         window.GetVisualDescendants().OfType<TableView>().Single();
+
+    /// <summary>Index of the topmost row still inside the viewport. The TableView template
+    /// pins the column header inside the ScrollViewer, so rows are measured against the
+    /// content presenter - the ScrollViewer's own origin is a header height above.</summary>
+    private static int FirstVisibleIndex(TableView grid, ScrollViewer scrollViewer)
+    {
+        var origin = (Visual?)scrollViewer.Presenter ?? scrollViewer;
+        var best = -1;
+        var bestTop = double.MaxValue;
+        foreach (var row in grid.GetRealizedContainers().OfType<TableViewRow>())
+        {
+            var top = ((Visual)row).TranslatePoint(new Point(0, 0), origin)?.Y;
+            if (top == null || row.Bounds.Height <= 0 || top.Value + row.Bounds.Height <= 0.5)
+            {
+                continue;
+            }
+
+            if (top.Value < bestTop)
+            {
+                bestTop = top.Value;
+                best = grid.IndexFromContainer(row);
+            }
+        }
+
+        return best;
+    }
 
     private static OcrWindow ShowWindow(OcrViewModel vm)
     {
@@ -170,6 +206,120 @@ public class OcrTableViewTests
     }
 
     [AvaloniaFact]
+    public void OcrWindow_UsesIndexMappedScrollBar()
+    {
+        // Same fix as the main subtitle grid (#13579): the rows here hold a bitmap each and
+        // vary even more in height, so the virtualizing panel's pixel-extent estimate - and
+        // with it the native thumb - moves on every scroll. The grid is wrapped in
+        // TableViewIndexScrollBar, which hides the native vertical bar and maps its own to
+        // row indices.
+        var vm = MakeViewModel(500);
+        var window = ShowWindow(vm);
+        var tableView = GetTableView(window);
+
+        var wrapper = window.GetVisualDescendants().OfType<TableViewIndexScrollBar>().Single();
+        var bar = wrapper.BarForTest;
+        var scrollViewer = tableView.GetVisualDescendants().OfType<ScrollViewer>().First();
+
+        var nativeBar = tableView.GetVisualDescendants().OfType<ScrollBar>()
+            .First(s => s.Orientation == Orientation.Vertical && !ReferenceEquals(s, bar));
+        Assert.False(nativeBar.IsVisible, "the native pixel-mapped vertical bar should be hidden");
+
+        // Row units, not pixels: a handful of rows out of 500 are visible, so the maximum
+        // sits just below the row count while the pixel extent is many thousands.
+        Assert.InRange(bar.Maximum, 400, 499);
+        Assert.True(scrollViewer.Extent.Height - scrollViewer.Viewport.Height > bar.Maximum * 2,
+            "sanity: the pixel extent should be far larger than the row-based maximum");
+
+        // The bar drives the view in row indices...
+        bar.Value = 250;
+        wrapper.ApplyPendingForTest();
+        window.UpdateLayout();
+        var row = tableView.ContainerFromIndex(250);
+        Assert.NotNull(row);
+        var viewportOrigin = (Visual?)scrollViewer.Presenter ?? scrollViewer;
+        var top = ((Visual)row!).TranslatePoint(new Point(0, 0), viewportOrigin)!.Value.Y;
+        Assert.InRange(top, -1, 1);
+
+        // ...and scrolling the view drives the bar back, without ever moving backwards.
+        var previous = bar.Value;
+        for (var i = 0; i < 10; i++)
+        {
+            scrollViewer.Offset = new Vector(0, scrollViewer.Offset.Y + 120);
+            window.UpdateLayout();
+            Assert.True(bar.Value >= previous - 0.001,
+                $"thumb moved backwards while scrolling down: {previous} -> {bar.Value}");
+            previous = bar.Value;
+        }
+
+        window.Close();
+    }
+
+    [AvaloniaFact]
+    public void OcrWindow_ZoomKeepsTheRowAtTheTop()
+    {
+        // Ctrl+plus/minus re-measures every row (the thumbnails are bound to
+        // ImageMaxWidth/Height), and the ScrollViewer keeps its *pixel* offset across that -
+        // which lands on a different row: zooming in used to drop the user ~80 rows back,
+        // and zooming out far enough pinned the list to its end. The index bar knows which
+        // row was at the top, so it is put back there.
+        var vm = MakeViewModel(500, new SKSizeI(600, 120)); // wide enough for the maxes to bind
+        var window = ShowWindow(vm);
+        var tableView = GetTableView(window);
+        var wrapper = window.GetVisualDescendants().OfType<TableViewIndexScrollBar>().Single();
+        var bar = wrapper.BarForTest;
+        var scrollViewer = tableView.GetVisualDescendants().OfType<ScrollViewer>().First();
+
+        double RowHeight() => tableView.GetRealizedContainers().OfType<TableViewRow>()
+            .Select(r => r.Bounds.Height).DefaultIfEmpty(0).Max();
+
+        void SettleLayout()
+        {
+            // Twice: the first pass measures the new row heights, the second runs the
+            // re-placement PreserveTopRow posted at Loaded priority.
+            for (var i = 0; i < 2; i++)
+            {
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+            }
+        }
+
+        bar.Value = 250;
+        wrapper.ApplyPendingForTest();
+        window.UpdateLayout();
+        Assert.Equal(250, FirstVisibleIndex(tableView, scrollViewer));
+        var heightBefore = RowHeight();
+
+        // Zoom in five notches, like holding Ctrl+plus.
+        for (var i = 0; i < 5; i++)
+        {
+            vm.ImageMaxHeight *= 1.1;
+            vm.ImageMaxWidth *= 1.1;
+        }
+
+        SettleLayout();
+
+        Assert.True(RowHeight() > heightBefore, "sanity: zooming in should make the rows taller");
+        Assert.Equal(250, FirstVisibleIndex(tableView, scrollViewer));
+        Assert.Equal(250, bar.Value, 1);
+
+        // ...and ten notches back out, which shrinks the pixel extent below the old offset.
+        for (var i = 0; i < 10; i++)
+        {
+            vm.ImageMaxHeight *= 0.9;
+            vm.ImageMaxWidth *= 0.9;
+        }
+
+        SettleLayout();
+
+        Assert.True(RowHeight() < heightBefore, "sanity: zooming out should make the rows shorter");
+        Assert.Equal(250, FirstVisibleIndex(tableView, scrollViewer));
+        Assert.Equal(250, bar.Value, 1);
+
+        window.Close();
+    }
+
+    [AvaloniaFact]
     public void OcrWindow_MultiSelectAddsToSelectedItems()
     {
         var vm = MakeViewModel(10);
@@ -185,6 +335,111 @@ public class OcrTableViewTests
         Dispatcher.UIThread.RunJobs();
 
         Assert.Equal(3, vm.SubtitleGrid.SelectedItems!.Count);
+
+        window.Close();
+    }
+
+    [AvaloniaFact]
+    public void OcrWindow_DeleteSelectedLine_SelectsTheRowThatTakesItsPlace()
+    {
+        var vm = MakeViewModel(6);
+        var window = ShowWindow(vm);
+        var tableView = GetTableView(window);
+
+        tableView.SelectedIndex = 2;
+        Dispatcher.UIThread.RunJobs();
+        var survivor = vm.OcrSubtitleItems[3];
+
+        vm.DeleteSelectedLinesCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(5, vm.OcrSubtitleItems.Count);
+        Assert.Same(survivor, vm.SelectedOcrSubtitleItem);
+        Assert.Equal(2, tableView.SelectedIndex);
+        Assert.Single(tableView.SelectedItems!);
+
+        window.Close();
+    }
+
+    [AvaloniaFact]
+    public void OcrWindow_DeleteLastLine_SelectsTheNewLastRow()
+    {
+        var vm = MakeViewModel(4);
+        var window = ShowWindow(vm);
+        var tableView = GetTableView(window);
+
+        tableView.SelectedIndex = 3;
+        Dispatcher.UIThread.RunJobs();
+        var survivor = vm.OcrSubtitleItems[2];
+
+        vm.DeleteSelectedLinesCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(3, vm.OcrSubtitleItems.Count);
+        Assert.Same(survivor, vm.SelectedOcrSubtitleItem);
+        Assert.Equal(2, tableView.SelectedIndex);
+
+        window.Close();
+    }
+
+    [AvaloniaFact]
+    public void OcrWindow_DeleteMultipleLines_SelectsRowAfterTheBlock()
+    {
+        var vm = MakeViewModel(8);
+        var window = ShowWindow(vm);
+        var tableView = GetTableView(window);
+
+        tableView.SelectedItems!.Clear();
+        tableView.SelectedItems.Add(vm.OcrSubtitleItems[4]);
+        tableView.SelectedItems.Add(vm.OcrSubtitleItems[2]);
+        tableView.SelectedItems.Add(vm.OcrSubtitleItems[3]);
+        Dispatcher.UIThread.RunJobs();
+        var survivor = vm.OcrSubtitleItems[5];
+
+        vm.DeleteSelectedLinesCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(5, vm.OcrSubtitleItems.Count);
+        Assert.Same(survivor, vm.SelectedOcrSubtitleItem);
+        Assert.Equal(2, tableView.SelectedIndex);
+        Assert.Single(tableView.SelectedItems);
+
+        window.Close();
+    }
+
+    [AvaloniaFact]
+    public void OcrWindow_DeleteLineFarDown_KeepsTheViewportWhereItWas()
+    {
+        var vm = MakeViewModel(400);
+        var window = ShowWindow(vm);
+        var tableView = GetTableView(window);
+        var scrollViewer = tableView.GetVisualDescendants().OfType<ScrollViewer>().First();
+
+        tableView.ScrollIntoView(250);
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        tableView.SelectedIndex = 250;
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        var topBefore = FirstVisibleIndex(tableView, scrollViewer);
+        Assert.True(topBefore > 200, $"Expected to be scrolled near row 250, top row was {topBefore}");
+
+        vm.DeleteSelectedLinesCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+
+        // The row below took the deleted one's place and the list did not jump to the top.
+        Assert.Equal(250, tableView.SelectedIndex);
+        var topAfter = FirstVisibleIndex(tableView, scrollViewer);
+        Assert.True(Math.Abs(topAfter - topBefore) <= 2, $"Viewport moved from row {topBefore} to row {topAfter}");
 
         window.Close();
     }

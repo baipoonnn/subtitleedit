@@ -5,6 +5,7 @@ using Nikse.SubtitleEdit.Features.Options.Settings;
 using Nikse.SubtitleEdit.Features.Tools.BatchConvert;
 using Nikse.SubtitleEdit.Logic.Config;
 using Nikse.SubtitleEdit.UiLogic.BatchConvert;
+using System;
 using System.Diagnostics;
 
 namespace UITests.Features.Tools.BatchConvert;
@@ -16,8 +17,12 @@ namespace UITests.Features.Tools.BatchConvert;
 /// with the indexer and no try/catch (one bad rule failed every file in the batch with an opaque
 /// "parsing ..." status naming neither rule nor category), and with no match timeout at all.
 /// </summary>
-public class BatchConverterMultipleReplaceRegexTests
+public class BatchConverterMultipleReplaceRegexTests : IDisposable
 {
+    private readonly ShortRegexTimeout _shortRegexTimeout = new();
+
+    public void Dispose() => _shortRegexTimeout.Dispose();
+
     // 30 a's and no "b": "(a+)+b" has to try every way of splitting them before giving up.
     private const string EvilPattern = "(a+)+b";
     private static readonly string EvilLine = new string('a', 30) + "c";
@@ -123,5 +128,31 @@ public class BatchConverterMultipleReplaceRegexTests
 
         Assert.Equal(EvilLine + " color", text);
         Assert.True(stopwatch.Elapsed.TotalSeconds < MaxSeconds, $"the conversion took {stopwatch.Elapsed.TotalSeconds:0.0}s");
+    }
+
+    // #15510: batch convert ignored the rule's "Whole word" flag, so "Zeyn" -> "Zeynep" turned
+    // every existing "Zeynep" into "Zeynepep".
+    [Theory]
+    [InlineData(MultipleReplaceType.CaseInsensitive)]
+    [InlineData(MultipleReplaceType.CaseSensitive)]
+    public async Task WholeWordRule_DoesNotMatchInsideALongerWord(MultipleReplaceType type)
+    {
+        var rule = Rule("Zeyn", "Zeynep", type);
+        rule.WholeWord = true;
+
+        var text = await ConvertAsync("Zeyn and Zeynep.", Category(rule));
+
+        Assert.Equal("Zeynep and Zeynep.", text);
+    }
+
+    [Fact]
+    public async Task WholeWordRule_ReplacementDollarIsLiteral()
+    {
+        var rule = Rule("cost", "$1 price", MultipleReplaceType.CaseInsensitive);
+        rule.WholeWord = true;
+
+        var text = await ConvertAsync("The cost is high.", Category(rule));
+
+        Assert.Equal("The $1 price is high.", text);
     }
 }

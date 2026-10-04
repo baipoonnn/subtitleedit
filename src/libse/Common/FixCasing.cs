@@ -95,18 +95,18 @@ namespace Nikse.SubtitleEdit.Core.Common
 
             if (text.StartsWith("I-if ", StringComparison.Ordinal))
             {
-                text = text.Remove(0, 4).Insert(0, "I-If ");
+                text = text.Remove(0, 4).Insert(0, "I-If");
             }
 
             for (var indexOfI = text.IndexOf('i'); indexOfI >= 0; indexOfI = text.IndexOf('i', indexOfI + 1))
             {
                 if (indexOfI == 0 || pre.Contains(text[indexOfI - 1]))
                 {
-                    if (text.Substring(indexOfI).StartsWith("i-i ", StringComparison.Ordinal))
+                    if (text.AsSpan(indexOfI).StartsWith("i-i ".AsSpan(), StringComparison.Ordinal))
                     {
                         text = text.Remove(indexOfI, 3).Insert(indexOfI, "I-I");
                     }
-                    else if (text.Substring(indexOfI).StartsWith("i-if ", StringComparison.Ordinal))
+                    else if (text.AsSpan(indexOfI).StartsWith("i-if ".AsSpan(), StringComparison.Ordinal))
                     {
                         text = text.Remove(indexOfI, 4).Insert(indexOfI, "I-If");
                     }
@@ -123,7 +123,7 @@ namespace Nikse.SubtitleEdit.Core.Common
                 {
                     text = text.Remove(indexOfI, 1).Insert(indexOfI, "I");
                 }
-                else if (indexOfI > 1 && "\r\n ".Contains(text[indexOfI - 1]) && text.Substring(indexOfI).StartsWith("i-i ", StringComparison.Ordinal))
+                else if (indexOfI > 1 && "\r\n ".Contains(text[indexOfI - 1]) && text.AsSpan(indexOfI).StartsWith("i-i ".AsSpan(), StringComparison.Ordinal))
                 {
                     text = text.Remove(indexOfI, 3).Insert(indexOfI, "I-I");
                 }
@@ -131,27 +131,27 @@ namespace Nikse.SubtitleEdit.Core.Common
                 {
                     text = text.Remove(indexOfI, 1).Insert(indexOfI, "I");
                 }
-                else if (indexOfI > 2 && text.Substring(indexOfI - 2).StartsWith("I-i ", StringComparison.Ordinal))
+                else if (indexOfI > 2 && text.AsSpan(indexOfI - 2).StartsWith("I-i ".AsSpan(), StringComparison.Ordinal))
                 {
                     text = text.Remove(indexOfI - 2, 3).Insert(indexOfI - 2, "I-I");
                 }
-                else if (indexOfI > 2 && text.Substring(indexOfI - 2).StartsWith("I-it's ", StringComparison.Ordinal))
+                else if (indexOfI > 2 && text.AsSpan(indexOfI - 2).StartsWith("I-it's ".AsSpan(), StringComparison.Ordinal))
                 {
                     text = text.Remove(indexOfI - 2, 3).Insert(indexOfI - 2, "I-I");
                 }
-                else if (text.Substring(indexOfI).StartsWith("i'll ", StringComparison.Ordinal))
+                else if (text.AsSpan(indexOfI).StartsWith("i'll ".AsSpan(), StringComparison.Ordinal))
                 {
                     text = text.Remove(indexOfI, 1).Insert(indexOfI, "I");
                 }
-                else if (text.Substring(indexOfI).StartsWith("i've ", StringComparison.Ordinal))
+                else if (text.AsSpan(indexOfI).StartsWith("i've ".AsSpan(), StringComparison.Ordinal))
                 {
                     text = text.Remove(indexOfI, 1).Insert(indexOfI, "I");
                 }
-                else if (text.Substring(indexOfI).StartsWith("i'm ", StringComparison.Ordinal))
+                else if (text.AsSpan(indexOfI).StartsWith("i'm ".AsSpan(), StringComparison.Ordinal))
                 {
                     text = text.Remove(indexOfI, 1).Insert(indexOfI, "I");
                 }
-                else if (text.Substring(indexOfI).StartsWith("i'd ", StringComparison.Ordinal))
+                else if (text.AsSpan(indexOfI).StartsWith("i'd ".AsSpan(), StringComparison.Ordinal))
                 {
                     text = text.Remove(indexOfI, 1).Insert(indexOfI, "I");
                 }
@@ -161,6 +161,20 @@ namespace Nikse.SubtitleEdit.Core.Common
 
         private static readonly string[] CasingTitles = { "Mrs.", "Miss.", "Mr.", "Ms.", "Dr." };
         private static readonly string[] CasingNotChangeWords = { "does", "has", "will", "is", "and", "for", "but", "or", "of" };
+        private static readonly char[] TitleWordDelimiters = { ' ', '\r', '\n', ',', '"', '?', '!', '.', '\'' };
+
+        private static bool IsCasingNotChangeWord(ReadOnlySpan<char> word)
+        {
+            foreach (var w in CasingNotChangeWords)
+            {
+                if (word.SequenceEqual(w.AsSpan()))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         private string FixCasingAfterTitles(string input)
         {
@@ -175,11 +189,16 @@ namespace Nikse.SubtitleEdit.Core.Common
                     if (start.StartsWith(title.AsSpan(), StringComparison.OrdinalIgnoreCase))
                     {
                         var idx = i + title.Length;
-                        if (idx < text.Length - 2 && text[idx] == ' ')
+                        // The body reads text[idx] after the increment below, so the bound only
+                        // needs to leave one character - "- 2" skipped a one-letter word at the
+                        // end of the line ("Mr. t" was left alone while "Mr. to" was fixed).
+                        if (idx < text.Length - 1 && text[idx] == ' ')
                         {
                             idx++;
-                            var words = text.Substring(idx).Split(' ', '\r', '\n', ',', '"', '?', '!', '.', '\'');
-                            if (words.Length > 0 && !CasingNotChangeWords.Contains(words[0]))
+                            // First word only - splitting the whole rest of the line allocated an array per title hit.
+                            var wordEnd = text.IndexOfAny(TitleWordDelimiters, idx);
+                            var firstWord = wordEnd < 0 ? text.AsSpan(idx) : text.AsSpan(idx, wordEnd - idx);
+                            if (!IsCasingNotChangeWord(firstWord))
                             {
                                 var upper = char.ToUpperInvariant(text[idx]).ToString();
                                 text = text.Remove(idx, 1).Insert(idx, upper);
@@ -220,7 +239,7 @@ namespace Nikse.SubtitleEdit.Core.Common
                 }
                 else if (!tagOn && char.IsLetter(ch))
                 {
-                    if (firstLetter && index < text.Length - 6 && char.IsUpper(text[index]) &&
+                    if (firstLetter && index < text.Length - 5 && char.IsUpper(text[index]) &&
                         text[index + 1] == '-' && char.IsLower(text[index + 2]) && text[index] == char.ToUpperInvariant(text[index + 2]) &&
                         text[index + 3] == '-' && char.IsLower(text[index + 4]) && text[index] == char.ToUpperInvariant(text[index + 4]) &&
                         text[index + 5] != '-')
@@ -231,7 +250,7 @@ namespace Nikse.SubtitleEdit.Core.Common
                         sb.Append('-');
                         index += 4;
                     }
-                    else if (firstLetter && index < text.Length - 4 && char.IsUpper(text[index]) &&
+                    else if (firstLetter && index < text.Length - 3 && char.IsUpper(text[index]) &&
                              text[index + 1] == '-' && char.IsLower(text[index + 2]) && text[index] == char.ToUpperInvariant(text[index + 2]) &&
                              text[index + 3] != '-')
                     {
@@ -281,12 +300,12 @@ namespace Nikse.SubtitleEdit.Core.Common
             else if (FixMakeUppercase)
             {
                 var st = new StrippableText(text);
-                text = st.Pre + MakeUpperCaseExceptTags(st.StrippedText) + st.Post;
+                text = st.Pre + MakeUpperCaseExceptTags(st.StrippedText, subtitleCulture) + st.Post;
                 text = HtmlUtil.FixUpperTags(text); // tags inside text
             }
             else if (FixMakeLowercase)
             {
-                text = MakeLowerCaseExceptTags(text);
+                text = MakeLowerCaseExceptTags(text, subtitleCulture);
             }
             else if (FixMakeProperCase)
             {
@@ -312,15 +331,19 @@ namespace Nikse.SubtitleEdit.Core.Common
             return text;
         }
 
-        private string MakeUpperCaseExceptTags(string text)
+        // The case conversion follows the SUBTITLE's language, not the machine's: char.ToUpper /
+        // char.ToLower without a culture use CurrentCulture, so on a Turkish system every "i" in
+        // an English subtitle became "I-with-dot" and every "I" became a dotless "i".
+        private string MakeUpperCaseExceptTags(string text, CultureInfo culture)
         {
             if (string.IsNullOrEmpty(text))
             {
                 return text;
             }
 
-            return string.Create(text.Length, text, (span, src) =>
+            return string.Create(text.Length, (text, culture), (span, state) =>
             {
+                var (src, ci) = state;
                 var insideAngle = false;
                 var insideCurly = false;
 
@@ -344,20 +367,21 @@ namespace Nikse.SubtitleEdit.Core.Common
                         insideCurly = false;
                     }
 
-                    span[i] = insideAngle || insideCurly ? c : char.ToUpper(c);
+                    span[i] = insideAngle || insideCurly ? c : char.ToUpper(c, ci);
                 }
             });
         }
 
-        private string MakeLowerCaseExceptTags(string text)
+        private string MakeLowerCaseExceptTags(string text, CultureInfo culture)
         {
             if (string.IsNullOrEmpty(text))
             {
                 return text;
             }
 
-            return string.Create(text.Length, text, (span, src) =>
+            return string.Create(text.Length, (text, culture), (span, state) =>
             {
+                var (src, ci) = state;
                 var insideAngle = false;
                 var insideCurly = false;
 
@@ -381,7 +405,7 @@ namespace Nikse.SubtitleEdit.Core.Common
                         insideCurly = false;
                     }
 
-                    span[i] = insideAngle || insideCurly ? c : char.ToLower(c);
+                    span[i] = insideAngle || insideCurly ? c : char.ToLower(c, ci);
                 }
             });
         }

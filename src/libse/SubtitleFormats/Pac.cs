@@ -1,6 +1,7 @@
-using Nikse.SubtitleEdit.Core.Common;
+﻿using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Core.Interfaces;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -504,7 +505,6 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             { 0xdd, new SpecialCharacter("דּ")},
             { 0xde, new SpecialCharacter("גּ")},
             { 0xdf, new SpecialCharacter("בּ")},
-            { 0x2b, new SpecialCharacter(".")},
             { 0x2e, new SpecialCharacter(".")},
             { 0x2c, new SpecialCharacter(",")}
         };
@@ -1232,6 +1232,19 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
         public int CodePage { get; set; } = -1;
 
+        /// <summary>
+        /// Code page of the lines flagged "secondary code page" (Screen's font 2, alignment bit
+        /// 0x08) - e.g. the Russian lines of a Hebrew + Russian file. -1 = detect it when reading
+        /// (from the flagged lines' language) and don't use one when writing.
+        /// </summary>
+        public int SecondaryCodePage { get; set; } = -1;
+
+        private const byte SecondaryCodePageFlag = 0x08;
+        private int _detectedSecondaryCodePage = -1;
+
+        /// <summary>Set only while detecting code pages: every decoded text line and its flag.</summary>
+        private List<(int Paragraph, string Text, bool IsSecondary)> _collectedLines;
+
         public override string Extension => ".pac";
 
         public virtual bool IsFpc { get; set; }
@@ -1239,6 +1252,9 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
         public const string NameOfFormat = "PAC (Screen Electronics)";
 
         public override string Name => NameOfFormat;
+
+        // Carries the vertical position as a percentage in MarginV.
+        public override bool HasPositionSupport => true;
 
         private static readonly byte[] MarkerStartOfUnicode = { 0x1f, 0xef, 0xbb, 0xbf };
         private const byte MarkerEndOfUnicode = 0x2e;
@@ -1337,65 +1353,46 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             }
 
             text = MakePacItalicsAndRemoveOtherTags(text);
+            if (!IsFpc)
+            {
+                text = text.Replace("…", "..."); // no PAC code point for ellipsis outside FPC/unicode
+            }
 
-            var encoding = GetEncoding(CodePage);
             byte[] textBuffer;
-
+            var firstLineAlignment = alignment;
             if (IsFpc)
             {
                 textBuffer = GetUnicodeBytes(text, alignment);
             }
-            else if (CodePage == CodePageArabic)
+            else if (SecondaryCodePage < 0 || SecondaryCodePage == CodePage)
             {
-                textBuffer = GetArabicBytes(Utilities.FixEnglishTextInRightToLeftLanguage(text, "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"), alignment);
-            }
-            else if (CodePage == CodePageHebrew)
-            {
-                textBuffer = GetHebrewBytes(Utilities.FixEnglishTextInRightToLeftLanguage(text, "0123456789abcdefghijklmnopqrstuvwxyz"), alignment);
-            }
-            else if (CodePage == CodePageLatin || CodePage == CodePageLatinCzech)
-            {
-                textBuffer = GetLatinBytes(encoding, text, alignment, null);
-            }
-            else if (CodePage == CodePageCyrillic)
-            {
-                textBuffer = GetCyrillicBytes(text, alignment);
-            }
-            else if (CodePage == CodePageGreek)
-            {
-                textBuffer = GetGreekBytes(text, alignment);
-            }
-            else if (CodePage == CodePageLatinTurkish)
-            {
-                textBuffer = GetLatinBytes(encoding, text, alignment, LatinTurkishOverrides);
-            }
-            else if (CodePage == CodePageLatinPortuguese)
-            {
-                textBuffer = GetLatinBytes(encoding, text, alignment, LatinPortugueseOverrides);
-            }
-            else if (CodePage == CodePageChineseTraditional)
-            {
-                textBuffer = GetW16Bytes(text, alignment, EncodingChineseTraditional);
-            }
-            else if (CodePage == CodePageChineseSimplified)
-            {
-                textBuffer = GetW16Bytes(text, alignment, EncodingChineseSimplified);
-            }
-            else if (CodePage == CodePageKorean)
-            {
-                textBuffer = GetW16Bytes(text, alignment, EncodingKorean);
-            }
-            else if (CodePage == CodePageJapanese)
-            {
-                textBuffer = GetW16Bytes(text, alignment, EncodingJapanese);
-            }
-            else if (CodePage == CodePageThai)
-            {
-                textBuffer = GetThaiBytes(text, alignment);
+                textBuffer = EncodeText(text, alignment, CodePage);
             }
             else
             {
-                textBuffer = encoding.GetBytes(text);
+                // Each line in the code page that fits it - a line that fits the secondary code
+                // page better (the Russian line of a Hebrew subtitle) is written with it, flagged.
+                var lines = text.Split(new[] { Environment.NewLine }, StringSplitOptions.None);
+                var parts = new List<byte>();
+                for (var i = 0; i < lines.Length; i++)
+                {
+                    var isSecondary = CountScriptLetters(lines[i], SecondaryCodePage) > CountScriptLetters(lines[i], CodePage);
+                    var lineAlignment = isSecondary ? (byte)(alignment | SecondaryCodePageFlag) : alignment;
+                    if (i == 0)
+                    {
+                        firstLineAlignment = lineAlignment;
+                    }
+                    else
+                    {
+                        parts.Add(0xfe);
+                        parts.Add(lineAlignment);
+                        parts.Add(0x03);
+                    }
+
+                    parts.AddRange(EncodeText(lines[i], alignment, isSecondary ? SecondaryCodePage : CodePage));
+                }
+
+                textBuffer = parts.ToArray();
             }
 
             // write text length
@@ -1409,7 +1406,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             }
 
             fs.WriteByte(0xfe);
-            fs.WriteByte(alignment); //2=centered, 1=left aligned, 0=right aligned, 09=Fount2 (large font),
+            fs.WriteByte(firstLineAlignment); //2=centered, 1=left aligned, 0=right aligned, 09=Fount2 (large font),
             //55=safe area override (too long line), 0A=Fount2 + centered, 06=centered + safe area override
             fs.WriteByte(0x03);
 
@@ -1422,6 +1419,85 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 fs.WriteByte((byte)(number / 256));
                 fs.WriteByte(0x60);
             }
+        }
+
+        private static byte[] EncodeText(string text, byte alignment, int codePage)
+        {
+            var encoding = GetEncoding(codePage);
+            switch (codePage)
+            {
+                case CodePageArabic:
+                    return GetArabicBytes(Utilities.FixEnglishTextInRightToLeftLanguage(text, "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"), alignment);
+                case CodePageHebrew:
+                    return GetHebrewBytes(Utilities.FixEnglishTextInRightToLeftLanguage(text, "0123456789abcdefghijklmnopqrstuvwxyz"), alignment);
+                case CodePageLatin:
+                case CodePageLatinCzech:
+                    return GetLatinBytes(encoding, text, alignment, null);
+                case CodePageCyrillic:
+                    return GetCyrillicBytes(text, alignment);
+                case CodePageGreek:
+                    return GetGreekBytes(text, alignment);
+                case CodePageLatinTurkish:
+                    return GetLatinBytes(encoding, text, alignment, LatinTurkishOverrides);
+                case CodePageLatinPortuguese:
+                    return GetLatinBytes(encoding, text, alignment, LatinPortugueseOverrides);
+                case CodePageChineseTraditional:
+                    return GetW16Bytes(text, alignment, EncodingChineseTraditional);
+                case CodePageChineseSimplified:
+                    return GetW16Bytes(text, alignment, EncodingChineseSimplified);
+                case CodePageKorean:
+                    return GetW16Bytes(text, alignment, EncodingKorean);
+                case CodePageJapanese:
+                    return GetW16Bytes(text, alignment, EncodingJapanese);
+                case CodePageThai:
+                    return GetThaiBytes(text, alignment);
+                default:
+                    return encoding.GetBytes(text);
+            }
+        }
+
+        /// <summary>The number of letters in <paramref name="text"/> that belong to the script of the code page.</summary>
+        private static int CountScriptLetters(string text, int codePage)
+        {
+            var count = 0;
+            foreach (var c in text)
+            {
+                if (!char.IsLetter(c))
+                {
+                    continue;
+                }
+
+                bool belongs;
+                switch (codePage)
+                {
+                    case CodePageLatin:
+                    case CodePageLatinCzech:
+                    case CodePageLatinTurkish:
+                    case CodePageLatinPortuguese:
+                        belongs = c < 0x0250; // Basic Latin to Latin Extended-B
+                        break;
+                    case CodePageChineseTraditional:
+                    case CodePageChineseSimplified:
+                        belongs = c >= 0x4E00 && c <= 0x9FFF;
+                        break;
+                    case CodePageKorean:
+                        belongs = c >= 0xAC00 && c <= 0xD7A3 || c >= 0x4E00 && c <= 0x9FFF;
+                        break;
+                    case CodePageJapanese:
+                        belongs = c >= 0x3040 && c <= 0x30FF || c >= 0x4E00 && c <= 0x9FFF;
+                        break;
+                    default:
+                        belongs = IsInScript(codePage, c);
+                        break;
+                }
+
+                if (belongs)
+                {
+                    count++;
+                }
+            }
+
+            return count;
         }
 
         internal static string MakePacItalicsAndRemoveOtherTags(string text)
@@ -1544,6 +1620,11 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                     {
                         return true;
                     }
+
+                    if (fileName.EndsWith(RecoveryExtension, StringComparison.OrdinalIgnoreCase) && GetType() == typeof(Pac))
+                    {
+                        return IsRecoveryFile(fileName);
+                    }
                 }
             }
             catch
@@ -1552,6 +1633,19 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// A ".rac" file holds the same PAC subtitle records without the PAC file header, with
+        /// unrelated bytes between them (it looks like a recovery/autosave file).
+        /// </summary>
+        private const string RecoveryExtension = ".rac";
+
+        private static bool IsRecoveryFile(string fileName)
+        {
+            var subtitle = new Subtitle();
+            new Pac { CodePage = CodePageLatin }.LoadSubtitle(subtitle, null, fileName);
+            return subtitle.Paragraphs.Count(p => !string.IsNullOrWhiteSpace(p.Text) && p.EndTime.TotalMilliseconds > p.StartTime.TotalMilliseconds) >= 2;
         }
 
         public override string ToText(Subtitle subtitle, string title)
@@ -1563,6 +1657,12 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
         {
             _fileName = fileName;
             LoadSubtitle(subtitle, FileUtil.ReadAllBytesShared(fileName));
+            if (fileName != null && fileName.EndsWith(RecoveryExtension, StringComparison.OrdinalIgnoreCase))
+            {
+                // the bytes between the records can end in a record-like block with no text
+                subtitle.RemoveEmptyLines();
+                subtitle.Renumber();
+            }
         }
 
         public void LoadSubtitle(Subtitle subtitle, byte[] buffer)
@@ -1570,6 +1670,16 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             subtitle.Paragraphs.Clear();
             subtitle.Header = null;
             Analyze(buffer, out bool secondaryCodePageIsMain, out bool hasStory, out string language);
+
+            // Lines flagged "secondary code page" in a file that is mostly not flagged - their
+            // own code page (Russian lines in a Hebrew file) is detected from their language -
+            // unless the caller set the code page.
+            _detectedSecondaryCodePage = -1;
+            if (CodePage < 0 && SecondaryCodePage < 0 && !secondaryCodePageIsMain && _collectedLines == null && !IsFpc && HasSecondaryLineMarker(buffer))
+            {
+                _detectedSecondaryCodePage = DetectSecondaryCodePage(buffer);
+            }
+
             var index = 0;
             while (index < buffer.Length)
             {
@@ -1581,6 +1691,11 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             }
 
             subtitle.Renumber();
+
+            if (_collectedLines == null)
+            {
+                _lastDecodings = null; // detection is done - don't keep 13 decodings of the file alive
+            }
         }
 
         private void Analyze(byte[] buffer, out bool secondaryCodePageIsMain, out bool hasStory, out string language)
@@ -1632,7 +1747,12 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 }
             }
 
-            secondaryCodePageIsMain = secondaryUse > (hasStory && firstIsSecondary ? (total - 1) : 0);
+            // A majority vote, not "any line": the record search above also matches an 0xFE time
+            // code byte now and then, and one such false hit flagged "secondary" decoded every
+            // line of a Greek or Cyrillic file with the Latin code page.
+            var storyLines = hasStory ? 1 : 0;
+            var secondaryLines = secondaryUse - (hasStory && firstIsSecondary ? 1 : 0);
+            secondaryCodePageIsMain = secondaryLines * 2 > total - storyLines;
         }
 
         private double _lastStartTotalSeconds;
@@ -1754,7 +1874,12 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 GetCodePage(buffer, index, endDelimiter);
             }
 
-            var overrides = (CodePage == CodePageLatinTurkish) ? LatinTurkishOverrides : (CodePage == CodePageLatinPortuguese) ? LatinPortugueseOverrides : null;
+            // each text line has its own code page: a line flagged "secondary code page" can be
+            // another script than the rest (the Russian line of a Hebrew + Russian subtitle)
+            var isStoryLine = hasStory && isStory;
+            var lineCodePage = GetLineCodePage(isSecondaryCodePage, secondaryCodePageIsMain, isStoryLine, out var lineIsLatin);
+            var lineCodePages = new List<(int CodePage, bool IsLatin, bool IsSecondary)> { (lineCodePage, lineIsLatin, isSecondaryCodePage) };
+            var overrides = GetLatinOverrides(lineCodePage);
             var sb = new StringBuilder();
             try
             {
@@ -1798,8 +1923,11 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                         if (buffer[index] == 0xFE)
                         {
                             alignment = buffer[index + 1];
-                            isSecondaryCodePage = (alignment & 0x08) != 0;
+                            isSecondaryCodePage = (alignment & SecondaryCodePageFlag) != 0;
                             alignment &= 0x03; // bits 0-1 hold alignment (0=right, 1=left, 2=center); bit 2 (0x04) is the italic flag
+                            lineCodePage = GetLineCodePage(isSecondaryCodePage, secondaryCodePageIsMain, isStoryLine, out lineIsLatin);
+                            lineCodePages.Add((lineCodePage, lineIsLatin, isSecondaryCodePage));
+                            overrides = GetLatinOverrides(lineCodePage);
                             sb.AppendLine();
                             w16 = buffer[index + 3] == 0x1f && Encoding.ASCII.GetString(buffer, index + 4, 3) == "W16";
                             if (w16)
@@ -1815,17 +1943,25 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                             {
                                 sb.Append(Encoding.ASCII.GetString(buffer, index + 1, 1));
                             }
+                            else if (buffer[index] < 0x80)
+                            {
+                                // Bare single-byte character (files from older writers) - no valid
+                                // CJK double-byte sequence starts below 0x80, so consume just one
+                                // byte to keep the double-byte pairing aligned.
+                                sb.Append(Encoding.ASCII.GetString(buffer, index, 1));
+                                index--; // net advance of one byte (loop adds two)
+                            }
                             else if (buffer.Length > index + 1)
                             {
-                                if (CodePage == CodePageChineseSimplified)
+                                if (lineCodePage == CodePageChineseSimplified)
                                 {
                                     sb.Append(Encoding.GetEncoding(EncodingChineseSimplified).GetString(buffer, index, 2));
                                 }
-                                else if (CodePage == CodePageKorean)
+                                else if (lineCodePage == CodePageKorean)
                                 {
                                     sb.Append(Encoding.GetEncoding(EncodingKorean).GetString(buffer, index, 2));
                                 }
-                                else if (CodePage == CodePageJapanese)
+                                else if (lineCodePage == CodePageJapanese)
                                 {
                                     sb.Append(Encoding.GetEncoding(EncodingJapanese).GetString(buffer, index, 2));
                                 }
@@ -1841,8 +1977,11 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                     else if (buffer[index] == 0xFE)
                     {
                         alignment = buffer[index + 1];
-                        isSecondaryCodePage = (alignment & 0x08) != 0;
+                        isSecondaryCodePage = (alignment & SecondaryCodePageFlag) != 0;
                         alignment &= 0x03; // bits 0-1 hold alignment (0=right, 1=left, 2=center); bit 2 (0x04) is the italic flag
+                        lineCodePage = GetLineCodePage(isSecondaryCodePage, secondaryCodePageIsMain, isStoryLine, out lineIsLatin);
+                        lineCodePages.Add((lineCodePage, lineIsLatin, isSecondaryCodePage));
+                        overrides = GetLatinOverrides(lineCodePage);
                         sb.AppendLine();
                         index += 2;
                     }
@@ -1890,35 +2029,33 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                         // 0x0d == ???
                         // 0x1D == Color before is background/box color, default is white foreground, black background
                     }
-                    else if (CodePage == CodePageLatin || CodePage == CodePageLatinTurkish || CodePage == CodePageLatinCzech || CodePage == CodePageLatinPortuguese
-                             || (secondaryCodePageIsMain && !isSecondaryCodePage)
-                             || (hasStory && isStory))
+                    else if (lineIsLatin)
                     {
-                        sb.Append(GetLatinString(GetEncoding(CodePage), buffer, ref index, overrides));
+                        sb.Append(GetLatinString(GetEncoding(lineCodePage), buffer, ref index, overrides));
                     }
-                    else if (CodePage == CodePageArabic)
+                    else if (lineCodePage == CodePageArabic)
                     {
                         sb.Append(GetArabicString(buffer, ref index));
                     }
-                    else if (CodePage == CodePageHebrew)
+                    else if (lineCodePage == CodePageHebrew)
                     {
                         sb.Append(GetHebrewString(buffer, ref index));
                     }
-                    else if (CodePage == CodePageCyrillic)
+                    else if (lineCodePage == CodePageCyrillic)
                     {
                         sb.Append(GetCyrillicString(buffer, ref index));
                     }
-                    else if (CodePage == CodePageGreek)
+                    else if (lineCodePage == CodePageGreek)
                     {
                         sb.Append(GetGreekString(buffer, ref index, secondaryCodePageIsMain && isSecondaryCodePage));
                     }
-                    else if (CodePage == CodePageThai)
+                    else if (lineCodePage == CodePageThai)
                     {
                         sb.Append(GetThaiString(buffer, ref index));
                     }
                     else
                     {
-                        sb.Append(GetEncoding(CodePage).GetString(buffer, index, 1));
+                        sb.Append(GetEncoding(lineCodePage).GetString(buffer, index, 1));
                     }
 
                     index++;
@@ -1932,16 +2069,14 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 p.Text = sb.ToString();
                 p.Text = p.Text.Replace("\0", string.Empty);
                 p.Text = FixItalics(p.Text);
+                p.Text = FixRightToLeftLines(p.Text, lineCodePages);
 
-                if (!(secondaryCodePageIsMain && !isSecondaryCodePage) && !(hasStory && isStory))
+                if (_collectedLines != null && !isStoryLine)
                 {
-                    if (CodePage == CodePageArabic)
+                    var lines = p.Text.Split(new[] { Environment.NewLine }, StringSplitOptions.None);
+                    for (var i = 0; i < lines.Length; i++)
                     {
-                        p.Text = Utilities.FixEnglishTextInRightToLeftLanguage(p.Text, "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
-                    }
-                    else if (CodePage == CodePageHebrew)
-                    {
-                        p.Text = Utilities.FixEnglishTextInRightToLeftLanguage(p.Text, "0123456789abcdefghijklmnopqrstuvwxyz");
+                        _collectedLines.Add((paragraphIndex, lines[i], lineCodePages[Math.Min(i, lineCodePages.Count - 1)].IsSecondary));
                     }
                 }
 
@@ -2120,45 +2255,492 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             }
         }
 
+        /// <summary>
+        /// Screen's language codes, as written in the "Lang:" line of the story header (the same
+        /// codes are used in CHK files) - e.g. SIM = Simplified Chinese, DKO = Korean DVB.
+        /// Latin languages are left to <see cref="CodePageDetectionOrder"/>.
+        /// </summary>
+        private static readonly Dictionary<string, int> LanguageHeaderCodePages = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "DAR", CodePageArabic }, { "OAR", CodePageArabic }, { "ARA", CodePageArabic }, { "ARB", CodePageArabic },
+            { "ISR", CodePageHebrew }, { "HEB", CodePageHebrew },
+            { "GRC", CodePageGreek }, { "GRE", CodePageGreek }, { "ELL", CodePageGreek },
+            { "DRU", CodePageCyrillic }, { "RUS", CodePageCyrillic }, { "BGR", CodePageCyrillic }, { "MKD", CodePageCyrillic }, { "MNG", CodePageCyrillic }, { "UKR", CodePageCyrillic },
+            { "THA", CodePageThai },
+            { "TRD", CodePageChineseTraditional }, { "OCH", CodePageChineseTraditional }, { "CHT", CodePageChineseTraditional },
+            { "SIM", CodePageChineseSimplified }, { "CHS", CodePageChineseSimplified },
+            { "DJA", CodePageJapanese }, { "JPN", CodePageJapanese },
+            { "DKO", CodePageKorean }, { "KOR", CodePageKorean },
+            { "TUR", CodePageLatinTurkish },
+            { "POR", CodePageLatinPortuguese }, { "DPT", CodePageLatinPortuguese },
+            { "CSK", CodePageLatinCzech }, { "CZE", CodePageLatinCzech },
+        };
+
+        /// <summary>
+        /// Code pages to try, each with the languages that confirm it. The Latin family goes
+        /// first: the Greek, Cyrillic and Hebrew tables remap plain ASCII letters, so Latin text
+        /// read with them still "detects" as that language (Icelandic came out as Greek).
+        /// Non-Latin text read as Latin is rejected by <see cref="IsPlausibleDecoding"/> instead.
+        /// </summary>
+        private static readonly (int CodePage, string[] Languages)[] CodePageDetectionOrder =
+        {
+            (CodePageLatin, new[] { "en", "da", "no", "nb", "nn", "sv", "es", "it", "fr", "de", "nl", "pl", "sq", "hr", "sr", "bs", "sl", "ro", "id", "ms", "is", "fo", "fi", "et", "lv", "lt", "hu", "ca", "gl", "eu", "ga", "cy", "af", "tl", "sw", "mt", "vi" }),
+            (CodePageLatinCzech, new[] { "cs", "sk" }),
+            (CodePageLatinPortuguese, new[] { "pt" }),
+            (CodePageLatinTurkish, new[] { "tr" }),
+            (CodePageGreek, new[] { "el" }),
+            (CodePageCyrillic, new[] { "bg", "ru", "uk", "mk" }),
+            (CodePageHebrew, new[] { "he" }),
+            (CodePageArabic, new[] { "ar" }),
+            (CodePageThai, new[] { "th" }),
+            (CodePageKorean, new[] { "ko" }),
+            (CodePageJapanese, new[] { "ja" }),
+            (CodePageChineseTraditional, new[] { "zh" }),
+            (CodePageChineseSimplified, new[] { "zh" }),
+        };
+
         public static int AutoDetectEncoding(string fileName)
         {
-            var pac = new Pac();
             try
             {
-                var dictionary = new Dictionary<int, string>
-                {
-                    { CodePageLatin, "en-da-no-sv-es-it-fr-de-nl-pl-sq-hr-sr-ro-id" },
-                    { CodePageGreek, "el" },
-                    { CodePageLatinCzech, "cs-sk-cz" },
-                    { CodePageLatinPortuguese, "pt" },
-                    { CodePageLatinTurkish, "tr" },
-                    { CodePageCyrillic, "bg-ru-uk-mk" },
-                    { CodePageHebrew, "he" },
-                    { CodePageThai, "th" },
-                    { CodePageArabic, "ar" },
-                    { CodePageKorean, "ko" },
-                    { CodePageChineseTraditional, "zh" },
-                    { CodePageChineseSimplified, "zh" },
-                    { CodePageJapanese, "ja" }
-                };
-                foreach (var kvp in dictionary)
-                {
-                    var sub = new Subtitle();
-                    pac.CodePage = kvp.Key;
-                    pac.LoadSubtitle(sub, null, fileName);
-                    var languageCode = LanguageAutoDetect.AutoDetectGoogleLanguageOrNull(sub);
-                    if (languageCode != null && kvp.Value.Contains(languageCode))
-                    {
-                        return kvp.Key;
-                    }
-                }
+                return AutoDetectEncoding(FileUtil.ReadAllBytesShared(fileName));
             }
             catch
             {
-                // ignored
+                return CodePageLatin;
+            }
+        }
+
+        public static int AutoDetectEncoding(byte[] buffer)
+        {
+            try
+            {
+                var language = GetHeaderLanguage(buffer);
+                if (language != null && LanguageHeaderCodePages.TryGetValue(language, out var headerCodePage))
+                {
+                    return headerCodePage;
+                }
+
+                // With a few lines flagged "secondary code page", those are another language (the
+                // Russian lines of a Hebrew file) - the main code page is for the other lines. A
+                // file with mostly flagged lines has its main text in the flagged lines.
+                var decodings = DecodeWithEachCodePage(buffer);
+                var lines = decodings[0].Lines;
+                var secondaryLines = lines.Count(l => l.IsSecondary);
+                if (secondaryLines == 0)
+                {
+                    return PickCodePage(decodings.Select(d => (d.CodePage, d.Languages, d.Subtitle))) ?? CodePageLatin;
+                }
+
+                var mainIsSecondary = secondaryLines * 2 > lines.Count;
+                return PickCodePage(decodings.Select(d => (d.CodePage, d.Languages, ToSubtitle(d.Lines, l => l.IsSecondary == mainIsSecondary)))) ?? CodePageLatin;
+            }
+            catch
+            {
+                return CodePageLatin;
+            }
+        }
+
+        /// <summary>
+        /// Cheap check before the (13 decodes) secondary code page detection: is there any line
+        /// marker (0xFE, alignment, 0x03 or 0x00) with the secondary code page flag? Analyze only
+        /// sees the first line of each subtitle, so it misses a flagged second line.
+        /// </summary>
+        private static bool HasSecondaryLineMarker(byte[] buffer)
+        {
+            for (var i = 0; i < buffer.Length - 2; i++)
+            {
+                if (buffer[i] == 0xFE && (buffer[i + 1] & SecondaryCodePageFlag) != 0 && (buffer[i + 2] == 0x03 || buffer[i + 2] == 0x00))
+                {
+                    return true;
+                }
             }
 
-            return CodePageLatin;
+            return false;
+        }
+
+        /// <summary>
+        /// The code page of the lines flagged "secondary code page", from their language; -1
+        /// when there are none or their language is not recognized.
+        /// </summary>
+        private static int DetectSecondaryCodePage(byte[] buffer)
+        {
+            try
+            {
+                var decodings = DecodeWithEachCodePage(buffer);
+                if (!decodings[0].Lines.Any(l => l.IsSecondary))
+                {
+                    return -1;
+                }
+
+                // real words only - flagged lines can be in the main script too (e.g. a large font line)
+                return PickCodePage(decodings.Select(d => (d.CodePage, d.Languages, ToSubtitle(d.Lines, l => l.IsSecondary))), true) ?? -1;
+            }
+            catch
+            {
+                return -1;
+            }
+        }
+
+        // Opening a file detects the main and the secondary code page from the same buffer - decode it once.
+        private static volatile Tuple<byte[], List<(int CodePage, string[] Languages, Subtitle Subtitle, List<(int Paragraph, string Text, bool IsSecondary)> Lines)>> _lastDecodings;
+
+        private static List<(int CodePage, string[] Languages, Subtitle Subtitle, List<(int Paragraph, string Text, bool IsSecondary)> Lines)> DecodeWithEachCodePage(byte[] buffer)
+        {
+            var cached = _lastDecodings;
+            if (cached != null && ReferenceEquals(cached.Item1, buffer))
+            {
+                return cached.Item2;
+            }
+
+            var decodings = DecodeWithEachCodePageUncached(buffer);
+            _lastDecodings = Tuple.Create(buffer, decodings);
+            return decodings;
+        }
+
+        private static List<(int CodePage, string[] Languages, Subtitle Subtitle, List<(int Paragraph, string Text, bool IsSecondary)> Lines)> DecodeWithEachCodePageUncached(byte[] buffer)
+        {
+            var result = new List<(int, string[], Subtitle, List<(int, string, bool)>)>();
+            foreach (var (codePage, languages) in CodePageDetectionOrder)
+            {
+                // every line in the same code page, flagged or not - the caller picks the lines
+                var pac = new Pac { CodePage = codePage, SecondaryCodePage = codePage, _collectedLines = new List<(int, string, bool)>() };
+                var sub = new Subtitle();
+                pac.LoadSubtitle(sub, buffer);
+                result.Add((codePage, languages, sub, pac._collectedLines));
+            }
+
+            return result;
+        }
+
+        /// <summary>The selected lines, one subtitle per PAC subtitle so the language detection sees the same shape.</summary>
+        private static Subtitle ToSubtitle(List<(int Paragraph, string Text, bool IsSecondary)> lines, Func<(int Paragraph, string Text, bool IsSecondary), bool> include)
+        {
+            var subtitle = new Subtitle();
+            foreach (var group in lines.Where(include).GroupBy(l => l.Paragraph))
+            {
+                subtitle.Paragraphs.Add(new Paragraph(string.Join(Environment.NewLine, group.Select(l => l.Text)), 0, 0));
+            }
+
+            return subtitle;
+        }
+
+        /// <summary>
+        /// Fewer Latin keyword hits than this are weak: gibberish from a wrong code page hits a
+        /// short word or two too (Greek read as Latin "was" Estonian).
+        /// </summary>
+        private const int MinStrongWordScore = 3;
+
+        private static int? PickCodePage(IEnumerable<(int CodePage, string[] Languages, Subtitle Subtitle)> candidates, bool requireStrongWordHits = false)
+        {
+            var decodings = candidates.ToList();
+
+            // Real words first, and the code page with the most of them.
+            // Korean/Japanese word hits beat Chinese: Chinese is scored by common characters,
+            // and Korean read as GB2312 is full of valid (if meaningless) hanzi.
+            var bestCodePage = -1;
+            var bestScore = 0;
+            var bestIsKoreanOrJapanese = false;
+            foreach (var (codePage, languages, sub) in decodings)
+            {
+                var languageCode = LanguageAutoDetect.AutoDetectGoogleLanguageFromWordsOrNull(sub, out var score);
+                if (languageCode == null || Array.IndexOf(languages, languageCode) < 0 || !IsPlausibleDecoding(codePage, sub))
+                {
+                    continue;
+                }
+
+                var isKoreanOrJapanese = codePage == CodePageKorean || codePage == CodePageJapanese;
+                if (isKoreanOrJapanese && !bestIsKoreanOrJapanese || isKoreanOrJapanese == bestIsKoreanOrJapanese && score > bestScore)
+                {
+                    bestCodePage = codePage;
+                    bestScore = score;
+                    bestIsKoreanOrJapanese = isKoreanOrJapanese;
+                }
+            }
+
+            if (requireStrongWordHits)
+            {
+                return bestCodePage >= 0 && bestScore >= MinStrongWordScore ? bestCodePage : (int?)null;
+            }
+
+            if (bestCodePage >= 0 && (bestScore >= MinStrongWordScore || !IsLatinCodePage(bestCodePage)))
+            {
+                return bestCodePage;
+            }
+
+            // Only ASCII bytes and no real words: Latin - the Greek and Cyrillic tables remap
+            // ASCII letters, so "OK." or "Hello" would otherwise "detect" as Greek or Russian.
+            var latin = decodings.FirstOrDefault(d => d.CodePage == CodePageLatin).Subtitle;
+            if (latin != null && latin.Paragraphs.All(p => p.Text.All(c => c < 0x80)))
+            {
+                return CodePageLatin;
+            }
+
+            // letter statistics also accept text decoded with the wrong code page, so they
+            // only decide when no code page gives (enough) dictionary words
+            var letterMatches = decodings.Where(d =>
+            {
+                var languageCode = LanguageAutoDetect.AutoDetectGoogleLanguageOrNull(d.Subtitle);
+                return languageCode != null && Array.IndexOf(d.Languages, languageCode) >= 0 && IsPlausibleDecoding(d.CodePage, d.Subtitle);
+            }).ToList();
+
+            // a few Latin word hits lose to a decoding that is all in its own script - the one
+            // with the most letters (Thai read as Hebrew or Arabic loses letters to vowel points)
+            var dominantCodePage = -1;
+            var dominantLetters = 0;
+            foreach (var (codePage, _, sub) in letterMatches)
+            {
+                var letters = CountDominantScriptLetters(codePage, sub);
+                if (letters > dominantLetters)
+                {
+                    dominantCodePage = codePage;
+                    dominantLetters = letters;
+                }
+            }
+
+            if (dominantCodePage >= 0)
+            {
+                return dominantCodePage;
+            }
+
+            if (bestCodePage >= 0)
+            {
+                return bestCodePage;
+            }
+
+            return letterMatches.Count > 0 ? letterMatches[0].CodePage : (int?)null;
+        }
+
+        /// <summary>
+        /// Nearly all letters in the code page's own script, for the scripts whose table keeps
+        /// ASCII letters as they are - and for Greek, real Greek: final sigma only at the end of
+        /// a word (Latin read with the Greek table has "ς" for "r" and "σ" for a final "s").
+        /// Returns the number of letters in the script, or 0.
+        /// </summary>
+        private static int CountDominantScriptLetters(int codePage, Subtitle subtitle)
+        {
+            if (codePage != CodePageGreek && codePage != CodePageHebrew && codePage != CodePageArabic && codePage != CodePageThai)
+            {
+                return 0;
+            }
+
+            int letters = 0, script = 0;
+            foreach (var p in subtitle.Paragraphs)
+            {
+                var text = p.Text;
+                for (var i = 0; i < text.Length; i++)
+                {
+                    var c = text[i];
+                    if (!char.IsLetter(c))
+                    {
+                        continue;
+                    }
+
+                    letters++;
+                    if (IsInScript(codePage, c))
+                    {
+                        script++;
+                    }
+
+                    if (codePage == CodePageGreek)
+                    {
+                        var nextIsLetter = i + 1 < text.Length && char.IsLetter(text[i + 1]);
+                        if (c == 'ς' && nextIsLetter || c == 'σ' && !nextIsLetter)
+                        {
+                            return 0;
+                        }
+                    }
+                }
+            }
+
+            return letters > 0 && script >= letters * 0.9 ? script : 0;
+        }
+
+        private static bool IsLatinCodePage(int codePage)
+        {
+            return codePage == CodePageLatin || codePage == CodePageLatinCzech || codePage == CodePageLatinTurkish || codePage == CodePageLatinPortuguese;
+        }
+
+        private static Dictionary<int, SpecialCharacter> GetLatinOverrides(int codePage)
+        {
+            return codePage == CodePageLatinTurkish ? LatinTurkishOverrides : codePage == CodePageLatinPortuguese ? LatinPortugueseOverrides : null;
+        }
+
+        /// <summary>
+        /// The code page for one text line, and whether it is read as Latin. Story (header) lines
+        /// are Latin. A file with mostly "secondary code page" lines has its other lines in Latin.
+        /// </summary>
+        private int GetLineCodePage(bool isSecondaryLine, bool secondaryCodePageIsMain, bool isStoryLine, out bool isLatin)
+        {
+            int codePage;
+            if (isStoryLine)
+            {
+                codePage = CodePage;
+                isLatin = true;
+                return codePage;
+            }
+
+            if (SecondaryCodePage >= 0)
+            {
+                codePage = isSecondaryLine ? SecondaryCodePage : CodePage;
+            }
+            else if (isSecondaryLine && _detectedSecondaryCodePage >= 0)
+            {
+                codePage = _detectedSecondaryCodePage;
+            }
+            else
+            {
+                codePage = CodePage;
+                if (secondaryCodePageIsMain && !isSecondaryLine)
+                {
+                    isLatin = true;
+                    return codePage;
+                }
+            }
+
+            isLatin = IsLatinCodePage(codePage);
+            return codePage;
+        }
+
+        /// <summary>Arabic/Hebrew lines are stored in visual order - put their Latin/number runs back.</summary>
+        private static string FixRightToLeftLines(string text, List<(int CodePage, bool IsLatin, bool IsSecondary)> lineCodePages)
+        {
+            if (!lineCodePages.Any(l => !l.IsLatin && (l.CodePage == CodePageArabic || l.CodePage == CodePageHebrew)))
+            {
+                return text;
+            }
+
+            var lines = text.Split(new[] { Environment.NewLine }, StringSplitOptions.None);
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var (codePage, isLatin, _) = lineCodePages[Math.Min(i, lineCodePages.Count - 1)];
+                if (isLatin)
+                {
+                    continue;
+                }
+
+                if (codePage == CodePageArabic)
+                {
+                    lines[i] = Utilities.FixEnglishTextInRightToLeftLanguage(lines[i], "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
+                }
+                else if (codePage == CodePageHebrew)
+                {
+                    lines[i] = Utilities.FixEnglishTextInRightToLeftLanguage(lines[i], "0123456789abcdefghijklmnopqrstuvwxyz");
+                }
+            }
+
+            return string.Join(Environment.NewLine, lines);
+        }
+
+        /// <summary>
+        /// The "Lang:" value from the story header at the start of the file (e.g. "LANG:DKO").
+        /// </summary>
+        private static string GetHeaderLanguage(byte[] buffer)
+        {
+            var max = Math.Min(buffer.Length, 1024) - 8;
+            for (var i = 0; i < max; i++)
+            {
+                if ((buffer[i] == 'L' || buffer[i] == 'l') &&
+                    (buffer[i + 1] == 'A' || buffer[i + 1] == 'a') &&
+                    (buffer[i + 2] == 'N' || buffer[i + 2] == 'n') &&
+                    (buffer[i + 3] == 'G' || buffer[i + 3] == 'g') &&
+                    buffer[i + 4] == ':')
+                {
+                    var start = i + 5;
+                    var end = start;
+                    while (end < buffer.Length && end - start < 8 && buffer[end] > 0x20 && buffer[end] < 0x7F)
+                    {
+                        end++;
+                    }
+
+                    return end > start ? Encoding.ASCII.GetString(buffer, start, end - start) : null;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// The language detector falls back to letter statistics, so a wrong code page can still
+        /// "detect" as a plausible language: Thai read as Latin is full of Ê/Ñ/Õ (Spanish), and
+        /// Simplified Chinese read as Korean is a hangul/hanja mix. Check the script as well.
+        /// </summary>
+        private static bool IsPlausibleDecoding(int codePage, Subtitle subtitle)
+        {
+            int letters = 0, ascii = 0, hangul = 0, han = 0, kana = 0, script = 0;
+            foreach (var p in subtitle.Paragraphs)
+            {
+                foreach (var c in p.Text)
+                {
+                    if (!char.IsLetter(c))
+                    {
+                        continue;
+                    }
+
+                    letters++;
+                    if (c < 0x80)
+                    {
+                        ascii++;
+                    }
+                    else if (c >= 0xAC00 && c <= 0xD7A3)
+                    {
+                        hangul++;
+                    }
+                    else if (c >= 0x4E00 && c <= 0x9FFF)
+                    {
+                        han++;
+                    }
+                    else if (c >= 0x3040 && c <= 0x30FF) // hiragana + full-width katakana, not the half-width katakana wrong code pages produce
+                    {
+                        kana++;
+                    }
+                    else if (IsInScript(codePage, c))
+                    {
+                        script++;
+                    }
+                }
+            }
+
+            switch (codePage)
+            {
+                case CodePageLatin:
+                case CodePageLatinCzech:
+                case CodePageLatinPortuguese:
+                case CodePageLatinTurkish:
+                    return letters > 0 && ascii >= letters * 0.7;
+                case CodePageKorean:
+                    return hangul > 0 && hangul >= (hangul + han) * 0.8;
+                case CodePageJapanese:
+                    return kana > 0 && kana >= (kana + han) * 0.2;
+                case CodePageGreek:
+                case CodePageCyrillic:
+                case CodePageHebrew:
+                case CodePageArabic:
+                case CodePageThai:
+                    // most letters in the code page's own script (some Latin credits are fine)
+                    return script > 0 && script >= letters * 0.6;
+                default:
+                    return true;
+            }
+        }
+
+        private static bool IsInScript(int codePage, char c)
+        {
+            switch (codePage)
+            {
+                case CodePageGreek:
+                    return c >= 0x0370 && c <= 0x03FF || c >= 0x1F00 && c <= 0x1FFF;
+                case CodePageCyrillic:
+                    return c >= 0x0400 && c <= 0x04FF;
+                case CodePageHebrew:
+                    return c >= 0x0590 && c <= 0x05FF || c >= 0xFB1D && c <= 0xFB4F;
+                case CodePageArabic:
+                    return c >= 0x0600 && c <= 0x06FF || c >= 0x0750 && c <= 0x077F || c >= 0xFB50 && c <= 0xFDFF || c >= 0xFE70 && c <= 0xFEFF;
+                case CodePageThai:
+                    return c >= 0x0E00 && c <= 0x0E7F;
+                default:
+                    return false;
+            }
         }
 
         private void GetCodePage(byte[] buffer, int index, int endDelimiter)
@@ -2167,9 +2749,17 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             {
                 if (CodePage == -1)
                 {
-                    CodePage = AutoDetectEncoding(_fileName);
+                    CodePage = buffer != null ? AutoDetectEncoding(buffer) : AutoDetectEncoding(_fileName);
                 }
 
+                return;
+            }
+
+            // no code page picker is registered (Subtitle Edit 5) - detect instead of silently
+            // decoding every PAC with the fallback Latin (Czech) code page below
+            if (GetPacEncodingImplementation == null && buffer != null)
+            {
+                CodePage = AutoDetectEncoding(buffer);
                 return;
             }
 
@@ -2227,7 +2817,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             var extra = 0;
             while (i < text.Length)
             {
-                if (text.Substring(i).StartsWith(Environment.NewLine, StringComparison.Ordinal))
+                if (text.AsSpan(i).StartsWith(Environment.NewLine.AsSpan(), StringComparison.Ordinal))
                 {
                     buffer[i + extra] = 0xfe;
                     i++;
@@ -2322,7 +2912,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             var extra = 0;
             while (i < text.Length)
             {
-                if (text.Substring(i).StartsWith(Environment.NewLine, StringComparison.Ordinal))
+                if (text.AsSpan(i).StartsWith(Environment.NewLine.AsSpan(), StringComparison.Ordinal))
                 {
                     buffer[i + extra] = 0xfe;
                     i++;
@@ -2450,9 +3040,22 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                     result.Add(0x36); // 6
                     result.Add(0x2e); // ?
 
-                    foreach (var b in Encoding.GetEncoding(encoding).GetBytes(line))
+                    // The reader consumes W16 text two bytes at a time and expects single-byte
+                    // characters to be 0x00-prefixed - a bare ASCII byte (e.g. a space between
+                    // Hangul words) would shift the double-byte pairing for the rest of the line.
+                    var lineEncoding = Encoding.GetEncoding(encoding);
+                    foreach (var ch in line)
                     {
-                        result.Add(b);
+                        var charBytes = lineEncoding.GetBytes(ch.ToString());
+                        if (charBytes.Length == 1)
+                        {
+                            result.Add(0);
+                        }
+
+                        foreach (var b in charBytes)
+                        {
+                            result.Add(b);
+                        }
                     }
                 }
                 firstLine = false;
@@ -2767,9 +3370,49 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             return new TimeCode();
         }
 
+        /// <summary>
+        /// Character-to-code lookups for the code tables, built once per table. The tables are
+        /// static and are keyed by code, so <see cref="Find"/> used to LINQ-scan all ~350
+        /// entries (allocating three enumerators) for every character of every line written -
+        /// twice per character in <see cref="GetLatinBytes"/>.
+        /// </summary>
+        private static readonly ConcurrentDictionary<Dictionary<int, SpecialCharacter>, Dictionary<string, KeyValuePair<int, SpecialCharacter>>> ReverseCodeLookups =
+            new ConcurrentDictionary<Dictionary<int, SpecialCharacter>, Dictionary<string, KeyValuePair<int, SpecialCharacter>>>();
+
+        private static Dictionary<string, KeyValuePair<int, SpecialCharacter>> GetReverseCodeLookup(Dictionary<int, SpecialCharacter> list)
+        {
+            return ReverseCodeLookups.GetOrAdd(list, source =>
+            {
+                // First entry wins, matching Where(...).FirstOrDefault() over the table's own
+                // enumeration order.
+                var lookup = new Dictionary<string, KeyValuePair<int, SpecialCharacter>>(source.Count, StringComparer.Ordinal);
+                foreach (var kvp in source)
+                {
+                    var character = kvp.Value.Character;
+                    if (character != null && !lookup.ContainsKey(character))
+                    {
+                        lookup.Add(character, kvp);
+                    }
+                }
+
+                return lookup;
+            });
+        }
+
         private static KeyValuePair<int, SpecialCharacter>? Find(Dictionary<int, SpecialCharacter> list, string letter)
         {
-            return list?.Where(c => c.Value.Character == letter).Cast<KeyValuePair<int, SpecialCharacter>?>().FirstOrDefault();
+            if (list == null)
+            {
+                return null;
+            }
+
+            if (letter == null)
+            {
+                // "c.Value.Character == null" never held: every table entry carries a character.
+                return null;
+            }
+
+            return GetReverseCodeLookup(list).TryGetValue(letter, out var found) ? found : (KeyValuePair<int, SpecialCharacter>?)null;
         }
 
         internal struct SpecialCharacter

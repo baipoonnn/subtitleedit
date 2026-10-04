@@ -1,4 +1,5 @@
 ﻿using Nikse.SubtitleEdit.UiLogic.AutoTranslate;
+using Nikse.SubtitleEdit.UiLogic.BatchConvert;
 
 namespace Nikse.SubtitleEdit.Logic.Config;
 
@@ -7,6 +8,12 @@ public class SeBatchConvert
     public string[] ActiveFunctions { get; set; } = [];
     public string OutputFolder { get; set; }
     public bool Overwrite { get; set; }
+
+    /// <summary>Give output files the source file's modified/created date instead of the conversion time.</summary>
+    public bool KeepSourceTimestamp { get; set; }
+
+    /// <summary>Keep the computer from going to sleep on idle while a batch runs (#15222).</summary>
+    public bool PreventSleep { get; set; }
     public string TargetFormat { get; set; }
     public string CustomTextFormatName { get; set; } = string.Empty;
     public string TargetEncoding { get; set; }
@@ -14,6 +21,9 @@ public class SeBatchConvert
     public string TesseractLanguage { get; set; }
     public int TesseractEngineMode { get; set; }
     public string PaddleLanguage { get; set; }
+
+    /// <summary>Apple Vision's recognition language, as its BCP-47 tag. macOS only.</summary>
+    public string AppleVisionLanguage { get; set; }
     public string BinaryOcrDatabase { get; set; }
     public string NOcrBinaryOcrFallbackDatabase { get; set; }
     public string BinaryOcrNOcrFallbackDatabase { get; set; }
@@ -76,11 +86,25 @@ public class SeBatchConvert
     public string AssaChangeStyleToStyle { get; set; }
     public bool AssaChangeStyleTrimUnusedStyles { get; set; }
 
+    public bool AssaChangeStylePropertiesSetSpacing { get; set; }
+    public decimal AssaChangeStylePropertiesSpacing { get; set; }
+    public bool AssaChangeStylePropertiesSetAlignment { get; set; }
+    public string AssaChangeStylePropertiesAlignment { get; set; }
+
     public bool SaveInSourceFolder { get; set; }
 
     public string AutoTranslateEngine { get; set; }
     public string AutoTranslateSourceLanguage { get; set; }
     public string AutoTranslateTargetLanguage { get; set; }
+    /// <summary>Codes of the extra languages to translate into besides the "To" language, comma separated.</summary>
+    public string AutoTranslateExtraTargetLanguages { get; set; }
+
+    /// <summary>
+    /// Batch convert's own "use external server" switch for the llama.cpp engines - independent of
+    /// the Auto-translate window's <see cref="SeAutoTranslate.LlamaCppUseRemoteServer"/> (#14005).
+    /// The server URL itself is shared via <see cref="SeAutoTranslate.LlamaCppApiUrl"/>.
+    /// </summary>
+    public bool LlamaCppUseRemoteServer { get; set; }
 
     public string ChangeCasingType { get; set; }
     public bool NormalCasingFixNames { get; set; }
@@ -92,6 +116,10 @@ public class SeBatchConvert
     public bool AssaUseSourceStylesIfPossible { get; set; }
     public string AssaHeader { get; set; }
     public string AssaFooter { get; set; }
+    /// <summary>When the ASSA header template replaces a source file's header, keep the source's embedded fonts (footer).</summary>
+    public bool AssaKeepSourceEmbeddedFonts { get; set; }
+
+    public bool AssaEmbedFontsTrim { get; set; }
 
     public int MergeShortLinesMaxCharacters { get; set; }
     public int MergeShortLinesMaxMillisecondsBetweenLines { get; set; }
@@ -109,6 +137,19 @@ public class SeBatchConvert
     public bool BeautifyTimeCodesUseFixedFrameRate { get; set; }
     public double BeautifyTimeCodesFixedFrameRate { get; set; }
 
+    public bool SnapTimeCodesToFramesUseFixedFrameRate { get; set; }
+    public double SnapTimeCodesToFramesFixedFrameRate { get; set; }
+
+    public bool ConvertColorsToDialogRemoveColorTags { get; set; }
+    public bool ConvertColorsToDialogAddNewLines { get; set; }
+    public bool ConvertColorsToDialogReBreakLines { get; set; }
+
+    /// <summary>
+    /// "Add folder" (and dropping a folder on the file list) also picks up files in subfolders.
+    /// Off by default - a recursive scan of a big tree or a network share can take a while.
+    /// </summary>
+    public bool ScanFolderRecursive { get; set; }
+
     public bool ImageAdjustBrightnessOn { get; set; }
     public double ImageAdjustBrightness { get; set; }
     public double ImageAdjustContrast { get; set; }
@@ -119,20 +160,55 @@ public class SeBatchConvert
     public bool ImageAdjustColorOn { get; set; }
     public string ImageAdjustColorValue { get; set; } = "#FFFFFFFF";
 
+    // Transport Stream output settings (SE4's "TS settings..."), see TransportStreamExportSettings.
+    public bool TsOverrideXPosition { get; set; }
+    public string TsOverrideHAlign { get; set; } = TransportStreamExportSettings.HAlignCenter;
+    public int TsOverrideHMargin { get; set; } = 5; // percent
+    public bool TsOverrideYPosition { get; set; }
+    public int TsOverrideBottomMargin { get; set; } = 5; // percent
+    public bool TsOverrideScreenSize { get; set; }
+    public int TsScreenWidth { get; set; } = 1920;
+    public int TsScreenHeight { get; set; } = 1080;
+    public string TsFileNameAppend { get; set; } = "." + TransportStreamExportSettings.PlaceholderTwoLetter;
+    public bool TsOnlyTeletext { get; set; }
+
+    public TransportStreamExportSettings GetTransportStreamExportSettings()
+    {
+        return new TransportStreamExportSettings
+        {
+            OverrideXPosition = TsOverrideXPosition,
+            HAlign = TsOverrideHAlign ?? TransportStreamExportSettings.HAlignCenter,
+            HMarginPercent = TsOverrideHMargin,
+            OverrideYPosition = TsOverrideYPosition,
+            BottomMarginPercent = TsOverrideBottomMargin,
+            OverrideScreenSize = TsOverrideScreenSize,
+            ScreenWidth = TsScreenWidth,
+            ScreenHeight = TsScreenHeight,
+            FileNameAppend = TsFileNameAppend ?? string.Empty,
+            OnlyTeletext = TsOnlyTeletext,
+        };
+    }
+
     public SeBatchConvert()
     {
         OutputFolder = string.Empty;
         SaveInSourceFolder = true;
         TargetFormat = string.Empty;
         TargetEncoding = string.Empty;
-        OcrEngine = "Tesseract";
+        // See SeOcr.Engine: on macOS the built-in recognizer needs no install, while the
+        // Tesseract default would send a fresh Mac user to Homebrew before the first batch run.
+        OcrEngine = System.OperatingSystem.IsMacOS()
+            ? Features.Ocr.Engines.AppleVisionOcr.StaticName
+            : "Tesseract";
         TesseractLanguage = "eng";
         TesseractEngineMode = 3; // Default, based on what is available (tesseract --oem)
         PaddleLanguage = "en";
+        AppleVisionLanguage = "en-US";
         BinaryOcrDatabase = "Latin";
         NOcrBinaryOcrFallbackDatabase = string.Empty;
         BinaryOcrNOcrFallbackDatabase = string.Empty;
         VobSubIsolateColors = true;
+        PreventSleep = true;
         OffsetTimeCodesForward = true;
         AdjustVia = "Seconds";
         AdjustDurationSeconds = 0.1;
@@ -154,9 +230,14 @@ public class SeBatchConvert
         AssaChangeStyleFromStyle = string.Empty;
         AssaChangeStyleToStyle = string.Empty;
         AssaChangeStyleTrimUnusedStyles = false;
+        AssaChangeStylePropertiesSetSpacing = true;
+        AssaChangeStylePropertiesSpacing = 0;
+        AssaChangeStylePropertiesSetAlignment = false;
+        AssaChangeStylePropertiesAlignment = "an2";
         AutoTranslateEngine = new OllamaTranslate().Name;
         AutoTranslateSourceLanguage = "auto";
         AutoTranslateTargetLanguage = "en";
+        AutoTranslateExtraTargetLanguages = string.Empty;
         ChangeCasingType = "Normal";
         NormalCasingFixNames = true;
         FixRtlMode = "ReverseStartEnd";
@@ -165,6 +246,7 @@ public class SeBatchConvert
         AssaUseSourceStylesIfPossible = true;
         AssaHeader = string.Empty;
         AssaFooter = string.Empty;
+        AssaKeepSourceEmbeddedFonts = false;
 
         MergeShortLinesMaxCharacters = 55;
         MergeShortLinesMaxMillisecondsBetweenLines = 250;
@@ -180,5 +262,9 @@ public class SeBatchConvert
 
         BeautifyTimeCodesSnapToShotChanges = true;
         BeautifyTimeCodesFixedFrameRate = 23.976;
+
+        SnapTimeCodesToFramesFixedFrameRate = 23.976;
+
+        ConvertColorsToDialogRemoveColorTags = true;
     }
 }

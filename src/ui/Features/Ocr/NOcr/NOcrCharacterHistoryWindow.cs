@@ -55,10 +55,10 @@ public class NOcrCharacterHistoryWindow : Window
 
         vm.TextBoxNew.KeyDown += vm.TextBoxNewOnKeyDown;
 
-        Activated += delegate
+        UiUtil.FocusOnFirstActivation(this, () =>
         {
             vm.TextBoxNew.Focus(); // hack to make OnKeyDown work
-        };
+        });
         PointerWheelChanged += vm.PointerWheelChanged;
         KeyDown += (_, e) => vm.KeyDown(e);
         KeyUp += (_, e) => vm.KeyUp(e);
@@ -70,7 +70,7 @@ public class NOcrCharacterHistoryWindow : Window
         var listBoxCurrentItems = new ListBox
         {
             Margin = new Thickness(0, 5, 0, 0),
-        };
+        }.WithAccessibleName(Se.Language.General.History);
         listBoxCurrentItems.Bind(Avalonia.Controls.Primitives.SelectingItemsControl.SelectedItemProperty, new Binding(nameof(vm.SelectedHistoryItem)));
         listBoxCurrentItems.Bind(ItemsControl.ItemsSourceProperty, new Binding(nameof(vm.HistoryItems)));
         listBoxCurrentItems.SelectionChanged += vm.HistoryItemChanged;
@@ -96,10 +96,10 @@ public class NOcrCharacterHistoryWindow : Window
             Width = double.NaN,
         };
 
-        vm.TextBoxNew = UiUtil.MakeTextBox(100, vm, nameof(vm.NewText));
+        vm.TextBoxNew = UiUtil.MakeTextBox(100, vm, nameof(vm.NewText)).WithAccessibleName(Se.Language.General.Text);
         if (!string.IsNullOrEmpty(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName))
         {
-            vm.TextBoxNew.FontFamily = new FontFamily(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName);
+            vm.TextBoxNew.FontFamily = FontFamilyHelper.Make(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName);
         }
         var image = new Image
         {
@@ -114,7 +114,7 @@ public class NOcrCharacterHistoryWindow : Window
 
         var panelCurrentImage = new StackPanel
         {
-            Background = new SolidColorBrush(Colors.LightGray),
+            Background = ImagePreviewBackground.CreateBrush(),
             Children = { image },
             HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
             Margin = new Thickness(5, 2, 0, 5),

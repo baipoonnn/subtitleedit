@@ -14,6 +14,7 @@ public class SeTools
     public SeAdjustDisplayDurations AdjustDurations { get; set; } = new();
     public SeApplyDurationLimits ApplyDurationLimits { get; set; } = new();
     public SeBridgeGaps BridgeGaps { get; set; } = new();
+    public SeImproveTimeCodes ImproveTimeCodes { get; set; } = new();
     public SeChangeFormatting ChangeFormatting { get; set; } = new();
     public SeBatchConvert BatchConvert { get; set; } = new();
     public SeChangeCasing ChangeCasing { get; set; } = new();
@@ -67,6 +68,7 @@ public class SeTools
     public bool GoToFirstAndLastLineAlsoSetVideoPosition { get; set; }
     public bool SplitRebalanceLongLinesSplit { get; set; }
     public bool SplitRebalanceLongLinesRebalance { get; set; }
+    public bool SplitRebalanceLongLinesRebalanceOnlyTooLong { get; set; }
     public int SplitRebalanceLongLinesSingleLineMaxLength { get; set; }
     public int SplitRebalanceLongLinesMaxNumberOfLines { get; set; }
     public int SplitRebalanceLongLinesUnbreakShorterThan { get; set; }
@@ -76,9 +78,15 @@ public class SeTools
     // every one of these is >= 1 in the UI. Same shape as the split/rebalance keys above (#13514).
     public int MergeShortLinesSingleLineMaxLength { get; set; }
     public int MergeShortLinesMaxNumberOfLines { get; set; }
+    public int MergeContinuationLinesMaxGapMs { get; set; } // 0 is a valid gap, so this one defaults to 500
+    public int MergeContinuationLinesMaxCharacters { get; set; }
     public int ApplyDurationLimitsMinDurationMs { get; set; }
     public int ApplyDurationLimitsMaxDurationMs { get; set; }
-    public int ApplyMinGapMsOrFrames { get; set; }
+
+    // Two keys, not one: the Apply minimum gap box holds frames in frame mode and milliseconds
+    // otherwise, so a single number came back in the wrong unit after a time-format switch.
+    public int ApplyMinGapMilliseconds { get; set; }
+    public int ApplyMinGapFrames { get; set; }
     public string UnicodeSymbolsToInsert { get; set; }
     public string MusicSymbol { get; set; }
     public string MusicSymbolReplace { get; set; }
@@ -103,18 +111,9 @@ public class SeTools
     public bool BinEditPositionMonitorTitleSafeOn { get; set; }
     public double BinEditPositionMonitorTitleSafePercent { get; set; }
 
+    // Import plain text. Only the three options the dialog actually has are kept - the other
+    // twelve SE4-shaped keys here were written to Settings.json and read by nothing at all.
     public string ImportTextSplitting { get; set; }
-    public string ImportTextSplittingLineMode { get; set; }
-    public string ImportTextLineBreak { get; set; }
-    public bool ImportTextMergeShortLines { get; set; }
-    public bool ImportTextAutoSplitAtBlank { get; set; }
-    public bool ImportTextRemoveLinesNoLetters { get; set; }
-    public bool ImportTextGenerateTimeCodes { get; set; }
-    public bool ImportTextAutoBreak { get; set; }
-    public bool ImportTextAutoBreakAtEnd { get; set; }
-    public int ImportTextGap { get; set; }
-    public int ImportTextAutoSplitNumberOfLines { get; set; }
-    public string ImportTextAutoBreakAtEndMarkerText { get; set; }
     public bool ImportTextDurationAuto { get; set; }
     public int ImportTextFixedDuration { get; set; }
 
@@ -126,11 +125,18 @@ public class SeTools
     public string LastColorPickerColor5 { get; set; }
     public string LastColorPickerColor6 { get; set; }
     public string LastColorPickerColor7 { get; set; }
-    public bool ImportTextTryToFindTimeCodes { get; set; }
+    // Mirrored onto Configuration.Settings.Tools.RememberUseAlwaysList, which SpellCheckWordLists
+    // guards every load/save of "<lang>_UseAlways.xml" with. Nothing in SE5 ever set that flag, so
+    // "Change all" in spell check was a no-op that never survived the session.
+    public bool SpellCheckRememberUseAlwaysList { get; set; }
+    public bool FixShortDisplayTimesAllowMoveStartTime { get; set; }
     public bool SpeechToTextSelectedLinesPromptFirstTimeOnly { get; set; }
     public bool MultipleReplaceShowDotDotDotButtons { get; set; }
     public bool GridFocusTextboxAfterInsertNew { get; set; }
+    public bool UndoRedoGoToChangedLine { get; set; }
     public bool TextToSpeechPromptMergeContinuationLines { get; set; }
+    public bool TextToSpeechPromptSkipNoiseLines { get; set; }
+    public bool TextToSpeechPromptDetectSpeakers { get; set; }
 
     // OpenAI Compatible STT settings
     public string OpenAiCompatibleSttUrl { get; set; } = "http://localhost:8000/v1/audio/transcriptions";
@@ -159,8 +165,37 @@ public class SeTools
     public bool DashScopeSttEnableWords { get; set; }
     public int DashScopeSttTimeoutSeconds { get; set; } = 3600;
 
+    public string GoogleCloudSttKeyFile { get; set; } = string.Empty;
+    public string GoogleCloudSttRegion { get; set; } = "us";
+    public string GoogleCloudSttModel { get; set; } = "chirp_3";
+    public string GoogleCloudSttLanguage { get; set; } = string.Empty;
+    public string GoogleCloudSttBucketName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Only needed when signing in with Application Default Credentials, which usually do
+    /// not name a project. A service account key carries its own and this stays empty.
+    /// </summary>
+    public string GoogleCloudSttProjectId { get; set; } = string.Empty;
+    public int GoogleCloudSttTimeoutSeconds { get; set; } = 3600;
+
+    /// <summary>
+    /// Bills at roughly a fifth of the normal rate, $0.003 against $0.016 per minute, so a
+    /// 2.5 hour episode costs about $0.44 instead of $2.32. On by default: the saving is
+    /// large, it is money the user spends without ever being asked, and it measured 13.6x
+    /// realtime on a 140 minute episode. Google gives no latency guarantee for it, so set
+    /// this off in the speech-to-text window if a run needs to come back as fast as possible.
+    /// </summary>
+    public bool GoogleCloudSttDynamicBatching { get; set; } = true;
+
     public List<string> FindHistory { get; set; } = new List<string>();
     public bool AllowSingleLetterShortcutsInTextbox { get; set; }
+
+    /// <summary>
+    /// Let shortcuts bound to the text-navigation chords (Ctrl+Left/Right, Home/End with or
+    /// without Ctrl/Shift) fire while a text input has focus, instead of reserving those keys
+    /// for caret movement (#11357). Off by default; Settings > Tools (#14654).
+    /// </summary>
+    public bool AllowTextNavigationShortcutsInTextbox { get; set; }
 
     // Auto-break (auto br) - defaults must match libse ToolsSettings
     public bool AutoBreakLineEndingEarly { get; set; } = false;
@@ -235,26 +270,18 @@ public class SeTools
         BinEditPositionMonitorTitleSafePercent = 5;
 
         ImportTextSplitting = "auto";
-        ImportTextSplittingLineMode = "OneLineIsOneSubtitle";
-        ImportTextLineBreak = "|";
-        ImportTextMergeShortLines = false;
-        ImportTextAutoSplitAtBlank = true;
-        ImportTextRemoveLinesNoLetters = false;
-        ImportTextGenerateTimeCodes = true;
-        ImportTextAutoBreak = true;
-        ImportTextAutoBreakAtEnd = true;
-        ImportTextGap = 90;
-        ImportTextAutoSplitNumberOfLines = 2;
-        ImportTextAutoBreakAtEndMarkerText = ".!?";
         ImportTextDurationAuto = true;
-        ImportTextFixedDuration = 3000;
-        ImportTextTryToFindTimeCodes = false;
+        ImportTextFixedDuration = 0; // 0 = fall back to the "Adjust durations" fixed value
+        SpellCheckRememberUseAlwaysList = true;
         SpeechToTextSelectedLinesPromptFirstTimeOnly = true;
         MultipleReplaceShowDotDotDotButtons = true;
         GridFocusTextboxAfterInsertNew = true;
         AllowSingleLetterShortcutsInTextbox = false;
-        WriteToolsLog = true;
+        AllowTextNavigationShortcutsInTextbox = false;
         TextToSpeechPromptMergeContinuationLines = true;
+        MergeContinuationLinesMaxGapMs = 500;
+        TextToSpeechPromptSkipNoiseLines = true;
+        TextToSpeechPromptDetectSpeakers = true;
 
         LastColorPickerColor = Colors.Yellow.FromColorToHex();
         LastColorPickerColor1 = Colors.Red.FromColorToHex();

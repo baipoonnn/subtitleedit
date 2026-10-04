@@ -23,9 +23,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 return false;
             }
 
-            var sb = new StringBuilder();
-            lines.ForEach(line => sb.AppendLine(line));
-            var text = sb.ToString();
+            var text = JoinLines(lines);
             if (!text.Contains("<style xml:id=\"basic\"") || !text.Contains("<body style=\"basic\">"))
             {
                 return false;
@@ -99,6 +97,9 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                     }
 
                     var styles = new Stack<XmlNode>();
+                    // Text is collected here and written to the node once per run - "InnerText += c"
+                    // per character re-read and re-set the node text for every character of the line.
+                    var pending = new StringBuilder();
                     XmlNode currentStyle = xml.CreateTextNode(string.Empty);
                     paragraph.AppendChild(currentStyle);
                     int skipCount = 0;
@@ -107,8 +108,16 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                         if (skipCount > 0)
                         {
                             skipCount--;
+                            continue;
                         }
-                        else if (line.Substring(i).StartsWith("<i>", StringComparison.OrdinalIgnoreCase))
+
+                        if (line[i] == '<' && pending.Length > 0)
+                        {
+                            currentStyle.InnerText += pending.ToString();
+                            pending.Clear();
+                        }
+
+                        if (line.StartsWithAt(i, "<i>", StringComparison.OrdinalIgnoreCase))
                         {
                             styles.Push(currentStyle);
                             currentStyle = xml.CreateNode(XmlNodeType.Element, "span", null);
@@ -119,7 +128,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                             skipCount = 2;
                             italicOn = true;
                         }
-                        else if (line.Substring(i).StartsWith("<b>", StringComparison.OrdinalIgnoreCase))
+                        else if (line.StartsWithAt(i, "<b>", StringComparison.OrdinalIgnoreCase))
                         {
                             // Push like the <i> branch does, so the matching </b> restores this
                             // parent instead of an outer one - otherwise an enclosing <i> (or <font>)
@@ -132,13 +141,14 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                             currentStyle.Attributes.Append(attr);
                             skipCount = 2;
                         }
-                        else if (line.Substring(i).StartsWith("<font ", StringComparison.OrdinalIgnoreCase))
+                        else if (line.StartsWithAt(i, "<font ", StringComparison.OrdinalIgnoreCase))
                         {
                             // Push unconditionally so the matching </font> always restores the
                             // right parent (the close-tag branch pops for every </font>); without
                             // this an enclosing <i>/<b> was lost after a nested <font>.
                             styles.Push(currentStyle);
-                            int endIndex = line.Substring(i + 1).IndexOf('>');
+                            int endIndex = line.IndexOf('>', i + 1);
+                            endIndex = endIndex < 0 ? -1 : endIndex - i - 1;
                             if (endIndex > 0)
                             {
                                 skipCount = endIndex + 1;
@@ -162,7 +172,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                                 skipCount = line.Length;
                             }
                         }
-                        else if (line.Substring(i).StartsWith("</i>", StringComparison.OrdinalIgnoreCase) || line.Substring(i).StartsWith("</b>", StringComparison.OrdinalIgnoreCase) || line.Substring(i).StartsWith("</font>", StringComparison.OrdinalIgnoreCase))
+                        else if (line.StartsWithAt(i, "</i>", StringComparison.OrdinalIgnoreCase) || line.StartsWithAt(i, "</b>", StringComparison.OrdinalIgnoreCase) || line.StartsWithAt(i, "</font>", StringComparison.OrdinalIgnoreCase))
                         {
                             currentStyle = xml.CreateTextNode(string.Empty);
                             if (styles.Count > 0)
@@ -171,7 +181,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                                 currentStyle.InnerText = string.Empty;
                             }
                             paragraph.AppendChild(currentStyle);
-                            if (line.Substring(i).StartsWith("</font>", StringComparison.OrdinalIgnoreCase))
+                            if (line.StartsWithAt(i, "</font>", StringComparison.OrdinalIgnoreCase))
                             {
                                 skipCount = 6;
                             }
@@ -184,7 +194,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                         }
                         else
                         {
-                            if (i == 0 && italicOn && !line.Substring(i).StartsWith("<i>", StringComparison.OrdinalIgnoreCase))
+                            if (i == 0 && italicOn && !line.StartsWithAt(i, "<i>", StringComparison.OrdinalIgnoreCase))
                             {
                                 styles.Push(currentStyle);
                                 currentStyle = xml.CreateNode(XmlNodeType.Element, "span", null);
@@ -193,9 +203,14 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                                 attr.InnerText = "italic";
                                 currentStyle.Attributes.Append(attr);
                             }
-                            currentStyle.InnerText = currentStyle.InnerText + line[i];
+                            pending.Append(line[i]);
                         }
                     }
+                    if (pending.Length > 0)
+                    {
+                        currentStyle.InnerText += pending.ToString();
+                    }
+
                     first = false;
                 }
 

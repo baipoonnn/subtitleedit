@@ -52,10 +52,10 @@ public class FixCommonErrorsWindow : Window
         labelStep2.Bind(IsVisibleProperty, new Binding(nameof(vm.Step2IsVisible)));
 
         var textBoxSearch = UiUtil.MakeTextBox(250, vm, nameof(vm.SearchText)).WithMarginRight(25)
-            .WithAccessibleName(Se.Language.Tools.FixCommonErrors.SearchRulesDotDotDot);
+            .WithAccessibleName(Se.Language.Tools.FixCommonErrors.SearchRulesDotDotDot)
+            .WithSearchAndClearIcons();
         textBoxSearch.PlaceholderText = Se.Language.Tools.FixCommonErrors.SearchRulesDotDotDot;
         textBoxSearch.Bind(IsVisibleProperty, new Binding(nameof(vm.Step1IsVisible)));
-        textBoxSearch.TextChanged += vm.TextBoxSearch_TextChanged;
         // Off by default (#12441) - keep it reachable here, next to the language it depends on,
         // instead of only in the OCR window where a Fix-common-errors user would never look.
         var checkBoxGuessUnknownWords = UiUtil.MakeCheckBox(Se.Language.Ocr.TryToGuessUnknownWords, vm, nameof(vm.TryToGuessUnknownWords))
@@ -69,6 +69,8 @@ public class FixCommonErrorsWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right,
             Children =
             {
+                // Filters the step 1 rule list by name (#14893); step 2 shows the checkbox instead.
+                textBoxSearch,
                 checkBoxGuessUnknownWords,
                 UiUtil.MakeTextBlock(Se.Language.General.Language).WithMarginRight(5),
                 UiUtil.MakeComboBox(vm.Languages, vm, nameof(vm.SelectedLanguage))
@@ -247,6 +249,43 @@ public class FixCommonErrorsWindow : Window
         };
         nothingToFixPanel.Bind(IsVisibleProperty, new Binding(nameof(vm.NothingToFixIsVisible)));
 
+        // Errors the rules found but could not fix (e.g. a display time that is too short with no
+        // room to extend it). Without this they are silent, and a subtitle full of them still shows
+        // the green "Nothing to fix" - click the warning to see one log line per error (#13645).
+        var errorsFoundBrush = new SolidColorBrush(UiTheme.IsDarkThemeEnabled()
+            ? Color.FromRgb(0xff, 0x8a, 0x80)
+            : Color.FromRgb(0xc4, 0x28, 0x28));
+        var errorsFoundIcon = new Optris.Icons.Avalonia.Icon
+        {
+            Value = IconNames.Alert,
+            FontSize = 16,
+            Foreground = errorsFoundBrush,
+            VerticalAlignment = VerticalAlignment.Center,
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        errorsFoundIcon.PointerPressed += (_, _) => vm.ShowLogCommand.Execute(null);
+        var errorsFoundText = UiUtil.MakeLink(string.Empty, vm.ShowLogCommand);
+        errorsFoundText.Foreground = errorsFoundBrush;
+        errorsFoundText.Bind(TextBlock.TextProperty, new Binding(nameof(vm.ErrorsFoundText)));
+        var errorsFoundPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children = { errorsFoundIcon, errorsFoundText },
+        };
+        errorsFoundPanel.Bind(IsVisibleProperty, new Binding(nameof(vm.ErrorsFoundIsVisible)));
+        AutomationProperties.SetName(errorsFoundPanel, Se.Language.Tools.FixCommonErrors.Log);
+        if (Se.Settings.Appearance.ShowHints)
+        {
+            UiUtil.AttachHoverTooltip(errorsFoundPanel, Se.Language.Tools.FixCommonErrors.Log);
+        }
+
+        // The log also holds what the applies changed, so it stays reachable when a subtitle has
+        // no errors left - the warning above links to the same window when it does.
+        var logLink = UiUtil.MakeLink(Se.Language.Tools.FixCommonErrors.Log, vm.ShowLogCommand);
+        logLink.Bind(IsVisibleProperty, new Binding(nameof(vm.LogIsVisible)));
+
         // "Analyzing..." while a re-scan runs, so a scan that ends in the same state as it started
         // still shows that it ran - this is what SE4 does on every re-scan (#12849).
         var analysingText = UiUtil.MakeTextBlock(Se.Language.Tools.FixCommonErrors.Analysing);
@@ -260,7 +299,7 @@ public class FixCommonErrorsWindow : Window
             Spacing = 15,
             HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Center,
-            Children = { labelFixesApplied, nothingToFixPanel, analysingText },
+            Children = { labelFixesApplied, nothingToFixPanel, errorsFoundPanel, logLink, analysingText },
         };
         panelStep2Status.Bind(IsVisibleProperty, new Binding(nameof(vm.Step2IsVisible)));
         grid.Children.Add(panelStep2Status);
@@ -320,7 +359,7 @@ public class FixCommonErrorsWindow : Window
             }
         };
 
-        Activated += delegate { FocusStepButton(); };
+        UiUtil.FocusOnFirstActivation(this, () => { FocusStepButton(); });
 
         Closing += delegate { UiUtil.SaveWindowPosition(this); };
         Loaded += delegate { UiUtil.RestoreWindowPosition(this); };
@@ -411,7 +450,7 @@ public class FixCommonErrorsWindow : Window
                         Child = new TextBlock
                         {
                             Text = item.ActionDisplay,
-                            FontSize = 12,
+                            FontSize = UiUtil.ScaledFontSize(12),
                             Foreground = _vm.GetActionBrush(item.ActionDisplay),
                             VerticalAlignment = VerticalAlignment.Center,
                         },
@@ -712,7 +751,7 @@ public class FixCommonErrorsWindow : Window
                 };
                 if (!string.IsNullOrEmpty(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName))
                 {
-                    textBlock.FontFamily = new FontFamily(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName);
+                    textBlock.FontFamily = FontFamilyHelper.Make(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName);
                 }
 
                 return new Border
@@ -811,7 +850,7 @@ public class FixCommonErrorsWindow : Window
         };
         if (!string.IsNullOrEmpty(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName))
         {
-            textBox.FontFamily = new FontFamily(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName);
+            textBox.FontFamily = FontFamilyHelper.Make(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName);
         }
 
         AutomationProperties.SetName(textBox, Se.Language.General.Text);
@@ -831,7 +870,7 @@ public class FixCommonErrorsWindow : Window
         {
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Top,
-            FontSize = 12,
+            FontSize = UiUtil.ScaledFontSize(12),
             Padding = new Thickness(2),
         };
         totalLengthLabel.Bind(TextBlock.TextProperty, new Binding(nameof(_vm.EditTextTotalLength)) { Source = _vm });

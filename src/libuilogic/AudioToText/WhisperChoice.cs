@@ -12,7 +12,6 @@
         public const string CTranslate2 = "CTranslate2";
         public const string StableTs = "stable-ts";
         public const string PurfviewFasterWhisperXxl = "Purfview's Faster-Whisper-XXL";
-        public const string ChatLlm = "Chat LLM";
         public const string Qwen3AsrCpp = "Qwen3 ASR CPP";
         public const string ParakeetCpp = "Parakeet.cpp";
         public const string CrispAsrParakeet = "Crisp ASR Parakeet";
@@ -25,6 +24,7 @@
         public const string CrispAsrFunAsrNano = "Crisp ASR Fun-ASR Nano";
         public const string CrispAsrFunAsrMltNano = "Crisp ASR Fun-ASR MLT Nano";
         public const string CrispAsrGranite = "Crisp ASR Granite";
+        public const string CrispAsrIndexEcho = "Crisp ASR Index-Echo";
         public const string CrispAsrOmni = "Crisp ASR Omni";
         public const string CrispAsrKyutai = "Crisp ASR Kyutai";
         public const string CrispAsrMadlad = "Crisp ASR MADLAD";
@@ -32,8 +32,10 @@
         public const string CrispAsrMossDiarize = "Crisp ASR MOSS Diarize";
         public const string CrispAsrSenseVoice = "Crisp ASR SenseVoice";
         public const string CrispAsrArk = "Crisp ASR ARK";
+        public const string CrispAsrVoxtral = "Crisp ASR Voxtral";
         public const string OpenAiCompatible = "OpenAI Compatible";
         public const string OpenRouter = "OpenRouter";
         public const string DashScopeQwen3 = "Alibaba Qwen3-ASR";
+        public const string GoogleCloud = "Google Cloud Speech-to-Text";
     }
 }

@@ -8,7 +8,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Text.RegularExpressions;
 
 namespace Nikse.SubtitleEdit.Core.Common
 {
@@ -382,6 +381,40 @@ namespace Nikse.SubtitleEdit.Core.Common
         }
 
         /// <summary>
+        /// A Blu-ray .sup by its content, strict enough for a file with another extension (e.g. a
+        /// .sup saved as .sub): "PG", a PGS segment type, and the next segment's "PG" right after
+        /// the first segment - two bytes of "PG" alone also start plenty of text files.
+        /// </summary>
+        public static bool IsBluRaySupByContent(string fileName)
+        {
+            using (var fs = new FileStream(fileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                var header = new byte[13];
+                if (fs.ReadFully(header, 0, header.Length) < header.Length ||
+                    header[0] != 0x50 || header[1] != 0x47)
+                {
+                    return false;
+                }
+
+                var segmentType = header[10];
+                if (segmentType != 0x80 && (segmentType < 0x14 || segmentType > 0x18))
+                {
+                    return false;
+                }
+
+                var nextSegment = 13L + ((header[11] << 8) | header[12]);
+                if (nextSegment + 2 > fs.Length)
+                {
+                    return false;
+                }
+
+                fs.Seek(nextSegment, SeekOrigin.Begin);
+                var next = new byte[2];
+                return fs.ReadFully(next, 0, next.Length) == next.Length && next[0] == 0x50 && next[1] == 0x47;
+            }
+        }
+
+        /// <summary>
         /// Checks if a file is a raw PGS elementary stream, i.e. a sequence of PGS display
         /// segments without the "PG" + PTS/DTS headers a standalone Blu-ray .sup file has.
         /// Such files come from extracting an S_HDMV/PGS Matroska track in raw mode; the
@@ -454,6 +487,13 @@ namespace Nikse.SubtitleEdit.Core.Common
                     {
                         return true;
                     }
+
+                    // 204-byte packets: the same 188 bytes plus Reed-Solomon parity, as written
+                    // by DVB capture cards and professional equipment
+                    if (buffer[i] == Packet.SynchronizationByte && buffer[i + 204] == Packet.SynchronizationByte && buffer[i + 204 * 2] == Packet.SynchronizationByte)
+                    {
+                        return true;
+                    }
                 }
 
                 return buffer[0] == 0x54 && buffer[1] == 0x46 && buffer[2] == 0x72 && buffer[3760] == Packet.SynchronizationByte; // Topfield REC TS file
@@ -470,6 +510,33 @@ namespace Nikse.SubtitleEdit.Core.Common
             using (var fs = new FileStream(fileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
             {
                 return TransportStreamParser.IsM2TransportStream(fs);
+            }
+        }
+
+        private static readonly string[] TransportStreamExtensions = { ".ts", ".tsv", ".tts", ".rec", ".mpeg", ".mpg", ".m2ts", ".mts" };
+
+        /// <summary>
+        /// True for a video file whose content is an MPEG transport stream although its extension
+        /// is not a transport stream one - typically an HLS web rip saved as .mp4. Transport stream
+        /// extensions are left out, as callers already route those by extension (and a .m2ts can be
+        /// TextST instead).
+        /// </summary>
+        public static bool IsTransportStreamWithOtherVideoExtension(string fileName)
+        {
+            var ext = Path.GetExtension(fileName).ToLowerInvariant();
+            if (TransportStreamExtensions.Contains(ext) || !Utilities.VideoFileExtensions.Contains(ext))
+            {
+                return false;
+            }
+
+            try
+            {
+                return new FileInfo(fileName).Length > 10000 &&
+                       (IsTransportStream(fileName) || IsM2TransportStream(fileName));
+            }
+            catch
+            {
+                return false;
             }
         }
 
@@ -558,6 +625,9 @@ namespace Nikse.SubtitleEdit.Core.Common
             }
         }
 
+        //Header Partition PackId
+        private static readonly byte[] MxfHeaderPartitionPackId = { 0x06, 0x0E, 0x2B, 0x34, 0x02, 0x05, 0x01, 0x01, 0x0D, 0x01, 0x02 };
+
         /// <summary>
         /// Checks if file is an MXF file
         /// </summary>
@@ -574,27 +644,8 @@ namespace Nikse.SubtitleEdit.Core.Common
                     return false;
                 }
 
-                for (int i = 0; i < count - 11; i++)
-                {
-                    //Header Partition PackId = 06 0E 2B 34 02 05 01 01 0D 01 02
-                    if (buffer[i + 00] == 0x06 &&
-                        buffer[i + 01] == 0x0E &&
-                        buffer[i + 02] == 0x2B &&
-                        buffer[i + 03] == 0x34 &&
-                        buffer[i + 04] == 0x02 &&
-                        buffer[i + 05] == 0x05 &&
-                        buffer[i + 06] == 0x01 &&
-                        buffer[i + 07] == 0x01 &&
-                        buffer[i + 08] == 0x0D &&
-                        buffer[i + 09] == 0x01 &&
-                        buffer[i + 10] == 0x02)
-                    {
-                        return true;
-                    }
-                }
+                return buffer.AsSpan(0, count).IndexOf(MxfHeaderPartitionPackId) >= 0;
             }
-
-            return false;
         }
 
         /// <summary>
@@ -732,7 +783,7 @@ namespace Nikse.SubtitleEdit.Core.Common
                 {
                     return false;
                 }
-                else if (CharUtils.IsDigit(ch))
+                else if (CharUtils.IsAsciiDigit(ch))
                 {
                     numberCount++;
                 }
@@ -743,25 +794,24 @@ namespace Nikse.SubtitleEdit.Core.Common
                 return numberCount < 5 && letterCount > 20;
             }
 
-            var numberPatternMatches = new Regex(@"\d+[.:,; -]\d+").Matches(s);
-            if (numberPatternMatches.Count > 30)
+            // These three checks used to build an uncompiled Regex each and materialize every
+            // single match over the whole file, only to compare the Count against a threshold.
+            // The counting scans below reproduce the same match semantics and stop as soon as
+            // the threshold is passed.
+            if (CountNumberPairs(s, 30) > 30)
             {
                 return false; // looks like time codes
             }
 
-            var largeBlocksOfLargeNumbers = new Regex(@"\d{3,8}").Matches(s);
-            if (largeBlocksOfLargeNumbers.Count > 30)
+            // Below 1000 characters the same count is judged against the lower limit, so only
+            // ever count up to whichever limit applies here.
+            var largeNumberBlockLimit = len < 1000 ? 10 : 30;
+            if (CountRunChunks(s, true, 3, 8, largeNumberBlockLimit) > largeNumberBlockLimit)
             {
                 return false; // looks like time codes
             }
 
-            if (len < 1000 && largeBlocksOfLargeNumbers.Count > 10)
-            {
-                return false; // looks like time codes
-            }
-
-            var partsWithMoreThan100CharsOfNonNumbers = new Regex(@"[^\d]{150,100000}").Matches(s);
-            if (partsWithMoreThan100CharsOfNonNumbers.Count > 10)
+            if (CountRunChunks(s, false, 150, 100000, 10) > 10)
             {
                 return true; // looks like text
             }
@@ -769,6 +819,103 @@ namespace Nikse.SubtitleEdit.Core.Common
             var numberThreshold = len * 0.015 + 25;
             var letterThreshold = len * 0.8;
             return numberCount < numberThreshold && letterCount > letterThreshold;
+        }
+
+        private static bool IsNumberSeparator(char ch)
+        {
+            return ch == '.' || ch == ':' || ch == ',' || ch == ';' || ch == ' ' || ch == '-';
+        }
+
+        /// <summary>
+        /// Same result as <c>new Regex(@"\d+[.:,; -]\d+").Matches(s).Count</c>, but stops
+        /// counting once <paramref name="limit"/> is passed.
+        /// </summary>
+        private static int CountNumberPairs(string s, int limit)
+        {
+            var count = 0;
+            var i = 0;
+            while (i < s.Length)
+            {
+                if (!char.IsDigit(s[i]))
+                {
+                    i++;
+                    continue;
+                }
+
+                var runEnd = i;
+                while (runEnd < s.Length && char.IsDigit(s[runEnd]))
+                {
+                    runEnd++;
+                }
+
+                // The leading \d+ is greedy and can only end where the digit run ends: anything
+                // shorter is followed by another digit rather than by a separator.
+                if (runEnd + 1 < s.Length && IsNumberSeparator(s[runEnd]) && char.IsDigit(s[runEnd + 1]))
+                {
+                    count++;
+                    if (count > limit)
+                    {
+                        return count;
+                    }
+
+                    // The trailing \d+ is greedy too, and matches do not overlap, so the whole
+                    // second number is consumed and cannot start the next match.
+                    i = runEnd + 1;
+                    while (i < s.Length && char.IsDigit(s[i]))
+                    {
+                        i++;
+                    }
+                }
+                else
+                {
+                    i = runEnd;
+                }
+            }
+
+            return count;
+        }
+
+        /// <summary>
+        /// Same result as <c>new Regex(@"\d{min,max}").Matches(s).Count</c> (or the negated
+        /// <c>[^\d]</c> variant when <paramref name="matchDigits"/> is false), but stops counting
+        /// once <paramref name="limit"/> is passed.
+        /// </summary>
+        private static int CountRunChunks(string s, bool matchDigits, int minLength, int maxLength, int limit)
+        {
+            var count = 0;
+            var i = 0;
+            while (i < s.Length)
+            {
+                if (char.IsDigit(s[i]) != matchDigits)
+                {
+                    i++;
+                    continue;
+                }
+
+                var runEnd = i;
+                while (runEnd < s.Length && char.IsDigit(s[runEnd]) == matchDigits)
+                {
+                    runEnd++;
+                }
+
+                // Greedy and non-overlapping: every match eats up to maxLength characters, and
+                // the tail of the run matches again only while it is still minLength long.
+                var remaining = runEnd - i;
+                while (remaining >= minLength)
+                {
+                    count++;
+                    if (count > limit)
+                    {
+                        return count;
+                    }
+
+                    remaining -= Math.Min(maxLength, remaining);
+                }
+
+                i = runEnd;
+            }
+
+            return count;
         }
 
         /// <summary>

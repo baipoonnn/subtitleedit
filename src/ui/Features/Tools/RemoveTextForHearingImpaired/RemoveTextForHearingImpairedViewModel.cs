@@ -1,10 +1,11 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Nikse.SubtitleEdit.Core.Common;
+using Nikse.SubtitleEdit.Core.Dictionaries;
 using Nikse.SubtitleEdit.Core.Forms;
 using Nikse.SubtitleEdit.Features.Files.RestoreAutoBackup;
 using Nikse.SubtitleEdit.Logic;
@@ -18,7 +19,7 @@ using System.Timers;
 
 namespace Nikse.SubtitleEdit.Features.Tools.RemoveTextForHearingImpaired;
 
-public partial class RemoveTextForHearingImpairedViewModel : ObservableObject
+public partial class RemoveTextForHearingImpairedViewModel : ObservableObject, IClosingCleanup
 {
     public class LanguageItem
     {
@@ -82,7 +83,23 @@ public partial class RemoveTextForHearingImpairedViewModel : ObservableObject
 
     private Subtitle _subtitle;
     private RemoveTextForHI? _removeTextForHiLib;
+
+    // The name list GetSettings hands out, and the subtitle it was detected from. Every preview
+    // used to re-detect the language over the whole subtitle and re-parse names.xml; the working
+    // subtitle is only replaced (never edited) between previews, so one load per instance is
+    // the same list.
+    private NameList? _nameList;
+    private Subtitle? _nameListSubtitle;
+
     private readonly Timer _timer;
+    private volatile bool _isClosing;
+
+    // The preview pass runs the whole HI removal over every line on the UI thread, so the 500 ms
+    // timer only does it when an input changed (options, language, interjection lists).
+    private volatile bool _isDirty = true;
+
+    /// <summary>Test hook: whether the next timer tick will regenerate the preview.</summary>
+    internal bool IsPreviewDirty => _isDirty;
     private readonly IWindowService _windowService;
     private Action<Subtitle>? _applyCallback;
 
@@ -183,11 +200,18 @@ public partial class RemoveTextForHearingImpairedViewModel : ObservableObject
     {
         var result = new Subtitle(_subtitle, false);
         result.Paragraphs.Clear();
+
+        // first fix wins per index, like the FirstOrDefault scan this replaces
+        var fixByIndex = new Dictionary<int, RemoveItem>(Fixes.Count);
+        foreach (var fix in Fixes)
+        {
+            fixByIndex.TryAdd(fix.Index, fix);
+        }
+
         for (var index = 0; index < _subtitle.Paragraphs.Count; index++)
         {
             var p = _subtitle.Paragraphs[index];
-            var fixedParagraph = Fixes.FirstOrDefault(ri => ri.Index == index);
-            if (fixedParagraph is { Apply: true })
+            if (fixByIndex.TryGetValue(index, out var fixedParagraph) && fixedParagraph.Apply)
             {
                 p.Text = fixedParagraph.After;
             }
@@ -216,8 +240,10 @@ public partial class RemoveTextForHearingImpairedViewModel : ObservableObject
         _applyCallback?.Invoke(applied);
 
         // Keep iterating against the applied result: re-base the working subtitle and refresh the
-        // preview so already-removed text isn't offered again (#11948).
-        _subtitle = new Subtitle(applied);
+        // preview so already-removed text isn't offered again (#11948). Paragraph ids must survive
+        // the re-base - GeneratePreview carries the checkbox states over by id, and removing whole
+        // lines shifts the indexes (#13839).
+        _subtitle = new Subtitle(applied, generateNewId: false);
         _removeTextForHiLib = new RemoveTextForHI(GetSettings(_subtitle));
         GeneratePreview();
     }
@@ -305,31 +331,75 @@ public partial class RemoveTextForHearingImpairedViewModel : ObservableObject
         { 
             vm.Initialize(SelectedLanguage); 
         });
+
+        _isDirty = true;
+    }
+
+    protected override void OnPropertyChanged(System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        base.OnPropertyChanged(e);
+
+        // Everything but the fix list itself and its selection feeds the preview.
+        if (e.PropertyName != nameof(Fixes) &&
+            e.PropertyName != nameof(SelectedFix) &&
+            e.PropertyName != nameof(FixText) &&
+            e.PropertyName != nameof(FixTextEnabled))
+        {
+            _isDirty = true;
+        }
     }
 
     private void TimerElapsed(object? sender, ElapsedEventArgs e)
     {
-        _timer.Stop();
-
-        try
-        {
-            Dispatcher.UIThread.Invoke(GeneratePreview);
-        }
-        catch
+        if (_isClosing)
         {
             return;
         }
 
-        _timer.Start();
+        _timer.Stop();
+
+        if (_isDirty)
+        {
+            try
+            {
+                Dispatcher.UIThread.Invoke(GeneratePreview);
+            }
+            catch
+            {
+                return;
+            }
+        }
+
+        // Guard the restart: OnClosingCleanup may have disposed the timer while this handler ran,
+        // and Start() on a disposed timer throws ObjectDisposedException (no longer swallowed on
+        // modern .NET), crashing the app from a thread-pool thread. (#12739)
+        if (!_isClosing)
+        {
+            _timer.Start();
+        }
     }
 
-    private void GeneratePreview()
+    /// <summary>
+    /// Runs on every close path via the central hook in <see cref="UiUtil.InitializeWindow"/>.
+    /// Without it the 500 ms preview timer went on ticking for the rest of the session -
+    /// regenerating the whole fix list on the UI thread over a closed window's subtitle - and a
+    /// fresh timer was added every time the dialog was opened, from the tools menu and from batch
+    /// convert alike.
+    /// </summary>
+    public void OnClosingCleanup()
+    {
+        _isClosing = true;
+        _timer.StopAndDispose(TimerElapsed);
+    }
+
+    internal void GeneratePreview()
     {
         if (_removeTextForHiLib == null)
         {
             return;
         }
 
+        _isDirty = false;
         _removeTextForHiLib.Settings = GetSettings(_subtitle);
         _removeTextForHiLib.Warnings = [];
         
@@ -339,6 +409,21 @@ public partial class RemoveTextForHearingImpairedViewModel : ObservableObject
         var skipList = interjections?.SkipStartList ?? new List<string>();
         _removeTextForHiLib.ReloadInterjection(list, skipList);
 
+        // first fix wins per id, like the FirstOrDefault scan this replaces
+        var oldApplyById = new Dictionary<Guid, bool>(Fixes.Count);
+        var oldApplyWithoutId = (bool?)null;
+        foreach (var fix in Fixes)
+        {
+            if (fix.Paragraph.Id is { } id)
+            {
+                oldApplyById.TryAdd(id, fix.Apply);
+            }
+            else
+            {
+                oldApplyWithoutId ??= fix.Apply;
+            }
+        }
+
         var newFixes = new List<RemoveItem>();
         var twoLetterIsoLanguageName = SelectedLanguage == null ? "en" : SelectedLanguage.Code;
         for (var index = 0; index < _subtitle.Paragraphs.Count; index++)
@@ -346,17 +431,23 @@ public partial class RemoveTextForHearingImpairedViewModel : ObservableObject
             var p = _subtitle.Paragraphs[index];
             _removeTextForHiLib.WarningIndex = index - 1;
             var newText = _removeTextForHiLib.RemoveTextFromHearImpaired(p.Text, _subtitle, index, twoLetterIsoLanguageName);
-            // Trim before comparing: RemoveTextFromHearImpaired rebuilds the text and drops
-            // e.g. a trailing empty line, which would otherwise list a "fix" whose before and
-            // after render identically (#13389).
-            if (p.Text.Trim().RemoveChar(' ') != newText.Trim().RemoveChar(' '))
+            if (IsVisibleChange(p.Text, newText))
             {
+                // Carry the checkbox state over by paragraph id, not by index: applying fixes that
+                // remove whole lines shifts every later index, which re-checked unchecked items (#13839).
                 var apply = true;
-                var oldItem = Fixes.FirstOrDefault(f => f.Index == index);
-                if (oldItem != null)
+                if (p.Id is { } id)
                 {
-                    apply = oldItem.Apply;
+                    if (oldApplyById.TryGetValue(id, out var oldApply))
+                    {
+                        apply = oldApply;
+                    }
                 }
+                else if (oldApplyWithoutId.HasValue)
+                {
+                    apply = oldApplyWithoutId.Value;
+                }
+
                 newFixes.Add(new RemoveItem(apply, index, p.Text, newText, p));
             }
         }
@@ -385,6 +476,22 @@ public partial class RemoveTextForHearingImpairedViewModel : ObservableObject
         Fixes.AddRange(newFixes);
     }
 
+    /// <summary>
+    /// True when the HI pass changed something the user would actually see in the fix list.
+    /// Trailing white space is ignored: RemoveTextFromHearImpaired rebuilds the text and drops
+    /// e.g. a trailing empty line, which would otherwise list a "fix" whose before and after
+    /// render identically (#13389). Line breaks are compared normalized for the same reason -
+    /// the rebuilt text always uses <see cref="Environment.NewLine"/>, so a paragraph that came
+    /// in with a foreign line break (pasted from a LF file, say) would be listed unchanged
+    /// (#13591).
+    /// </summary>
+    internal static bool IsVisibleChange(string before, string after)
+    {
+        return Flatten(before) != Flatten(after);
+
+        static string Flatten(string text) => text.NormalizeLineBreaks().Trim().RemoveChar(' ');
+    }
+
     public RemoveTextForHISettings GetSettings(Subtitle subtitle)
     {
         var textContainsList = TextContains.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries)
@@ -393,7 +500,13 @@ public partial class RemoveTextForHearingImpairedViewModel : ObservableObject
         var uppercaseWhitelist = (UppercaseWhitelist ?? string.Empty).Split([',', ';'], StringSplitOptions.RemoveEmptyEntries)
             .Select(p => p.Trim()).Where(p => p.Length > 0).ToList();
 
-        var settings = new RemoveTextForHISettings(subtitle)
+        if (_nameList == null || !ReferenceEquals(_nameListSubtitle, subtitle))
+        {
+            _nameList = RemoveTextForHISettings.LoadNameList(subtitle);
+            _nameListSubtitle = subtitle;
+        }
+
+        var settings = new RemoveTextForHISettings(_nameList)
         {
             OnlyIfInSeparateLine = IsOnlySeparateLine,
             RemoveIfAllUppercase = IsRemoveTextUppercaseLineOn,

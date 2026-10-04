@@ -33,6 +33,7 @@ public class BinaryFormatRoundTripTest : IDisposable
     [Theory]
     [InlineData("pac", ".pac", 16)]
     [InlineData("ebustl", ".stl", 1024)]   // EBU STL has 1024-byte GSI block + TTI blocks
+    [InlineData("dvbteletext", ".dvbttx", 1000)] // XML preamble + teletext PES payloads
     [InlineData("cavena890", ".890", 16)]
     [InlineData("cheetahcaption", ".cap", 16)]
     [InlineData("capmakerplus", ".cap", 16)]
@@ -76,6 +77,85 @@ public class BinaryFormatRoundTripTest : IDisposable
 
         Assert.True(result.Success, string.Join("; ", result.Errors));
         Assert.Single(Directory.GetFiles(_tempRoot, "in.pac"));
+    }
+
+    /// <summary>--pac-secondary-codepage writes the Russian lines of a Hebrew file with Cyrillic; reading detects both.</summary>
+    [Fact]
+    public async Task ConvertAsync_PacWithSecondaryCodePage_KeepsBothScripts()
+    {
+        var input = Path.Combine(_tempRoot, "bilingual.srt");
+        var srt = """
+            1
+            00:00:01,000 --> 00:00:04,000
+            אתה בסדר?
+            Да, это меня.
+
+            2
+            00:00:05,000 --> 00:00:08,000
+            הוא יודע טוב.
+            Нет, я не знаю.
+
+            3
+            00:00:09,000 --> 00:00:12,000
+            אולי הוא יודע.
+            Он как всё за нас.
+
+            """;
+        await File.WriteAllTextAsync(input, srt, TestContext.Current.CancellationToken);
+
+        var result = await new SubtitleConverter().ConvertAsync(new ConversionOptions
+        {
+            Patterns = [input],
+            Format = "pac",
+            OutputFolder = _tempRoot,
+            Overwrite = true,
+            PacCodePage = Nikse.SubtitleEdit.Core.SubtitleFormats.Pac.CodePageHebrew,
+            PacSecondaryCodePage = Nikse.SubtitleEdit.Core.SubtitleFormats.Pac.CodePageCyrillic,
+        });
+
+        Assert.True(result.Success, string.Join("; ", result.Errors));
+        var loaded = new Nikse.SubtitleEdit.Core.Common.Subtitle();
+        new Nikse.SubtitleEdit.Core.SubtitleFormats.Pac { BatchMode = true }.LoadSubtitle(loaded, null, Path.Combine(_tempRoot, "bilingual.pac"));
+        Assert.Equal(3, loaded.Paragraphs.Count);
+        Assert.Equal("אתה בסדר?" + Environment.NewLine + "Да, это меня.", loaded.Paragraphs[0].Text);
+        Assert.Equal("אולי הוא יודע." + Environment.NewLine + "Он как всё за нас.", loaded.Paragraphs[2].Text);
+    }
+
+    [Fact]
+    public async Task ConvertAsync_DvbTeletextToSrt_ReadsTextAndColorsBack()
+    {
+        // Source detection for .dvbttx goes through the binary format list - a full round trip
+        // proves both directions, including a Level 2.5 colour past the basic teletext eight.
+        var input = Path.Combine(_tempRoot, "in.srt");
+        var srt = """
+            1
+            00:00:01,000 --> 00:00:04,000
+            <font color="#ff8822">Level 2.5 orange</font>
+
+            """;
+        await File.WriteAllTextAsync(input, srt, TestContext.Current.CancellationToken);
+
+        var converter = new SubtitleConverter();
+        var toDvbttx = await converter.ConvertAsync(new ConversionOptions
+        {
+            Patterns = [input],
+            Format = "dvbteletext",
+            OutputFolder = _tempRoot,
+            Overwrite = true,
+        });
+        Assert.True(toDvbttx.Success, string.Join("; ", toDvbttx.Errors));
+
+        var backToSrt = await converter.ConvertAsync(new ConversionOptions
+        {
+            Patterns = [Path.Combine(_tempRoot, "in.dvbttx")],
+            Format = "subrip",
+            OutputFolder = Path.Combine(_tempRoot, "back"),
+            Overwrite = true,
+        });
+        Assert.True(backToSrt.Success, string.Join("; ", backToSrt.Errors));
+
+        var text = await File.ReadAllTextAsync(Path.Combine(_tempRoot, "back", "in.srt"), TestContext.Current.CancellationToken);
+        Assert.Contains("<font color=\"#ff8822\">Level 2.5 orange</font>", text);
     }
 
     [Fact]

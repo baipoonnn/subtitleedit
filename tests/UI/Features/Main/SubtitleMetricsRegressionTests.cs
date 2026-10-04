@@ -1,3 +1,4 @@
+﻿using Nikse.SubtitleEdit.Features.Shared.ErrorList;
 using Avalonia.Headless.XUnit;
 using Avalonia.Media;
 using Nikse.SubtitleEdit.Core.Common;
@@ -53,12 +54,12 @@ public class SubtitleMetricsRegressionTests
                 EndTime = TimeSpan.FromSeconds(1),
             };
 
-            Assert.Contains("Cps:", vm.GetErrors(null, null), StringComparison.Ordinal);
+            Assert.Contains(vm.GetErrorList(null, null), e => e.Type == LineErrorType.CharactersPerSecond);
 
             Se.Settings.General.ColorCharactersPerSecond = false;
             Se.Settings.General.ColorDurationTooShort = true;
 
-            Assert.DoesNotContain("Cps:", vm.GetErrors(null, null), StringComparison.Ordinal);
+            Assert.DoesNotContain(vm.GetErrorList(null, null), e => e.Type == LineErrorType.CharactersPerSecond);
         }
         finally
         {
@@ -89,10 +90,10 @@ public class SubtitleMetricsRegressionTests
                 EndTime = TimeSpan.FromSeconds(2),
             };
 
-            var brush = Assert.IsType<SolidColorBrush>(vm.TextBackgroundBrush);
+            var brush = Assert.IsAssignableFrom<ISolidColorBrush>(vm.TextBackgroundBrush);
 
             Assert.Equal(Colors.Transparent, brush.Color);
-            Assert.DoesNotContain("Max line length", vm.GetErrors(null, null), StringComparison.Ordinal);
+            Assert.DoesNotContain(vm.GetErrorList(null, null), e => e.Type == LineErrorType.LineTooLong);
         }
         finally
         {

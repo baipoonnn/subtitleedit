@@ -5,6 +5,7 @@ using Nikse.SubtitleEdit.Features.Ocr.Engines;
 using Nikse.SubtitleEdit.Features.Video.VideoOcr;
 using Nikse.SubtitleEdit.Logic.Config;
 using System.Linq;
+using System.Reflection;
 
 namespace UITests.Features.Video.VideoOcr;
 
@@ -68,14 +69,19 @@ public class VideoOcrViewModelCrispEmbedTests
             Assert.Equal("GLM-OCR", viewModel.SelectedCrispEmbedBackend?.Name);
             Assert.Equal("glm-ocr-q4_k.gguf", viewModel.SelectedCrispEmbedModel?.Model.Name);
 
-            var otherBackend = viewModel.CrispEmbedBackends.First(p => p.Name == "GOT-OCR2");
+            var otherBackend = viewModel.CrispEmbedBackends.First(p => p.Name == "PP-OCRv6");
             viewModel.SelectedCrispEmbedBackend = otherBackend;
 
             Assert.All(viewModel.CrispEmbedModels, m => Assert.Equal(otherBackend, m.Backend));
             Assert.NotNull(viewModel.SelectedCrispEmbedModel);
 
-            // Selecting a backend/model must land in the Video OCR settings, not the OCR window's.
-            Assert.Equal("GOT-OCR2", settings.CrispEmbedBackend);
+            // Browsing the combos must not touch the saved choice - the window may still be
+            // cancelled. It lands in the Video OCR settings (not the OCR window's) on save.
+            Assert.Equal("GLM-OCR", settings.CrispEmbedBackend);
+
+            Invoke(viewModel, "SaveSettings");
+            Assert.Equal("PP-OCRv6", settings.CrispEmbedBackend);
+            Assert.Equal(viewModel.SelectedCrispEmbedModel?.Model.Name, settings.CrispEmbedModel);
         }
         finally
         {
@@ -98,12 +104,12 @@ public class VideoOcrViewModelCrispEmbedTests
         try
         {
             Se.Settings.Ocr.CrispEmbedBackend = "GLM-OCR";
-            videoSettings.CrispEmbedBackend = "GOT-OCR2";
+            videoSettings.CrispEmbedBackend = "PP-OCRv6";
 
             var viewModel = MakeViewModel();
             viewModel.SelectedEngine = viewModel.Engines.First(p => p.EngineType == OcrEngineType.CrispEmbed);
 
-            Assert.Equal("GOT-OCR2", viewModel.SelectedCrispEmbedBackend?.Name);
+            Assert.Equal("PP-OCRv6", viewModel.SelectedCrispEmbedBackend?.Name);
             Assert.Equal("GLM-OCR", Se.Settings.Ocr.CrispEmbedBackend);
         }
         finally
@@ -112,6 +118,10 @@ public class VideoOcrViewModelCrispEmbedTests
             Se.Settings.Ocr.CrispEmbedBackend = savedOcrBackend;
         }
     }
+
+    private static void Invoke(object viewModel, string method) =>
+        viewModel.GetType().GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(viewModel, null);
 
     private static VideoOcrViewModel MakeViewModel()
     {

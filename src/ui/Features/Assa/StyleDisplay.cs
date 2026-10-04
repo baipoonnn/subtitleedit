@@ -34,7 +34,13 @@ public partial class StyleDisplay : ObservableObject
     [ObservableProperty] private BorderStyleItem _borderStyle;
     [ObservableProperty] private bool _isSelected;
     [ObservableProperty] private bool _isDefault;
-    [ObservableProperty] private string _category = string.Empty;
+    [ObservableProperty][NotifyPropertyChangedFor(nameof(CategoryDisplay))] private string _category = string.Empty;
+
+    /// <summary>
+    /// The category as shown in the storage styles table. An empty category is the built-in
+    /// "Default" category - the category combo box names it, so the table column must too.
+    /// </summary>
+    public string CategoryDisplay => string.IsNullOrEmpty(Category) ? Se.Language.General.Default : Category;
 
     private string _fontName = string.Empty;
 
@@ -254,6 +260,36 @@ public partial class StyleDisplay : ObservableObject
         SetAlignment(style.Alignment);
     }
 
+    /// <summary>
+    /// Takes over every formatting property of <paramref name="other"/>, keeping this style's
+    /// identity (name, category, default flag, usage count). Used when a copy between file and
+    /// storage overwrites an existing style of the same name (#15312).
+    /// </summary>
+    internal void CopyFormattingFrom(StyleDisplay other)
+    {
+        FontName = other.FontName;
+        FontSize = other.FontSize;
+        ColorPrimary = other.ColorPrimary;
+        ColorSecondary = other.ColorSecondary;
+        ColorOutline = other.ColorOutline;
+        ColorShadow = other.ColorShadow;
+        OutlineWidth = other.OutlineWidth;
+        ShadowWidth = other.ShadowWidth;
+        Bold = other.Bold;
+        Italic = other.Italic;
+        Underline = other.Underline;
+        Strikeout = other.Strikeout;
+        ScaleX = other.ScaleX;
+        ScaleY = other.ScaleY;
+        Spacing = other.Spacing;
+        Angle = other.Angle;
+        MarginLeft = other.MarginLeft;
+        MarginRight = other.MarginRight;
+        MarginVertical = other.MarginVertical;
+        BorderStyle = other.BorderStyle;
+        SetAlignment(other.GetAlignment());
+    }
+
     internal SsaStyle ToSsaStyle()
     {
         return new SsaStyle
@@ -272,6 +308,7 @@ public partial class StyleDisplay : ObservableObject
             Italic = Italic,
             Bold = Bold,
             Strikeout = Strikeout,
+            Underline = Underline, // read in from both sources above, but never written back
             Primary = ColorPrimary.ToSKColor(),
             Secondary = ColorSecondary.ToSKColor(),
             Tertiary = ColorShadow.ToSKColor(),

@@ -120,22 +120,39 @@ public class FixCommonErrorsRunnerTest
     }
 
     [Fact]
-    public void Run_WithEmptyList_RunsAllRules()
+    public void Run_WithNullList_RunsAllRules()
     {
         var sub = new Subtitle();
         sub.Paragraphs.Add(new Paragraph("hello,world.", 0, 2000));
         sub.Renumber();
 
-        FixCommonErrorsRunner.Run(sub, Array.Empty<string>());
+        FixCommonErrorsRunner.Run(sub, null);
 
         // Same outcome as RunAll: capitalised + space inserted
         Assert.Equal("Hello, world.", sub.Paragraphs[0].Text);
     }
 
     [Fact]
+    public void Run_WithEmptyList_RunsNothing()
+    {
+        // An empty list is what "--fix-common-errors-rules:-all" resolves to, so it must select
+        // NO rules. This used to fall through to "run everything" - the exact opposite - because
+        // the runner tested Count > 0 instead of null. RemoveFormattingRunner.ToTypes documents
+        // the same null-vs-empty contract, and ResolveRuleIds(null) already returns every id, so
+        // nothing depends on empty meaning "all".
+        var sub = new Subtitle();
+        sub.Paragraphs.Add(new Paragraph("hello,world.", 0, 2000));
+        sub.Renumber();
+
+        FixCommonErrorsRunner.Run(sub, Array.Empty<string>());
+
+        Assert.Equal("hello,world.", sub.Paragraphs[0].Text);
+    }
+
+    [Fact]
     public void ResolveRuleIds_NullOrWhitespace_ReturnsAll()
     {
-        var all = FixCommonErrorsRunner.AvailableRuleIds;
+        var all = DefaultRuleIds();
 
         Assert.Equal(all, FixCommonErrorsRunner.ResolveRuleIds(null));
         Assert.Equal(all, FixCommonErrorsRunner.ResolveRuleIds(""));
@@ -158,7 +175,7 @@ public class FixCommonErrorsRunnerTest
     {
         var resolved = FixCommonErrorsRunner.ResolveRuleIds("all,-FixDanishLetterI");
 
-        Assert.Equal(FixCommonErrorsRunner.AvailableRuleIds.Count - 1, resolved.Count);
+        Assert.Equal(DefaultRuleIds().Count - 1, resolved.Count);
         Assert.DoesNotContain("FixDanishLetterI", resolved);
     }
 
@@ -167,9 +184,55 @@ public class FixCommonErrorsRunnerTest
     {
         var resolved = FixCommonErrorsRunner.ResolveRuleIds("-FixDanishLetterI,-FixCommas");
 
-        Assert.Equal(FixCommonErrorsRunner.AvailableRuleIds.Count - 2, resolved.Count);
+        Assert.Equal(DefaultRuleIds().Count - 2, resolved.Count);
         Assert.DoesNotContain("FixDanishLetterI", resolved);
         Assert.DoesNotContain("FixCommas", resolved);
+    }
+
+    private static List<string> DefaultRuleIds() =>
+        FixCommonErrorsRunner.AvailableRuleIds.Where(id => !FixCommonErrorsRunner.OptInRules.Contains(id)).ToList();
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("all")]
+    [InlineData("-FixCommas")]
+    [InlineData("all,-FixCommas")]
+    public void ResolveRuleIds_OptInRule_NotIncludedUnlessNamed(string? spec)
+    {
+        Assert.DoesNotContain("FixMisreadQuotes", FixCommonErrorsRunner.ResolveRuleIds(spec));
+    }
+
+    [Theory]
+    [InlineData("FixMisreadQuotes")]
+    [InlineData("all,fixmisreadquotes")]
+    public void ResolveRuleIds_OptInRule_IncludedWhenNamed(string spec)
+    {
+        Assert.Contains("FixMisreadQuotes", FixCommonErrorsRunner.ResolveRuleIds(spec));
+    }
+
+    [Fact]
+    public void RunAll_DoesNotRunOptInRule()
+    {
+        var subtitle = new Subtitle();
+        subtitle.Paragraphs.Add(new Paragraph("'Hello there.'", 0, 2000));
+
+        FixCommonErrorsRunner.Run(subtitle, null, "en");
+
+        Assert.Equal("'Hello there.'", subtitle.Paragraphs[0].Text);
+    }
+
+    [Fact]
+    public void Run_NamedOptInRule_IsLanguageGated()
+    {
+        var english = new Subtitle();
+        english.Paragraphs.Add(new Paragraph("\"Hello there.'", 0, 2000));
+        FixCommonErrorsRunner.Run(english, new[] { "FixMisreadQuotes" }, "en");
+        Assert.Equal("\"Hello there.\"", english.Paragraphs[0].Text);
+
+        var italian = new Subtitle();
+        italian.Paragraphs.Add(new Paragraph("\"Aspetta un po',", 0, 2000));
+        FixCommonErrorsRunner.Run(italian, new[] { "FixMisreadQuotes" }, "it");
+        Assert.Equal("\"Aspetta un po',", italian.Paragraphs[0].Text);
     }
 
     [Fact]
@@ -346,9 +409,24 @@ public class FixCommonErrorsRunnerTest
     [InlineData("")]
     [InlineData("   ")]
     [InlineData("spanihs")]
+    // A plausible two-letter typo for Spanish (the real code is "es"). This used to be returned
+    // verbatim by an unchecked "length == 2" shortcut: being non-null it suppressed the warning
+    // and the auto-detect fallback, then matched no language gate, and left the OCR-fix pass -
+    // which needs a valid three-letter code - silently doing nothing.
+    [InlineData("sp")]
+    [InlineData("zz")]
     public void NormalizeLanguageOverride_BlankOrUnknown_ReturnsNull(string? input)
     {
         Assert.Null(FixCommonErrorsRunner.NormalizeLanguageOverride(input));
+    }
+
+    [Theory]
+    [InlineData("es", "es")]
+    [InlineData("ES", "es")]
+    [InlineData("da", "da")]
+    public void NormalizeLanguageOverride_RealTwoLetterCode_StillResolves(string input, string expected)
+    {
+        Assert.Equal(expected, FixCommonErrorsRunner.NormalizeLanguageOverride(input));
     }
 
     [Fact]
@@ -356,6 +434,7 @@ public class FixCommonErrorsRunnerTest
     {
         var gates = FixCommonErrorsRunner.LanguageGates;
         Assert.Equal("en", gates["FixAloneLowercaseIToUppercaseI"]);
+        Assert.Equal("en", gates["FixMisreadQuotes"]);
         Assert.Equal("da", gates["FixDanishLetterI"]);
         Assert.Equal("es", gates["FixSpanishInvertedQuestionAndExclamationMarks"]);
         Assert.Equal("tr", gates["FixTurkishAnsiToUnicode"]);

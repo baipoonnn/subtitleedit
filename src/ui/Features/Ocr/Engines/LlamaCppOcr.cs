@@ -1,5 +1,6 @@
 using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Logic;
+using Nikse.SubtitleEdit.UiLogic.Ocr;
 using SkiaSharp;
 using System;
 using System.Net.Http;
@@ -37,7 +38,7 @@ public class LlamaCppOcr : IDisposable
             //System.IO.File.WriteAllBytes("c:\\temp\\ollama-ocr-image.png", pngBytes);
 
             var template = string.IsNullOrWhiteSpace(promptTemplate)
-                ? "Extract all text exactly as written. The language is {language}. Preserve line breaks."
+                ? SeOcrDefaults.LlamaCppOcrPrompt
                 : promptTemplate;
             var prompt = template
                 .Replace("{language}", language)
@@ -72,17 +73,7 @@ public class LlamaCppOcr : IDisposable
             // sanitize
             resultText = resultText.Trim();
             resultText = resultText.Replace("\\n", Environment.NewLine);
-            resultText = resultText.Replace(" ,", ",");
-            resultText = resultText.Replace(" .", ".");
-            resultText = resultText.Replace(" !", "!");
-            resultText = resultText.Replace(" ?", "?");
-            resultText = resultText.Replace("( ", "(");
-            resultText = resultText.Replace(" )", ")");
-            resultText = resultText.Replace("\\\"", "\"");
-            if (resultText.EndsWith("!'"))
-            {
-                resultText = resultText.TrimEnd('\'');
-            }
+            resultText = OcrHelper.FixAiOcrPunctuationSpaces(resultText, language);
 
             return resultText.Trim();
         }
@@ -98,6 +89,15 @@ public class LlamaCppOcr : IDisposable
         }
         catch (Exception ex)
         {
+            // Record it so the caller can tell a real failure apart from a textless image: the
+            // OCR loops fail fast on a non-empty Error and otherwise grind through the whole job
+            // only to report "no text found". A non-success HTTP status has already stored the
+            // (more informative) response body in Error.
+            if (string.IsNullOrEmpty(Error))
+            {
+                Error = ex.Message;
+            }
+
             SeLogger.Error(ex, "Error calling llama.cpp for OCR");
             return string.Empty;
         }

@@ -44,7 +44,8 @@ public class BeautifyTimeCodesWindow : Window
         Grid.SetRow(c.Children[2], 2);
         Grid.SetRow(c.Children[3], 3);
 
-        Activated += delegate { /* leave focus on the visualizer for keyboard nav */ };
+        // Change navigation keys (arrows, PageUp/Down, Home/End) are handled at window level, so
+        // they work whichever control has focus - nothing here needs to own them.
         KeyDown += (_, e) => vm.OnKeyDown(e);
         Closing += (_, __) => vm.Dispose();
     }
@@ -56,16 +57,69 @@ public class BeautifyTimeCodesWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Right,
             Opacity = 0.8,
-            FontSize = 12,
+            FontSize = UiUtil.ScaledFontSize(12),
             [!TextBlock.TextProperty] = new Binding(nameof(vm.StatsLine)) { Source = vm },
         };
 
         var grid = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("*"),
+            ColumnDefinitions = new ColumnDefinitions("Auto,*"),
         };
-        grid.Add(stats, 0, 0);
+        grid.Add(BuildTimeCodesBar(vm), 0, 0);
+        grid.Add(stats, 0, 1);
         return grid;
+    }
+
+    /// <summary>
+    /// Opt-in for snapping against the video's real frame times rather than an assumed n/fps grid,
+    /// plus the extraction that produces them (a full decode, so it is explicit and cancellable).
+    /// </summary>
+    private static Control BuildTimeCodesBar(BeautifyTimeCodesViewModel vm)
+    {
+        var l = Se.Language.Tools.BeautifyTimeCodes;
+
+        var checkBoxExact = new CheckBox
+        {
+            Content = l.UseExactTimeCodes,
+            VerticalAlignment = VerticalAlignment.Center,
+            [!CheckBox.IsCheckedProperty] = new Binding(nameof(vm.UseExactTimeCodes))
+            {
+                Source = vm,
+                Mode = BindingMode.TwoWay,
+                UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged,
+            },
+        };
+
+        if (Se.Settings.Appearance.ShowHints)
+        {
+            ToolTip.SetTip(checkBoxExact, l.TimeCodesHint);
+        }
+
+        var status = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            Opacity = 0.8,
+            FontSize = UiUtil.ScaledFontSize(12),
+            [!TextBlock.TextProperty] = new Binding(nameof(vm.TimeCodesStatus)) { Source = vm },
+        };
+
+        var buttonExtract = UiUtil.MakeButton(l.ExtractTimeCodes, vm.ExtractTimeCodesCommand);
+        buttonExtract.VerticalAlignment = VerticalAlignment.Center;
+        buttonExtract.Bind(Button.IsVisibleProperty, new Binding(nameof(vm.CanExtractTimeCodes)) { Source = vm });
+
+        var progress = UiUtil.MakeProgressBar();
+        progress.Width = 140;
+        progress.VerticalAlignment = VerticalAlignment.Center;
+        progress.Bind(ProgressBar.ValueProperty, new Binding(nameof(vm.ExtractProgressValue)) { Source = vm });
+        progress.Bind(ProgressBar.IsVisibleProperty, new Binding(nameof(vm.IsExtractingTimeCodes)) { Source = vm });
+
+        return new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children = { checkBoxExact, status, buttonExtract, progress },
+        };
     }
 
     private static Control BuildVisualizerArea(BeautifyTimeCodesViewModel vm)
@@ -119,6 +173,7 @@ public class BeautifyTimeCodesWindow : Window
         {
             IsReadOnly = true,
             DrawGridLines = true,
+            WaveformGridColor = Se.Settings.Waveform.WaveformGridColor.FromHexToColor(),
             // Stronger tints so paragraphs stand out on the dark waveform
             ParagraphBackground = Color.FromArgb(140, 70, 110, 180),       // regular: blue
             ParagraphSelectedBackground = Color.FromArgb(210, 230, 160, 40), // current change: amber
@@ -138,10 +193,12 @@ public class BeautifyTimeCodesWindow : Window
     {
         var l = Se.Language.Tools.BeautifyTimeCodes;
 
-        var buttonPrev = UiUtil.MakeButton(vm.PreviousChangeCommand, IconNames.ArrowUpThin, l.PreviousChange);
+        // The same steps are on the keyboard (see BeautifyTimeCodesViewModel.OnKeyDown); the
+        // tooltips are the only place that advertises it, so name the keys there.
+        var buttonPrev = UiUtil.MakeButton(vm.PreviousChangeCommand, IconNames.ArrowUpThin, $"{l.PreviousChange} (Up / PageUp)");
         buttonPrev.Bind(Button.IsEnabledProperty, new Binding(nameof(vm.CanGoPrevious)) { Source = vm });
 
-        var buttonNext = UiUtil.MakeButton(vm.NextChangeCommand, IconNames.ArrowDownThin, l.NextChange);
+        var buttonNext = UiUtil.MakeButton(vm.NextChangeCommand, IconNames.ArrowDownThin, $"{l.NextChange} (Down / PageDown)");
         buttonNext.Bind(Button.IsEnabledProperty, new Binding(nameof(vm.CanGoNext)) { Source = vm });
 
         var labelPosition = new TextBlock

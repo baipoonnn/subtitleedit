@@ -5,6 +5,7 @@ using Avalonia.Data;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Styling;
+using Nikse.SubtitleEdit.Controls;
 using Nikse.SubtitleEdit.Controls.AudioVisualizerControl;
 using Nikse.SubtitleEdit.Features.Main;
 using Nikse.SubtitleEdit.Features.Main.Layout;
@@ -31,6 +32,8 @@ public class CutVideoWindow : Window
         var segmentsView = MakeSegmentsView(vm);
         var videoPlayerView = MakeVideoPlayerView(vm);
         var audioVisualizerView = MakeAudioVisualizerView(vm);
+        var transitionsView = MakeTransitionsView(vm);
+        var fadesView = MakeFadesView(vm);
         var progressView = MakeProgressView(vm);
 
         var comboBoxCutType = UiUtil.MakeComboBox<CutTypeDisplay>(
@@ -48,20 +51,31 @@ public class CutVideoWindow : Window
             nameof(vm.SelectedVideoExtension)
         ).WithMarginRight(10);
 
+        var labelVideoEncoding = UiUtil.MakeLabel(Se.Language.General.Encoding);
+        labelVideoEncoding[!Visual.IsVisibleProperty] = new Binding(nameof(vm.IsVideoEncodingVisible));
+        var comboBoxVideoEncoding = UiUtil.MakeComboBox(
+            vm.VideoEncodings,
+            vm,
+            nameof(vm.SelectedVideoEncoding)
+        ).WithMarginRight(10);
+        comboBoxVideoEncoding[!Visual.IsVisibleProperty] = new Binding(nameof(vm.IsVideoEncodingVisible));
+
         var checkBoxCutSubtitle = UiUtil.MakeCheckBox(Se.Language.Video.CutVideoAlsoCutSubtitle, vm, nameof(vm.CutSubtitleToo))
             .WithMarginRight(10);
         checkBoxCutSubtitle[!Visual.IsVisibleProperty] = new Binding(nameof(vm.IsCutSubtitleVisible));
 
         var buttonGenerate = UiUtil.MakeButton(Se.Language.General.Generate, vm.GenerateCommand)
-            .WithBindEnabled(nameof(vm.IsGenerating), new InverseBooleanConverter());
+            .WithBindEnabled(nameof(vm.IsGenerating), InverseBooleanConverter.Instance);
         var buttonConfig = UiUtil.MakeButton(vm.OkCommand, IconNames.Settings, Se.Language.General.Settings)
             .WithMarginRight(5)
-            .WithBindEnabled(nameof(vm.IsGenerating), new InverseBooleanConverter());
+            .WithBindEnabled(nameof(vm.IsGenerating), InverseBooleanConverter.Instance);
         var buttonPanel = UiUtil.MakeButtonBar(
             checkBoxCutSubtitle,
             comboBoxCutType,
             labelVideoExtension,
             comboBoxVideoExtension,
+            labelVideoEncoding,
+            comboBoxVideoEncoding,
             buttonGenerate,
             UiUtil.MakeButtonCancel(vm.CancelCommand)
         );
@@ -72,6 +86,8 @@ public class CutVideoWindow : Window
             {
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }, // segments and video player
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }, // audio visualizer
+                new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }, // transitions
+                new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }, // fade from/to black
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }, // progress bar
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }, // buttons
             },
@@ -90,19 +106,21 @@ public class CutVideoWindow : Window
         grid.Add(segmentsView, 0, 0);
         grid.Add(videoPlayerView, 0, 1);
         grid.Add(audioVisualizerView, 1, 0, 1, 2);
-        grid.Add(progressView, 2, 0, 1, 2);
-        grid.Add(buttonPanel, 3, 0, 1, 2);
+        grid.Add(transitionsView, 2, 0, 1, 2);
+        grid.Add(fadesView, 3, 0, 1, 2);
+        grid.Add(progressView, 4, 0, 1, 2);
+        grid.Add(buttonPanel, 5, 0, 1, 2);
 
         Content = grid;
 
-        Activated += delegate
+        UiUtil.FocusOnFirstActivation(this, () =>
         {
             // initial focus on an input, not an action button - a focused button clicks on bare Space
             if (vm.SegmentGrid != null)
             {
                 TableViewExtras.FocusRow(vm.SegmentGrid);
             }
-        };
+        });
         Loaded += (s, e) => vm.OnLoaded();
         Closing += (s, e) => vm.OnClosing();
         AddHandler(KeyDownEvent, vm.OnKeyDownHandler, RoutingStrategies.Tunnel | RoutingStrategies.Bubble, handledEventsToo: false);
@@ -162,7 +180,7 @@ public class CutVideoWindow : Window
         var buttonSetStart = UiUtil.MakeButton(Se.Language.General.SetStart, vm.SetStartCommand).WithBindIsEnabled(nameof(vm.IsSetStartEnabled));
         var buttonSetEnd = UiUtil.MakeButton(Se.Language.General.SetEnd, vm.SetEndCommand).WithBindIsEnabled(nameof(vm.IsSetEndEnabled));
         var buttonDelete = UiUtil.MakeButton(Se.Language.General.Delete, vm.DeleteCommand).WithBindIsEnabled(nameof(vm.IsDeleteEnabled));
-        var buttonImport = new SplitButton
+        var buttonImport = new SeSplitButton
         {
             Content = Se.Language.General.ImportDotDotDot,
             Command = vm.ImportCommand,
@@ -230,6 +248,7 @@ public class CutVideoWindow : Window
         vm.AudioVisualizer.DrawGridLines = Se.Settings.Waveform.DrawGridLines;
         vm.AudioVisualizer.WaveformColor = Se.Settings.Waveform.WaveformColor.FromHexToColor();
         vm.AudioVisualizer.WaveformSelectedColor = Se.Settings.Waveform.WaveformSelectedColor.FromHexToColor();
+        vm.AudioVisualizer.WaveformGridColor = Se.Settings.Waveform.WaveformGridColor.FromHexToColor();
         vm.AudioVisualizer.OnSelectRequested += vm.AudioVisualizerSelectRequested;
         vm.AudioVisualizer.OnPrimarySingleClicked += vm.AudioVisualizerOnPrimarySingleClicked;
         vm.AudioVisualizer.OnPrimaryDoubleClicked += vm.AudioVisualizerOnPrimaryDoubleClicked;
@@ -237,9 +256,94 @@ public class CutVideoWindow : Window
         return UiUtil.MakeBorderForControl(vm.AudioVisualizer);
     }
 
+    private static Border MakeTransitionsView(CutVideoViewModel vm)
+    {
+        var checkBoxTransition = UiUtil.MakeCheckBox(Se.Language.Video.CutVideoTransition, vm, nameof(vm.TransitionEnabled))
+            .WithMarginRight(10);
+        var comboBoxTransition = UiUtil.MakeComboBox(vm.Transitions, vm, nameof(vm.SelectedTransition))
+            .WithMarginRight(10)
+            .WithBindIsVisible(nameof(vm.TransitionEnabled));
+        comboBoxTransition.MinWidth = 180;
+        var labelDuration = UiUtil.MakeLabel(Se.Language.Video.CutVideoTransitionDurationSeconds)
+            .WithBindIsVisible(nameof(vm.TransitionEnabled));
+        var numericUpDownDuration = UiUtil.MakeNumericUpDownTwoDecimals(0.05m, 10m, 130, vm, nameof(vm.TransitionDuration), defaultValue: 0.5m)
+            .WithMarginRight(10)
+            .WithBindIsVisible(nameof(vm.TransitionEnabled));
+        var buttonPreview = UiUtil.MakeButton(Se.Language.Video.CutVideoPreviewTransition, vm.PreviewTransitionCommand)
+            .WithBindIsEnabled(nameof(vm.IsPreviewTransitionEnabled))
+            .WithBindIsVisible(nameof(vm.TransitionEnabled));
+
+        var panelTransition = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                checkBoxTransition,
+                comboBoxTransition,
+                labelDuration,
+                numericUpDownDuration,
+                buttonPreview,
+            },
+        };
+
+        var textBlockInfo = new TextBlock
+        {
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            Opacity = 0.7,
+            [!TextBlock.TextProperty] = new Binding(nameof(vm.TransitionInfo)),
+            [!Visual.IsVisibleProperty] = new Binding(nameof(vm.TransitionEnabled)),
+        };
+
+        var panel = new StackPanel
+        {
+            Orientation = Orientation.Vertical,
+            Spacing = 5,
+            Children =
+            {
+                panelTransition,
+                textBlockInfo,
+            },
+        };
+
+        return UiUtil.MakeBorderForControl(panel);
+    }
+
+    /// <summary>
+    /// Fade from black at the very start of the output and to black at its very end - its own
+    /// section, as it has nothing to do with the joins.
+    /// </summary>
+    private static Border MakeFadesView(CutVideoViewModel vm)
+    {
+        var checkBoxFadeIn = UiUtil.MakeCheckBox(Se.Language.Video.CutVideoFadeInSeconds, vm, nameof(vm.FadeInEnabled));
+        var numericUpDownFadeIn = UiUtil.MakeNumericUpDownTwoDecimals(0.05m, 60m, 130, vm, nameof(vm.FadeInDuration), defaultValue: 1m)
+            .WithMarginRight(20)
+            .WithBindEnabled(nameof(vm.FadeInEnabled));
+        var checkBoxFadeOut = UiUtil.MakeCheckBox(Se.Language.Video.CutVideoFadeOutSeconds, vm, nameof(vm.FadeOutEnabled));
+        var numericUpDownFadeOut = UiUtil.MakeNumericUpDownTwoDecimals(0.05m, 60m, 130, vm, nameof(vm.FadeOutDuration), defaultValue: 1m)
+            .WithBindEnabled(nameof(vm.FadeOutEnabled));
+
+        var panelFades = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+            Spacing = 5,
+            Children =
+            {
+                checkBoxFadeIn,
+                numericUpDownFadeIn,
+                checkBoxFadeOut,
+                numericUpDownFadeOut,
+            },
+        };
+
+        return UiUtil.MakeBorderForControl(panelFades);
+    }
+
     private static Grid MakeProgressView(CutVideoViewModel vm)
     {
         var progressBar = UiUtil.MakeProgressBar();
+        progressBar.VerticalAlignment = VerticalAlignment.Top;
         progressBar.Bind(ProgressBar.ValueProperty, new Binding(nameof(vm.ProgressValue)));
         progressBar.Bind(ProgressBar.IsVisibleProperty, new Binding(nameof(vm.IsGenerating)));
 
@@ -248,7 +352,7 @@ public class CutVideoWindow : Window
             Margin = new Thickness(5, 20, 0, 0),
         };
         statusText.Bind(TextBlock.TextProperty, new Binding(nameof(vm.ProgressText)));
-        statusText.Bind(TextBlock.IsVisibleProperty, new Binding(nameof(vm.IsGenerating)));
+        statusText.Bind(TextBlock.IsVisibleProperty, new Binding(nameof(vm.IsStatusTextVisible)));
 
         var grid = new Grid
         {

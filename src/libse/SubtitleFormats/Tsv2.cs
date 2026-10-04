@@ -9,7 +9,10 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
     public class Tsv2 : SubtitleFormat
     {
         private const string Separator = "\t";
-        private static readonly Regex CsvLine = new Regex(@"^""?\d+""?" + Separator + @"""?\d+""?" + Separator + @"""?[^""]*""?$", RegexOptions.Compiled);
+        // The text field may contain anything, quotation marks included - requiring [^"]* there
+        // made every line whose subtitle text holds a quote fail the match, and the cue was
+        // silently dropped on read. The two numeric fields still identify the format.
+        private static readonly Regex CsvLine = new Regex(@"^""?\d+""?" + Separator + @"""?\d+""?" + Separator + @".*$", RegexOptions.Compiled);
 
         public override string Extension => ".tsv";
 
@@ -42,7 +45,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             sb.AppendLine(string.Format(format, Separator, "Start time in milliseconds", "End time in milliseconds", "Text"));
             foreach (Paragraph p in subtitle.Paragraphs)
             {
-                sb.AppendLine(string.Format(format, Separator, (long)Math.Round(p.StartTime.TotalMilliseconds, MidpointRounding.AwayFromZero) , (long)Math.Round(p.EndTime.TotalMilliseconds, MidpointRounding.AwayFromZero), p.Text.Replace(Environment.NewLine, " ")));
+                sb.AppendLine(string.Format(format, Separator, (long)Math.Round(p.StartTime.TotalMilliseconds, MidpointRounding.AwayFromZero) , (long)Math.Round(p.EndTime.TotalMilliseconds, MidpointRounding.AwayFromZero), p.Text.Replace(Environment.NewLine, " ").Replace('\t', ' '))); // a tab is the field separator
             }
             return sb.ToString().Trim();
         }
@@ -56,7 +59,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             {
                 if (CsvLine.IsMatch(line))
                 {
-                    var parts = line.Split(Separator.ToCharArray(), StringSplitOptions.RemoveEmptyEntries);
+                    var parts = line.Split(Separator.ToCharArray(), 3, StringSplitOptions.None); // the text is the rest of the line (may be empty or hold tabs)
                     if (parts.Length == 3)
                     {
                         try

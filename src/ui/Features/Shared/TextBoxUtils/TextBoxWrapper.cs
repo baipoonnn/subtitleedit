@@ -39,22 +39,27 @@ public class TextBoxWrapper : ITextBoxWrapper
         set => _textBox.SelectedText = value;
     }
 
+    // Avalonia's SelectionStart is the ANCHOR and SelectionEnd the moving caret end, so a
+    // right-to-left selection (Shift+Left, or dragging leftwards) leaves End < Start. Reporting
+    // those raw gave a NEGATIVE SelectionLength, and callers that test "> 0" - Option+Backspace
+    // and Cmd+Backspace in the edit box - then took the no-selection path and deleted the wrong
+    // text. The other implementation of this interface (SyntaxTextView) normalizes with Min/Max.
     public int SelectionStart
     {
-        get => _textBox.SelectionStart;
+        get => Math.Min(_textBox.SelectionStart, _textBox.SelectionEnd);
         set => _textBox.SelectionStart = value;
     }
 
     public int SelectionLength
     {
-        get => _textBox.SelectionEnd - _textBox.SelectionStart;
-        set => _textBox.SelectionEnd = _textBox.SelectionStart + value;
+        get => Math.Abs(_textBox.SelectionEnd - _textBox.SelectionStart);
+        set => _textBox.SelectionEnd = SelectionStart + value;
     }
-    
+
     public int SelectionEnd
     {
-        get => _textBox.SelectionEnd;
-        set => _textBox.SelectionEnd =  value;
+        get => Math.Max(_textBox.SelectionStart, _textBox.SelectionEnd);
+        set => _textBox.SelectionEnd = value;
     }
 
     public void Select(int start, int length)
@@ -78,8 +83,17 @@ public class TextBoxWrapper : ITextBoxWrapper
     public Control ContentControl => _textBox;
 
     public bool IsFocused => _textBox.IsFocused;
+    public bool IsReadOnly => _textBox.IsReadOnly;
+
     public void Cut()
     {
+        // TextBox.Cut writes the clipboard before its own read-only check, so cutting in a
+        // read-only box would clobber the clipboard while deleting nothing.
+        if (_textBox.IsReadOnly)
+        {
+            return;
+        }
+
         _textBox.Cut();
     }
 
@@ -105,6 +119,11 @@ public class TextBoxWrapper : ITextBoxWrapper
 
     public void DeleteForward()
     {
+        if (_textBox.IsReadOnly)
+        {
+            return;
+        }
+
         if (_textBox.SelectionStart != _textBox.SelectionEnd)
         {
             _textBox.SelectedText = string.Empty;

@@ -9,12 +9,14 @@ public static class SourceSyntaxHighlighterFactory
 {
     public static ISourceSyntaxHighlighter? ForFormat(string text, SubtitleFormat subtitleFormat)
     {
-        // SubRip (.srt) and WebVTT (.vtt) use similar time code formats
-        if (subtitleFormat is SubRip ||
-            subtitleFormat is WebVTT ||
-            subtitleFormat is WebVTTFileWithLineNumber)
+        if (subtitleFormat is SubRip)
         {
             return new SubRipSourceSyntaxHighlighting();
+        }
+
+        if (subtitleFormat is WebVTT || subtitleFormat is WebVTTFileWithLineNumber)
+        {
+            return new WebVttSourceSyntaxHighlighting();
         }
 
         // Advanced SubStation Alpha (.ass) and SubStation Alpha (.ssa) formats
@@ -42,7 +44,18 @@ public static class SourceSyntaxHighlighterFactory
             return new JsonSourceSyntaxHighlighting();
         }
 
-        // No syntax highlighting for other formats
-        return null;
+        if (subtitleFormat is Lrc || subtitleFormat is Lrc3DigitsMs || subtitleFormat is LrcNoEndTime)
+        {
+            return new LrcSourceSyntaxHighlighting();
+        }
+
+        // Drop frame derives from ScenaristClosedCaptions
+        if (subtitleFormat is ScenaristClosedCaptions)
+        {
+            return new SccSourceSyntaxHighlighting();
+        }
+
+        // Every other text format: time codes and markup, which nearly all of them share
+        return new GenericSourceSyntaxHighlighting();
     }
 }

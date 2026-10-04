@@ -53,6 +53,13 @@ public class SourceViewEditorTests : IDisposable
             Action<TWindow>? configureWindow = null)
             where TWindow : Window where TViewModel : class
             => throw new NotSupportedException();
+
+        public Task<TViewModel> ShowWithOwnerHiddenAsync<TWindow, TViewModel>(
+            Window owner,
+            IReadOnlyList<Window?> companions,
+            Action<TViewModel>? configureViewModel = null)
+            where TWindow : Window where TViewModel : class
+            => throw new NotSupportedException();
     }
 
     private static (SourceViewViewModel Vm, Subtitle Subtitle, string Text) MakeSourceView()
@@ -118,6 +125,152 @@ public class SourceViewEditorTests : IDisposable
         Assert.Equal(2, subtitle.Paragraphs.Count);
 
         window.Close();
+    }
+
+    /// <summary>SubRip that throws on a marker line, like a format choking on malformed input.</summary>
+    private sealed class ThrowingSubRip : SubRip
+    {
+        public override void LoadSubtitle(Subtitle subtitle, List<string> lines, string fileName)
+        {
+            if (lines.Exists(line => line.Contains("BOOM", StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException("malformed");
+            }
+
+            base.LoadSubtitle(subtitle, lines, fileName);
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task OkSurvivesAFormatThatThrowsOnTheEditedSource()
+    {
+        var subtitle = new Subtitle();
+        subtitle.Paragraphs.Add(new Paragraph("First line", 1000, 3000));
+        var format = new ThrowingSubRip();
+        var vm = new SourceViewViewModel(new NoWindowService());
+        vm.Initialize("Source view", subtitle.ToText(format), format, subtitle, 0);
+
+        var window = new Window { Content = new Border { Child = vm.SourceViewTextBox.ContentControl } };
+        _windows.Add(window);
+        vm.Window = window;
+        window.Show();
+        window.UpdateLayout();
+
+        // Validation already treated the throw as "does not parse"; Ok used to let it escape.
+        ViewOf(vm).ReplaceAllText("1\n00:00:01,000 --> 00:00:03,000\nBOOM\n");
+        vm.Validate();
+        Assert.True(vm.IsValidationError);
+
+        await vm.OkCommand.ExecuteAsync(null);
+
+        // The other formats still get their turn - plain SubRip reads it fine.
+        Assert.True(vm.OkPressed);
+        Assert.Equal("BOOM", vm.Subtitle.Paragraphs[0].Text);
+
+        window.Close();
+    }
+
+    private const string AssaSource =
+        "[Script Info]\nScriptType: v4.00+\nTitle: Pasted\n\n" +
+        "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n" +
+        "Style: Default,Arial,20,&H00FFFFFF,&H0300FFFF,&H00000000,&H02000000,0,0,0,0,100,100,0,0,1,2,1,2,10,10,10,1\n\n" +
+        "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" +
+        "Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,From ASSA\n";
+
+    private Window ShowInWindow(SourceViewViewModel vm)
+    {
+        var window = new Window { Content = new Border { Child = vm.SourceViewTextBox.ContentControl } };
+        _windows.Add(window);
+        vm.Window = window;
+        window.Show();
+        window.UpdateLayout();
+        return window;
+    }
+
+    [AvaloniaFact]
+    public async Task OkAsksBeforeTakingLinesThatOnlyParseAsAnotherFormat()
+    {
+        var (vm, _, _) = MakeSourceView();
+        ShowInWindow(vm);
+        SubtitleFormat? asked = null;
+        vm.ConfirmUseOtherFormat = format =>
+        {
+            asked = format;
+            return Task.FromResult(false);
+        };
+
+        ViewOf(vm).ReplaceAllText(AssaSource);
+        await vm.OkCommand.ExecuteAsync(null);
+
+        Assert.IsType<AdvancedSubStationAlpha>(asked);
+        Assert.False(vm.OkPressed); // "No" keeps the dialog open with the text as typed
+    }
+
+    [AvaloniaFact]
+    public async Task AcceptingAnotherFormatTakesTheLinesButNotItsHeader()
+    {
+        var (vm, _, _) = MakeSourceView();
+        ShowInWindow(vm);
+        vm.ConfirmUseOtherFormat = _ => Task.FromResult(true);
+
+        ViewOf(vm).ReplaceAllText(AssaSource);
+        await vm.OkCommand.ExecuteAsync(null);
+
+        Assert.True(vm.OkPressed);
+        Assert.Equal("From ASSA", Assert.Single(vm.Subtitle.Paragraphs).Text);
+        Assert.True(string.IsNullOrEmpty(vm.Subtitle.Header)); // an ASSA header is no use to SubRip
+    }
+
+    private SourceViewViewModel MakeLrcSourceView(out string text)
+    {
+        text = "[ar:Artist]\n[ti:Song]\n[00:01.00]First line\n[00:03.00]Second line\n[00:06.00]\n";
+        var format = new Lrc();
+        var subtitle = new Subtitle();
+        format.LoadSubtitle(subtitle, text.SplitToLines(), string.Empty);
+
+        var vm = new SourceViewViewModel(new NoWindowService());
+        vm.Initialize("Source view", text, format, subtitle, 0);
+        ShowInWindow(vm);
+        return vm;
+    }
+
+    [AvaloniaFact]
+    public async Task DeletingTheHeaderIsReportedSoTheCallerCanClearIt()
+    {
+        var vm = MakeLrcSourceView(out var text);
+
+        ViewOf(vm).ReplaceAllText(text.Replace("[ar:Artist]\n[ti:Song]\n", string.Empty));
+        await vm.OkCommand.ExecuteAsync(null);
+
+        Assert.True(vm.OkPressed);
+        Assert.True(vm.HeaderRemoved);
+    }
+
+    [AvaloniaFact]
+    public async Task EditingTheHeaderIsNotARemoval()
+    {
+        var vm = MakeLrcSourceView(out var text);
+
+        ViewOf(vm).ReplaceAllText(text.Replace("[ti:Song]", "[ti:Other song]"));
+        await vm.OkCommand.ExecuteAsync(null);
+
+        Assert.True(vm.OkPressed);
+        Assert.False(vm.HeaderRemoved);
+        Assert.Contains("[ti:Other song]", vm.Subtitle.Header);
+    }
+
+    [AvaloniaFact]
+    public async Task LinesReadAsAnotherFormatDoNotRemoveTheHeader()
+    {
+        var vm = MakeLrcSourceView(out _);
+        vm.ConfirmUseOtherFormat = _ => Task.FromResult(true);
+
+        // SubRip has no header: that is not the user deleting the LRC one.
+        ViewOf(vm).ReplaceAllText("1\n00:00:01,000 --> 00:00:03,000\nPasted\n");
+        await vm.OkCommand.ExecuteAsync(null);
+
+        Assert.True(vm.OkPressed);
+        Assert.False(vm.HeaderRemoved);
     }
 
     // ----------------------------------------------------------------------------------------

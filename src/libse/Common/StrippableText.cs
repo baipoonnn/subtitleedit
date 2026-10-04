@@ -13,28 +13,8 @@ namespace Nikse.SubtitleEdit.Core.Common
         /// </summary>
         private static readonly string NameEndChars = @" ,.!?:;')]- <”""" + Environment.NewLine;
 
-        /// <summary>
-        /// Suffix test that does not copy the whole builder - the casing loop below asks this
-        /// once per character, and sb.ToString() there allocated the accumulated line each time.
-        /// </summary>
-        private static bool EndsWith(StringBuilder sb, string value)
-        {
-            if (sb.Length < value.Length)
-            {
-                return false;
-            }
-
-            var offset = sb.Length - value.Length;
-            for (var i = 0; i < value.Length; i++)
-            {
-                if (sb[offset + i] != value[i])
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
+        /// <summary>A line break followed by a dash - the dialog marker tested in the casing loop below.</summary>
+        private static readonly string NewLineDash = Environment.NewLine + "-";
 
         public string Pre { get; set; }
         public string Post { get; set; }
@@ -61,7 +41,10 @@ namespace Nikse.SubtitleEdit.Core.Common
             var start = 0;
             var end = text.Length;
 
-            if (end > 0 && ("<{" + stripStartCharacters).Contains(text[0]))
+            // Test the two extra characters directly. Concatenating them onto the strip set
+            // allocated a fresh ~20-character string on every construction - and this type is
+            // constructed per paragraph by several fix-common-errors rules and by name casing.
+            if (end > 0 && (text[0] == '<' || text[0] == '{' || stripStartCharacters.Contains(text[0])))
             {
                 int beginStart;
                 do
@@ -94,7 +77,7 @@ namespace Nikse.SubtitleEdit.Core.Common
                 while (start > beginStart);
             }
 
-            if (end > start && (">" + stripEndCharacters).Contains(text[end - 1]))
+            if (end > start && (text[end - 1] == '>' || stripEndCharacters.Contains(text[end - 1])))
             {
                 int beginEnd;
                 do
@@ -165,17 +148,25 @@ namespace Nikse.SubtitleEdit.Core.Common
             }
 
             string lower = StrippedText.ToLowerInvariant();
+            GetNameStartMask(lower, out var startMaskLow, out var startMaskHigh);
             int idName = 0;
             foreach (string name in nameList)
             {
+                // A name can only be replaced where it starts at a name start (see "startOk"
+                // below), so a name whose first letter is at none of them can be skipped without
+                // searching - the name list has thousands of entries, and this loop used to scan
+                // the line once for every one of them.
+                if (name.Length > 0 && name[0] < 128 && !MayStartName(name[0], startMaskLow, startMaskHigh))
+                {
+                    continue;
+                }
+
                 // "lower" is already lower case, so an ignore-case search finds the same
                 // positions as the lower-cased name did - without allocating one string per name.
                 int start = lower.IndexOf(name, StringComparison.OrdinalIgnoreCase);
                 while (start >= 0 && start < lower.Length)
                 {
-                    bool startOk = (start == 0) || (lower[start - 1] == ' ') || (lower[start - 1] == '-') ||
-                                   (lower[start - 1] == '"') || (lower[start - 1] == '\'') || (lower[start - 1] == '>') || (lower[start - 1] == '[') || (lower[start - 1] == '“') ||
-                                   Environment.NewLine.EndsWith(lower[start - 1]);
+                    bool startOk = start == 0 || IsNameStartBoundary(lower[start - 1]);
 
                     if (startOk && string.CompareOrdinal(name, "Don") == 0 && lower.AsSpan(start).StartsWith("don't".AsSpan(), StringComparison.Ordinal))
                     {
@@ -216,6 +207,65 @@ namespace Nikse.SubtitleEdit.Core.Common
                 Post = "." + Post;
                 StrippedText = StrippedText.TrimEnd('.');
             }
+        }
+
+        private const string AsciiUpperLetters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+        private static bool IsNameStartBoundary(char c) =>
+            c == ' ' || c == '-' || c == '"' || c == '\'' || c == '>' || c == '[' || c == '“' || Environment.NewLine.EndsWith(c);
+
+        /// <summary>
+        /// Builds a 128 bit set of the ASCII characters, upper-cased, that an ordinal ignore-case
+        /// match could see at a name start in "lower". Removing names never creates a new name
+        /// start - the inserted id begins with "_", which is always in the set, and the char before
+        /// every other position is unchanged - so the set stays valid while names are replaced.
+        /// </summary>
+        private static void GetNameStartMask(string lower, out ulong low, out ulong high)
+        {
+            low = 0;
+            high = 1UL << ('_' - 64);
+            for (var i = 0; i < lower.Length; i++)
+            {
+                if (i > 0 && !IsNameStartBoundary(lower[i - 1]))
+                {
+                    continue;
+                }
+
+                var c = lower[i];
+                if (c < 128)
+                {
+                    SetMaskBit(char.ToUpperInvariant(c), ref low, ref high);
+                }
+                else if (char.IsLetter(c))
+                {
+                    // A few non-ASCII letters (like the long s) fold to an ASCII letter.
+                    for (var k = 0; k < AsciiUpperLetters.Length; k++)
+                    {
+                        if (string.Compare(lower, i, AsciiUpperLetters, k, 1, StringComparison.OrdinalIgnoreCase) == 0)
+                        {
+                            SetMaskBit(AsciiUpperLetters[k], ref low, ref high);
+                        }
+                    }
+                }
+            }
+        }
+
+        private static void SetMaskBit(char c, ref ulong low, ref ulong high)
+        {
+            if (c < 64)
+            {
+                low |= 1UL << c;
+            }
+            else
+            {
+                high |= 1UL << (c - 64);
+            }
+        }
+
+        private static bool MayStartName(char first, ulong low, ulong high)
+        {
+            first = char.ToUpperInvariant(first);
+            return first < 64 ? (low & (1UL << first)) != 0 : (high & (1UL << (first - 64))) != 0;
         }
 
         private void ReplaceAssaTagsRemove(List<string> replaceIds, List<string> replaceNames, List<string> originalNames)
@@ -302,7 +352,7 @@ namespace Nikse.SubtitleEdit.Core.Common
                         {
                             sb.Append(s);
                         }
-                        else if ((sb.EndsWith('<') || EndsWith(sb, "</")) && i + 1 < StrippedText.Length && StrippedText[i + 1] == '>')
+                        else if ((sb.EndsWith('<') || sb.EndsWith("</")) && i + 1 < StrippedText.Length && StrippedText[i + 1] == '>')
                         { // tags
                             sb.Append(s);
                         }
@@ -310,7 +360,7 @@ namespace Nikse.SubtitleEdit.Core.Common
                         { // tags
                             sb.Append(s);
                         }
-                        else if (EndsWith(sb, "... "))
+                        else if (sb.EndsWith("... "))
                         {
                             sb.Append(s);
                             lastWasBreak = false;
@@ -354,7 +404,12 @@ namespace Nikse.SubtitleEdit.Core.Common
                             var idx = sb.ToString().IndexOf('[');
                             if (s == ']' && idx > 1)
                             { // I [Motor roaring] love you!
-                                var temp = sb.ToString(0, idx - 1).Trim();
+                                // The text before '[' is [0, idx), so the length is idx - the
+                                // "- 1" dropped the last character before the bracket, which is
+                                // exactly the one this test looks at. "Yes.[Motor roaring] hello."
+                                // saw "Yes" (a letter) instead of "Yes." and left "hello"
+                                // lowercase. The documented "I [Motor roaring]" case is unchanged.
+                                var temp = sb.ToString(0, idx).Trim();
                                 if (temp.Length > 0 && !char.IsLetterOrDigit(temp[temp.Length - 1]))
                                 {
                                     lastWasBreak = true;
@@ -383,9 +438,9 @@ namespace Nikse.SubtitleEdit.Core.Common
                         }
                         else if (s == '-' && Pre.IndexOf('-') >= 0)
                         {
-                            if (sb.ToString().EndsWith(Environment.NewLine + "-"))
+                            if (sb.EndsWith(NewLineDash))
                             {
-                                var prevLine = HtmlUtil.RemoveHtmlTags(sb.ToString().Substring(0, sb.Length - 2).TrimEnd());
+                                var prevLine = HtmlUtil.RemoveHtmlTags(sb.ToString(0, sb.Length - 2).TrimEnd());
                                 if (prevLine.EndsWith('.') ||
                                     prevLine.EndsWith('!') ||
                                     prevLine.EndsWith('?') ||

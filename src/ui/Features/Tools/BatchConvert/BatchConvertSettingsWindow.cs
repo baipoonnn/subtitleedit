@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Data;
 using Avalonia.Layout;
@@ -35,6 +35,30 @@ public class BatchConvertSettingsWindow : Window
             IsChecked = vm.Overwrite,
             VerticalAlignment = VerticalAlignment.Center,
             [!CheckBox.IsCheckedProperty] = new Binding(nameof(vm.Overwrite)) { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged },
+        };
+
+        var checkBoxKeepSourceTimestamp = new CheckBox
+        {
+            Content = Se.Language.Tools.BatchConvert.KeepSourceFileTimestamp,
+            IsChecked = vm.KeepSourceTimestamp,
+            VerticalAlignment = VerticalAlignment.Center,
+            [!CheckBox.IsCheckedProperty] = new Binding(nameof(vm.KeepSourceTimestamp)) { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged },
+        };
+
+        var checkBoxPreventSleep = new CheckBox
+        {
+            Content = Se.Language.Tools.BatchConvert.PreventSleepWhileConverting,
+            IsChecked = vm.PreventSleep,
+            VerticalAlignment = VerticalAlignment.Center,
+            [!CheckBox.IsCheckedProperty] = new Binding(nameof(vm.PreventSleep)) { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged },
+        };
+
+        var checkBoxScanFolderRecursive = new CheckBox
+        {
+            Content = Se.Language.Tools.BatchConvert.IncludeSubfolders,
+            IsChecked = vm.ScanFolderRecursive,
+            VerticalAlignment = VerticalAlignment.Center,
+            [!CheckBox.IsCheckedProperty] = new Binding(nameof(vm.ScanFolderRecursive)) { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged },
         };
 
         var checkBoxUseSourceFolder = new RadioButton
@@ -109,6 +133,10 @@ public class BatchConvertSettingsWindow : Window
             model => model.Model.DisplayName,
             model => model.Model.Size,
             model => model.IsInstalled ? DownloadDotStatus.UpToDate : DownloadDotStatus.NotInstalled);
+        // Apple Vision: a language and nothing else - no model, no backend, no download.
+        var labelAppleVisionLanguage = UiUtil.MakeLabel(Se.Language.General.Language).WithBindVisible(vm, nameof(vm.IsAppleVisionVisible)).WithMarginLeft(10);
+        var comboBoxAppleVisionLanguages = UiUtil.MakeComboBox(vm.AppleVisionLanguages, vm, nameof(vm.SelectedAppleVisionLanguage))
+            .WithBindVisible(nameof(vm.IsAppleVisionVisible));
         var labelCrispEmbedBackend = UiUtil.MakeLabel(Se.Language.General.Backend).WithBindVisible(vm, nameof(vm.IsCrispEmbedVisible)).WithMarginLeft(10);
         var comboBoxCrispEmbedBackends = UiUtil.MakeComboBox(vm.CrispEmbedBackends, vm, nameof(vm.SelectedCrispEmbedBackend))
             .WithBindVisible(nameof(vm.IsCrispEmbedVisible));
@@ -121,7 +149,7 @@ public class BatchConvertSettingsWindow : Window
         {
             Orientation = Orientation.Horizontal,
             Margin = new Avalonia.Thickness(0, 30, 0, 0),
-            Children = { labelOcrEngine, comboBoxOcrEngine, labelOcLanguage, comboBoxTesseractLanguages, labelTesseractEngineMode, comboBoxTesseractEngineMode, comboBoxPaddleLanguages, labelBinaryOcrDatabase, comboBoxBinaryOcrDatabases, labelBinaryOcrFallback, comboBoxBinaryOcrFallback, labelNOcrDatabase, comboBoxNOcrDatabases, labelNOcrFallback, comboBoxNOcrFallback, labelOllamaModel, comboBoxOllamaModels, buttonOllamaModelBrowse, labelLlamaCppModel, comboBoxLlamaCppModels, labelCrispEmbedBackend, comboBoxCrispEmbedBackends, labelCrispEmbedModel, comboBoxCrispEmbedModels }
+            Children = { labelOcrEngine, comboBoxOcrEngine, labelOcLanguage, comboBoxTesseractLanguages, labelTesseractEngineMode, comboBoxTesseractEngineMode, comboBoxPaddleLanguages, labelBinaryOcrDatabase, comboBoxBinaryOcrDatabases, labelBinaryOcrFallback, comboBoxBinaryOcrFallback, labelNOcrDatabase, comboBoxNOcrDatabases, labelNOcrFallback, comboBoxNOcrFallback, labelOllamaModel, comboBoxOllamaModels, buttonOllamaModelBrowse, labelLlamaCppModel, comboBoxLlamaCppModels, labelCrispEmbedBackend, comboBoxCrispEmbedBackends, labelCrispEmbedModel, comboBoxCrispEmbedModels, labelAppleVisionLanguage, comboBoxAppleVisionLanguages }
         };
         comboBoxOcrEngine.SelectionChanged += (s, e) => vm.OnOcrEngineChanged();
 
@@ -160,6 +188,9 @@ public class BatchConvertSettingsWindow : Window
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
+                new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
+                new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
+                new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
             },
             ColumnDefinitions =
             {
@@ -174,18 +205,21 @@ public class BatchConvertSettingsWindow : Window
 
         grid.Add(panelTargetEncoding, 0, 0);
         grid.Add(checkBoxOverwrite, 1, 0);
-        grid.Add(checkBoxUseSourceFolder, 2, 0);
-        grid.Add(checkBoxUseOutputFolder, 3, 0);
-        grid.Add(panelOutputFolder, 4, 0);
-        grid.Add(panelOcrEngine, 5, 0);
-        grid.Add(checkBoxVobSubIsolateColors, 6, 0);
-        grid.Add(panelLanguagePostFix, 7, 0);
-        grid.Add(panelButtons, 8, 0);
+        grid.Add(checkBoxKeepSourceTimestamp, 2, 0);
+        grid.Add(checkBoxUseSourceFolder, 3, 0);
+        grid.Add(checkBoxUseOutputFolder, 4, 0);
+        grid.Add(panelOutputFolder, 5, 0);
+        grid.Add(panelOcrEngine, 6, 0);
+        grid.Add(checkBoxVobSubIsolateColors, 7, 0);
+        grid.Add(panelLanguagePostFix, 8, 0);
+        grid.Add(checkBoxScanFolderRecursive, 9, 0);
+        grid.Add(checkBoxPreventSleep, 10, 0);
+        grid.Add(panelButtons, 11, 0);
 
 
         Content = grid;
 
-        Activated += delegate { comboBoxTargetEncoding.Focus(); }; // initial focus on an input, not an action button - a focused button clicks on bare Space
+        UiUtil.FocusOnFirstActivation(this, comboBoxTargetEncoding); // initial focus on an input, not an action button - a focused button clicks on bare Space
         KeyDown += (s, e) => vm.OnKeyDown(e);
     }
 

@@ -39,6 +39,13 @@ namespace Nikse.SubtitleEdit.UiLogic.Media
         private static partial Regex StreamIndexRegexGen();
         private static readonly Regex StreamIndexRegex = StreamIndexRegexGen();
 
+        // Rotation side data ffmpeg prints under a video stream, e.g.
+        //   "    Side data:"
+        //   "      Display Matrix: rotation of -90.00 degrees".
+        [GeneratedRegex(@"^Display Matrix: rotation of (?<deg>-?\d+(?:\.\d+)?) degrees")]
+        private static partial Regex DisplayMatrixRotationRegexGen();
+        private static readonly Regex DisplayMatrixRotationRegex = DisplayMatrixRotationRegexGen();
+
         private FfmpegMediaInfo()
         {
             Tracks = new List<FfmpegTrackInfo>();
@@ -56,8 +63,20 @@ namespace Nikse.SubtitleEdit.UiLogic.Media
                 }
             }
 
-            var log = GetFfmpegLog(videoFileName);
-            return ParseLog(log);
+            try
+            {
+                return ParseLog(GetFfmpegLog(videoFileName));
+            }
+            catch (Exception exception)
+            {
+                // A configured ffmpeg that cannot actually be launched - moved install, stale path,
+                // no permission - used to throw out of here, and callers that only expect media info
+                // died with it: adding a file to Speech to text silently added nothing at all and
+                // Transcribe stopped dead (issue #13820). Empty info means "unknown", which every
+                // caller already handles.
+                SeLogger.Error(exception, "Unable to read media info via ffmpeg for " + videoFileName);
+                return new FfmpegMediaInfo();
+            }
         }
 
         public long GetTotalFrames()
@@ -111,11 +130,22 @@ namespace Nikse.SubtitleEdit.UiLogic.Media
                 }
             }
 
+            // ffmpeg reports the STORED frame size on the "Stream #" line, which for phone
+            // recordings is often landscape with a "Display Matrix: rotation of -90 degrees"
+            // side-data entry that makes it portrait on playback. ffmpeg auto-rotates on
+            // decode, so the frames every filter and encoder sees are the rotated ones.
+            // Report those display dimensions here, otherwise callers such as burn-in size
+            // the output to the unrotated frame and the picture comes out stretched.
+            var inDimensionStreamBlock = false;
+            var rotationApplied = false;
+
             foreach (var line in log.SplitToLines())
             {
                 var s = line.Trim();
                 if (s.StartsWith("Stream #", StringComparison.Ordinal))
                 {
+                    inDimensionStreamBlock = false;
+
                     var resolutionMatch = ResolutionRegex.Match(s);
                     if (resolutionMatch.Success)
                     {
@@ -125,7 +155,8 @@ namespace Nikse.SubtitleEdit.UiLogic.Media
                             int.TryParse(parts[0], out var w) &&
                             int.TryParse(parts[1], out var h))
                         {
-                            info.Dimension = new Dimension(w, h); 
+                            info.Dimension = new Dimension(w, h);
+                            inDimensionStreamBlock = true;
                         }
                     }
 
@@ -155,6 +186,22 @@ namespace Nikse.SubtitleEdit.UiLogic.Media
                         else
                         {
                             info.Tracks.Add(new FfmpegTrackInfo { TrackType = FfmpegTrackType.Other, TrackInfo = trackInfo, StreamIndex = streamIndex });
+                        }
+                    }
+                }
+                else if (inDimensionStreamBlock && !rotationApplied)
+                {
+                    var rotationMatch = DisplayMatrixRotationRegex.Match(s);
+                    if (rotationMatch.Success &&
+                        double.TryParse(rotationMatch.Groups["deg"].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var degrees))
+                    {
+                        // Guard against a duplicated retry log swapping a second time.
+                        rotationApplied = true;
+
+                        var normalized = ((degrees % 360) + 360) % 360;
+                        if (Math.Abs(normalized - 90) < 1 || Math.Abs(normalized - 270) < 1)
+                        {
+                            info.Dimension = new Dimension(info.Dimension.Height, info.Dimension.Width);
                         }
                     }
                 }

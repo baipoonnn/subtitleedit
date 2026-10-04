@@ -1,5 +1,6 @@
 ﻿using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Core.SubtitleFormats;
+using System;
 using System.Globalization;
 using System.Linq;
 
@@ -16,8 +17,13 @@ public static class SecondarySubtitleMerger
     /// the secondary subtitle tiny for WebVTT mains (PlayResY = video height) and huge
     /// for ASSA mains with a small PlayResY (issue #13425), so resample it to the
     /// target's scale first.
+    /// The secondary subtitle is shared between refreshes and is only ever read, so its
+    /// paragraphs are added by reference - except in SMPTE mode, where the stretch the main
+    /// subtitle already got has to apply to them too, and except for a line carrying a baked-in
+    /// "\pos" (from justified lines, which position themselves in absolute PlayRes pixels rather
+    /// than through the style's alignment/margins), which also needs its own copy to rescale.
     /// </summary>
-    public static void AddSecondarySubtitle(Subtitle subtitle, Subtitle? subtitleSecondary)
+    public static void AddSecondarySubtitle(Subtitle subtitle, Subtitle? subtitleSecondary, bool smpteMode)
     {
         if (subtitleSecondary == null)
         {
@@ -47,9 +53,22 @@ public static class SecondarySubtitleMerger
         }
 
         subtitle.Header = AdvancedSubStationAlpha.AddSsaStyle(style, subtitle.Header);
+
+        var playResChanged = sourceWidth != targetWidth || sourceHeight != targetHeight;
         foreach (var p in subtitleSecondary.Paragraphs)
         {
-            subtitle.Paragraphs.Add(p);
+            var paragraph = smpteMode ? SmptePreviewStretch.Stretched(p) : p;
+            if (playResChanged && paragraph.Text.IndexOf("\\pos", StringComparison.Ordinal) >= 0)
+            {
+                if (!smpteMode)
+                {
+                    paragraph = new Paragraph(paragraph);
+                }
+
+                paragraph.Text = AssaResampler.ResampleOverrideTagsPosition(sourceWidth, targetWidth, sourceHeight, targetHeight, paragraph.Text);
+            }
+
+            subtitle.Paragraphs.Add(paragraph);
         }
     }
 

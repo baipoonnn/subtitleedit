@@ -13,7 +13,9 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
         private static readonly Regex RegExIAndZero = new Regex(@"[a-zæøåöääöéèàùâêîôûëï][I1]", RegexOptions.Compiled);
         private static readonly Regex RegExTime1 = new Regex(@"[a-zæøåöääöéèàùâêîôûëï]0", RegexOptions.Compiled);
         private static readonly Regex RegExTime2 = new Regex(@"0[a-zæøåöääöéèàùâêîôûëï]", RegexOptions.Compiled);
-        private static readonly Regex HexNumber = new Regex(@"^#?[\dABDEFabcdef]+$", RegexOptions.Compiled);
+        // Uppercase "C" was missing (the lowercase run is complete), so this hex bail-out did not
+        // recognise e.g. "#0C0d" and the OCR fixer rewrote its "d" to "o".
+        private static readonly Regex HexNumber = new Regex(@"^#?[\dABCDEFabcdef]+$", RegexOptions.Compiled);
         private static readonly Regex StartsAndEndsWithNumber = new Regex(@"^\d+.+\d$", RegexOptions.Compiled);
 
         public readonly Dictionary<string, string> WordReplaceList;
@@ -23,11 +25,21 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
         private readonly Dictionary<string, string> _endLineReplaceList;
         private readonly Dictionary<string, string> _wholeLineReplaceList;
         private readonly Dictionary<string, string> _partialWordAlwaysReplaceList;
-        private readonly Dictionary<string, string> _partialWordReplaceList;
+
+        // A list of pairs, not a dictionary: the same OCR artifact can have several valid
+        // readings (deu ships i->t and i->l, ii->tt and ii->ü), and the letter guesser wants
+        // to try them all - each guess is only accepted after a dictionary/names check anyway.
+        private readonly List<KeyValuePair<string, string>> _partialWordReplaceList;
         private readonly Dictionary<string, string> _regExList;
         private readonly List<SpellCheckRegex> _regExSpellCheckList;
-        private List<Regex>? _replaceRegExes;
+        private RegexEntry[]? _regexEntries;
         private readonly string _replaceListXmlFileName;
+
+        // Every entry in these two lists used to cost a full substring scan of the line, for every
+        // line: 322 PartialLines plus 145 BeginLines for English. The signature below rules most
+        // of them out without touching the line again - see BigramSignature.
+        private ReplaceEntry[]? _partialLineEntries;
+        private ReplaceEntry[]? _beginLineEntries;
 
         private const string ReplaceListFileNamePostFix = "_OCRFixReplaceList.xml";
 
@@ -44,8 +56,10 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
         {
             ErrorMessage = string.Empty;
             _replaceListXmlFileName = replaceListXmlFileName;
-            _isGreekReplaceList = replaceListXmlFileName != null &&
-                                  replaceListXmlFileName.Contains("\\ell" + ReplaceListFileNamePostFix);
+            // Compared on the file name, not the path: the old check looked for a hard-coded
+            // "\\ell..." and so never matched on macOS or Linux, where the separator is "/".
+            _isGreekReplaceList = !string.IsNullOrEmpty(replaceListXmlFileName) &&
+                                  Path.GetFileName(replaceListXmlFileName).StartsWith("ell_", StringComparison.OrdinalIgnoreCase);
             WordReplaceList = new Dictionary<string, string>();
             PartialLineWordBoundaryReplaceList = new Dictionary<string, string>();
             _partialLineAlwaysReplaceList = new Dictionary<string, string>();
@@ -53,7 +67,7 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
             _endLineReplaceList = new Dictionary<string, string>();
             _wholeLineReplaceList = new Dictionary<string, string>();
             _partialWordAlwaysReplaceList = new Dictionary<string, string>();
-            _partialWordReplaceList = new Dictionary<string, string>();
+            _partialWordReplaceList = new List<KeyValuePair<string, string>>();
             _regExList = new Dictionary<string, string>();
 
             var doc = LoadXmlReplaceListDocument();
@@ -61,7 +75,7 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
 
             WordReplaceList = LoadReplaceList(doc, "WholeWords");
             _partialWordAlwaysReplaceList = LoadReplaceList(doc, "PartialWordsAlways");
-            _partialWordReplaceList = LoadReplaceList(doc, "PartialWords");
+            _partialWordReplaceList = LoadReplaceListPairs(doc, "PartialWords");
             PartialLineWordBoundaryReplaceList = LoadReplaceList(doc, "PartialLines");
             _partialLineAlwaysReplaceList = LoadReplaceList(doc, "PartialLinesAlways");
             _beginLineReplaceList = LoadReplaceList(doc, "BeginLines");
@@ -102,16 +116,13 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
 
             foreach (var kp in LoadReplaceList(userDoc, "RemovedPartialWords"))
             {
-                if (_partialWordReplaceList.ContainsKey(kp.Key))
-                {
-                    _partialWordReplaceList.Remove(kp.Key);
-                }
+                _partialWordReplaceList.RemoveAll(p => p.Key == kp.Key);
             }
-            foreach (var kp in LoadReplaceList(userDoc, "PartialWords"))
+            foreach (var kp in LoadReplaceListPairs(userDoc, "PartialWords"))
             {
-                if (!_partialWordReplaceList.ContainsKey(kp.Key))
+                if (!_partialWordReplaceList.Any(p => p.Key == kp.Key && p.Value == kp.Value))
                 {
-                    _partialWordReplaceList.Add(kp.Key, kp.Value);
+                    _partialWordReplaceList.Add(kp);
                 }
             }
 
@@ -211,6 +222,14 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
             return new OcrFixReplaceList2(Path.Combine(SpellCheckConfig.DictionariesFolder(), languageId + ReplaceListFileNamePostFix));
         }
 
+        /// <summary>The "_User" sibling of a replace-list file name.</summary>
+        public static string GetUserFileName(string replaceListXmlFileName)
+        {
+            return Path.Combine(
+                Path.GetDirectoryName(replaceListXmlFileName) ?? string.Empty,
+                Path.GetFileNameWithoutExtension(replaceListXmlFileName) + "_User" + Path.GetExtension(replaceListXmlFileName));
+        }
+
         private static Dictionary<string, string> LoadReplaceList(XmlDocument doc, string name)
         {
             var list = new Dictionary<string, string>();
@@ -219,8 +238,16 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
                 return list;
             }
 
-            var node = doc.DocumentElement?.SelectSingleNode(name);
-            if (node != null)
+            // SelectNodes, not SelectSingleNode: several shipped lists contain more than one
+            // section with the same name (often an empty placeholder first), and reading only
+            // the first silently drops every entry in the others.
+            var nodes = doc.DocumentElement?.SelectNodes(name);
+            if (nodes == null)
+            {
+                return list;
+            }
+
+            foreach (XmlNode node in nodes)
             {
                 foreach (XmlNode item in node.ChildNodes)
                 {
@@ -241,6 +268,43 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
             return list;
         }
 
+        private static List<KeyValuePair<string, string>> LoadReplaceListPairs(XmlDocument doc, string name)
+        {
+            var list = new List<KeyValuePair<string, string>>();
+            if (!IsValidXmlDocument(doc, name))
+            {
+                return list;
+            }
+
+            // See LoadReplaceList: duplicate sections must all be read. fin/fra/hrb/hun/por/spa
+            // ship an empty <PartialWords /> placeholder ahead of the real section.
+            var nodes = doc.DocumentElement?.SelectNodes(name);
+            if (nodes == null)
+            {
+                return list;
+            }
+
+            foreach (XmlNode node in nodes)
+            {
+                foreach (XmlNode item in node.ChildNodes)
+                {
+                    if (!HasValidAttributes(item, false) || item.Attributes == null)
+                    {
+                        continue;
+                    }
+
+                    var to = item.Attributes["to"]?.Value;
+                    var from = item.Attributes["from"]?.Value;
+                    if (to != null && from != null && !list.Any(p => p.Key == from && p.Value == to))
+                    {
+                        list.Add(new KeyValuePair<string, string>(from, to));
+                    }
+                }
+            }
+
+            return list;
+        }
+
         private static Dictionary<string, string> LoadRegExList(XmlDocument doc, string name)
         {
             var list = new Dictionary<string, string>();
@@ -249,8 +313,14 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
                 return list;
             }
 
-            var node = doc.DocumentElement?.SelectSingleNode(name);
-            if (node != null)
+            // See LoadReplaceList: duplicate sections must all be read.
+            var nodes = doc.DocumentElement?.SelectNodes(name);
+            if (nodes == null)
+            {
+                return list;
+            }
+
+            foreach (XmlNode node in nodes)
             {
                 foreach (XmlNode item in node.ChildNodes)
                 {
@@ -312,6 +382,321 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
             return false;
         }
 
+        /// <summary>
+        /// A replace-list entry plus the signature bit of its first character pair, so a line that
+        /// cannot possibly contain the key is recognised without searching it.
+        /// </summary>
+        private readonly struct ReplaceEntry
+        {
+            public readonly string From;
+            public readonly string To;
+
+            /// <summary>Signature bit of the key's first character pair, or -1 for one-char keys.</summary>
+            public readonly int Bit;
+
+            public ReplaceEntry(string from, string to)
+            {
+                From = from;
+                To = to;
+                Bit = from.Length >= 2 ? BigramSignature.BitIndex(from[0], from[1]) : -1;
+            }
+        }
+
+        /// <summary>
+        /// A 256 bit "which character pairs occur in this text" set. If a key's first character
+        /// pair is missing from the text, the key cannot be a substring of it, so the key can be
+        /// skipped - which keys actually get applied never changes, only how many are searched
+        /// for. Collisions and one-char keys just fall through to the real search, so a false
+        /// positive costs nothing but the scan that would have happened anyway.
+        /// </summary>
+        private readonly struct BigramSignature
+        {
+            private readonly ulong _w0;
+            private readonly ulong _w1;
+            private readonly ulong _w2;
+            private readonly ulong _w3;
+
+            private BigramSignature(ulong w0, ulong w1, ulong w2, ulong w3)
+            {
+                _w0 = w0;
+                _w1 = w1;
+                _w2 = w2;
+                _w3 = w3;
+            }
+
+            public static int BitIndex(char a, char b)
+            {
+                var h = a * 31 + b;
+                return (h ^ (h >> 8)) & 255;
+            }
+
+            public static BigramSignature FromText(string text)
+            {
+                ulong w0 = 0, w1 = 0, w2 = 0, w3 = 0;
+                for (var i = 0; i + 1 < text.Length; i++)
+                {
+                    var bit = BitIndex(text[i], text[i + 1]);
+
+                    // The shift count is masked to 6 bits, so 1UL << bit selects inside the word.
+                    switch (bit >> 6)
+                    {
+                        case 0: w0 |= 1UL << bit; break;
+                        case 1: w1 |= 1UL << bit; break;
+                        case 2: w2 |= 1UL << bit; break;
+                        default: w3 |= 1UL << bit; break;
+                    }
+                }
+
+                return new BigramSignature(w0, w1, w2, w3);
+            }
+
+            public bool MayContain(int bit)
+            {
+                if (bit < 0)
+                {
+                    return true; // one-char key - nothing to rule out on
+                }
+
+                switch (bit >> 6)
+                {
+                    case 0: return (_w0 & (1UL << bit)) != 0;
+                    case 1: return (_w1 & (1UL << bit)) != 0;
+                    case 2: return (_w2 & (1UL << bit)) != 0;
+                    default: return (_w3 & (1UL << bit)) != 0;
+                }
+            }
+        }
+
+        /// <summary>
+        /// A "RegularExpressions" entry plus the signature bit of a literal every match must
+        /// contain (-1 when none could be found), and the expression, compiled on first use.
+        /// </summary>
+        private sealed class RegexEntry
+        {
+            public readonly string Pattern;
+            public readonly string Replacement;
+            public readonly int Bit;
+            public Regex? Regex;
+
+            public RegexEntry(string pattern, string replacement)
+            {
+                Pattern = pattern;
+                Replacement = replacement;
+                var literal = GetRequiredLiteral(pattern);
+                Bit = literal != null ? BigramSignature.BitIndex(literal[0], literal[1]) : -1;
+            }
+        }
+
+        private RegexEntry[] GetRegexEntries()
+        {
+            var entries = _regexEntries;
+            if (entries == null || entries.Length != _regExList.Count)
+            {
+                entries = new RegexEntry[_regExList.Count];
+                var i = 0;
+                foreach (var kv in _regExList)
+                {
+                    entries[i++] = new RegexEntry(kv.Key, kv.Value);
+                }
+
+                _regexEntries = entries;
+            }
+
+            return entries;
+        }
+
+        /// <summary>
+        /// Returns the first run of at least two literal characters that every match of the
+        /// (case-sensitive) pattern must contain, or null if there is none or the pattern uses
+        /// anything this does not understand. Only top-level characters count: nothing inside a
+        /// group, no character followed by "?", "*" or "{", and no pattern with a top-level "|".
+        /// </summary>
+        internal static string? GetRequiredLiteral(string pattern)
+        {
+            string? best = null;
+            var run = new StringBuilder();
+            var depth = 0;
+
+            void EndRun()
+            {
+                if (best == null && run.Length >= 2)
+                {
+                    best = run.ToString();
+                }
+
+                run.Clear();
+            }
+
+            for (var i = 0; i < pattern.Length; i++)
+            {
+                var c = pattern[i];
+                if (c == '\\')
+                {
+                    if (i + 1 >= pattern.Length)
+                    {
+                        return null;
+                    }
+
+                    var next = pattern[i + 1];
+                    if (depth == 0)
+                    {
+                        EndRun();
+
+                        // Anchors, classes and simple one-letter escapes are two characters
+                        // long; the rest (\p{..}, \x41, \u0041, \k<..>, back-references) are not.
+                        if (char.IsLetterOrDigit(next) && "bBAzZGsSdDwWntrfve".IndexOf(next) < 0)
+                        {
+                            return null;
+                        }
+                    }
+
+                    i++;
+                    continue;
+                }
+
+                if (c == '[')
+                {
+                    var j = i + 1;
+                    if (j < pattern.Length && pattern[j] == '^')
+                    {
+                        j++;
+                    }
+
+                    if (j < pattern.Length && pattern[j] == ']')
+                    {
+                        j++;
+                    }
+
+                    while (j < pattern.Length && pattern[j] != ']')
+                    {
+                        if (pattern[j] == '\\')
+                        {
+                            j++;
+                        }
+                        else if (pattern[j] == '[')
+                        {
+                            return null; // class subtraction
+                        }
+
+                        j++;
+                    }
+
+                    if (j >= pattern.Length)
+                    {
+                        return null;
+                    }
+
+                    if (depth == 0)
+                    {
+                        EndRun();
+                    }
+
+                    i = j;
+                    continue;
+                }
+
+                if (c == '(')
+                {
+                    if (depth == 0)
+                    {
+                        EndRun();
+                    }
+
+                    // Inline options like "(?i)" change how the rest of the pattern matches.
+                    if (i + 2 < pattern.Length && pattern[i + 1] == '?' && "imnsx-".IndexOf(pattern[i + 2]) >= 0)
+                    {
+                        return null;
+                    }
+
+                    depth++;
+                    continue;
+                }
+
+                if (c == ')')
+                {
+                    depth--;
+                    if (depth < 0)
+                    {
+                        return null;
+                    }
+
+                    continue;
+                }
+
+                if (depth > 0)
+                {
+                    continue;
+                }
+
+                switch (c)
+                {
+                    case '|':
+                    case '{':
+                        return null;
+                    case '?':
+                    case '*':
+                        if (run.Length > 0)
+                        {
+                            run.Length--; // the character before is optional
+                        }
+
+                        EndRun();
+                        break;
+                    case '+':
+                    case '.':
+                    case '^':
+                    case '$':
+                    case ']':
+                    case '}':
+                        EndRun();
+                        break;
+                    default:
+                        run.Append(c);
+                        break;
+                }
+            }
+
+            if (depth != 0)
+            {
+                return null;
+            }
+
+            EndRun();
+            return best;
+        }
+
+        private static ReplaceEntry[] BuildEntries(Dictionary<string, string> list)
+        {
+            var entries = new ReplaceEntry[list.Count];
+            var i = 0;
+            foreach (var kv in list)
+            {
+                entries[i++] = new ReplaceEntry(kv.Key, kv.Value);
+            }
+
+            return entries;
+        }
+
+        private ReplaceEntry[] GetPartialLineEntries()
+        {
+            if (_partialLineEntries == null || _partialLineEntries.Length != PartialLineWordBoundaryReplaceList.Count)
+            {
+                _partialLineEntries = BuildEntries(PartialLineWordBoundaryReplaceList);
+            }
+
+            return _partialLineEntries;
+        }
+
+        private ReplaceEntry[] GetBeginLineEntries()
+        {
+            if (_beginLineEntries == null || _beginLineEntries.Length != _beginLineReplaceList.Count)
+            {
+                _beginLineEntries = BuildEntries(_beginLineReplaceList);
+            }
+
+            return _beginLineEntries;
+        }
+
         public string FixOcrErrorViaLineReplaceList(string input, Subtitle subtitle, int index, ISpellChecker spellCheckManager, List<string> wordsToIgnore, bool spelledOK)
         {
             // Whole fromLine - the dictionary's default comparer is the same ordinal equality
@@ -342,15 +727,22 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
             // begin fromLine
             var lines = newText.SplitToLines();
             var sb = new StringBuilder(input.Length + 2);
+            var beginLineEntries = GetBeginLineEntries();
             foreach (var l in lines)
             {
                 var s = l;
-                foreach (var kv in _beginLineReplaceList)
+                var signature = BigramSignature.FromText(s);
+                foreach (var entry in beginLineEntries)
                 {
-                    var from = kv.Key;
+                    if (!signature.MayContain(entry.Bit))
+                    {
+                        continue;
+                    }
+
+                    var from = entry.From;
                     if (s.FastIndexOf(from) >= 0)
                     {
-                        var with = kv.Value;
+                        var with = entry.To;
                         if (s.StartsWith(from, StringComparison.Ordinal))
                         {
                             s = s.Remove(0, from.Length).Insert(0, with);
@@ -362,6 +754,10 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
                         {
                             s = s.Replace("\"" + from, "\"" + with);
                         }
+
+                        // A replacement can introduce character pairs a later key needs, so the
+                        // signature has to follow the line. Only reached when a key actually hit.
+                        signature = BigramSignature.FromText(s);
                     }
                 }
                 sb.AppendLine(s);
@@ -391,11 +787,18 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
             }
             newText += post;
 
-            foreach (var kv in PartialLineWordBoundaryReplaceList)
+            var partialLineSignature = BigramSignature.FromText(newText);
+            foreach (var entry in GetPartialLineEntries())
             {
-                if (newText.FastIndexOf(kv.Key) >= 0)
+                if (!partialLineSignature.MayContain(entry.Bit))
                 {
-                    newText = ReplaceWord(newText, kv.Key, kv.Value);
+                    continue;
+                }
+
+                if (newText.FastIndexOf(entry.From) >= 0)
+                {
+                    newText = ReplaceWord(newText, entry.From, entry.To);
+                    partialLineSignature = BigramSignature.FromText(newText);
                 }
             }
 
@@ -407,24 +810,24 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
                 }
             }
 
-            if (_replaceRegExes == null || _regExList.Count != _replaceRegExes.Count)
+            // Same idea as the partial lines above: hrv ships 1843 expressions, and every one of
+            // them used to run over every line - and all of them were compiled on the first line.
+            // Now an expression whose required literal cannot be in the line is skipped, and an
+            // expression is only compiled the first time a line may match it.
+            var regexSignature = BigramSignature.FromText(newText);
+            foreach (var entry in GetRegexEntries())
             {
-                _replaceRegExes = new List<Regex>(_regExList.Count);
-                foreach (var kv in _regExList)
+                if (!regexSignature.MayContain(entry.Bit))
                 {
-                    var regex = new Regex(kv.Key, RegexOptions.Multiline | RegexOptions.Compiled);
-                    _replaceRegExes.Add(regex);
-                    newText = regex.Replace(newText, kv.Value);
+                    continue;
                 }
-            }
-            else
-            {
-                var i = 0;
-                foreach (var kv in _regExList)
+
+                var regex = entry.Regex ??= new Regex(entry.Pattern, RegexOptions.Multiline | RegexOptions.Compiled);
+                var replaced = regex.Replace(newText, entry.Replacement);
+                if (!ReferenceEquals(replaced, newText))
                 {
-                    var regex = _replaceRegExes[i];
-                    newText = regex.Replace(newText, kv.Value);
-                    i++;
+                    newText = replaced;
+                    regexSignature = BigramSignature.FromText(newText);
                 }
             }
 
@@ -481,14 +884,16 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
             return false;
         }
 
-        private static void AddToGuessList(List<string> list, string guess)
+        private static void AddToGuessList(List<string> list, HashSet<string> seen, string guess)
         {
             if (string.IsNullOrEmpty(guess))
             {
                 return;
             }
 
-            if (!list.Contains(guess))
+            // "seen" holds what "list" holds - a word with several replaceable letter pairs
+            // makes thousands of guesses, and list.Contains compared each against all of them.
+            if (seen.Add(guess))
             {
                 list.Add(guess);
             }
@@ -497,7 +902,11 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
         public IEnumerable<string> CreateGuessesFromLetters(string word, string threeLetterIsoLanguageName)
         {
             var list = new List<string>();
-            var previousGuesses = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+
+            // The guesses made before the current replace pair: list[0..previousGuessCount).
+            // The list only grows at its end, so the count stands in for a copy of it.
+            var previousGuessCount = 0;
             foreach (var kv in _partialWordReplaceList)
             {
                 var letter = kv.Key;
@@ -510,13 +919,13 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
                         if (i == word.Length - letter.Length && !replacement.Contains(' '))
                         {
                             var guess = word.Remove(i, letter.Length).Insert(i, replacement);
-                            AddToGuessList(list, guess);
+                            AddToGuessList(list, seen, guess);
                         }
                         else
                         {
                             indexes.Add(i);
                             var guess = word.Remove(i, letter.Length).Insert(i, replacement);
-                            AddToGuessList(list, guess);
+                            AddToGuessList(list, seen, guess);
                         }
                     }
                 }
@@ -530,15 +939,15 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
                         {
                             var idx = indexes[i];
                             multiGuess = multiGuess.Remove(idx, letter.Length).Insert(idx, replacement);
-                            AddToGuessList(list, multiGuess);
+                            AddToGuessList(list, seen, multiGuess);
                         }
 
-                        AddToGuessList(list, word.Replace(letter, replacement));
+                        AddToGuessList(list, seen, word.Replace(letter, replacement));
                     }
                 }
                 else if (indexes.Count > 0)
                 {
-                    AddToGuessList(list, word.Replace(letter, replacement));
+                    AddToGuessList(list, seen, word.Replace(letter, replacement));
                 }
 
                 if (indexes.Count > 0)
@@ -549,24 +958,25 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
                         if (idx > 1 && idx < word.Length - 2)
                         {
                             var guess = word.Remove(idx, letter.Length).Insert(idx, replacement);
-                            AddToGuessList(list, guess);
+                            AddToGuessList(list, seen, guess);
                         }
                     }
                 }
 
-                foreach (var previousGuess in previousGuesses)
+                for (var g = 0; g < previousGuessCount; g++)
                 {
-                    for (var i = 0; i < previousGuess.Length - letter.Length; i++)
+                    var previousGuess = list[g];
+                    for (var i = 0; i <= previousGuess.Length - letter.Length; i++)
                     {
                         if (previousGuess.AsSpan(i).StartsWith(letter, StringComparison.Ordinal))
                         {
                             var guess = previousGuess.Remove(i, letter.Length).Insert(i, replacement);
-                            AddToGuessList(list, guess);
+                            AddToGuessList(list, seen, guess);
                         }
                     }
                 }
 
-                previousGuesses = new List<string>(list);
+                previousGuessCount = list.Count;
             }
 
             if (threeLetterIsoLanguageName != "dan" &&
@@ -620,14 +1030,75 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
                 word = word.Replace('‘', '\'');
             }
 
+            // An exact whole-word entry is more specific than the always-applied word parts, so it
+            // wins: "IVl" -> "M" fixes "IVlust" but must not turn the medical "IVline" into "Mine".
+            var wholeWord = StripAffixes(word, out var wholePre, out var wholePost);
+            if (wholeWord.Length > 0 && GetReplaceWord(wholePre, wholeWord, wholePost, out var wholeWordResult))
+            {
+                return wholeWordResult;
+            }
+
             //always replace list
             foreach (var kv in _partialWordAlwaysReplaceList)
             {
                 word = word.Replace(kv.Key, kv.Value);
             }
 
-            var pre = string.Empty;
-            var post = string.Empty;
+            word = StripAffixes(word, out var pre, out var post);
+
+            var preWordPost = pre + word + post;
+            if (word.Length == 0)
+            {
+                return preWordPost;
+            }
+
+            if (word.Contains('?'))
+            {
+                var match = RegExQuestion.Match(word);
+                if (match.Success)
+                {
+                    word = word.Insert(match.Index + 2, " ");
+                }
+            }
+
+            if (GetReplaceWord(pre, word, post, out var res))
+            {
+                return res;
+            }
+
+            var oldWord = word;
+            if (Configuration.Settings.Tools.OcrFixUseHardcodedRules)
+            {
+                // uppercase I or 1 inside lowercase fromWord (will be replaced by lowercase L)
+                word = FixIor1InsideLowerCaseWord(word);
+
+                // uppercase 0 inside lowercase fromWord (will be replaced by lowercase L)
+                word = Fix0InsideLowerCaseWord(word);
+
+                // uppercase I or 1 inside lowercase fromWord (will be replaced by lowercase L)
+                word = FixIor1InsideLowerCaseWord(word);
+
+                word = FixLowerCaseLInsideUpperCaseWord(word); // eg. SCARLETTl => SCARLETTI
+            }
+
+
+            if (oldWord != word)
+            {
+                // Retry fromWord replace list
+                if (GetReplaceWord(pre, word, post, out var result))
+                {
+                    return result;
+                }
+            }
+
+            return preWordPost;
+        }
+
+        private static string StripAffixes(string input, out string pre, out string post)
+        {
+            var word = input;
+            pre = string.Empty;
+            post = string.Empty;
 
             if (word.StartsWith("<i>", StringComparison.Ordinal))
             {
@@ -686,52 +1157,7 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
                 word = word.Remove(word.Length - 4, 4);
             }
 
-            var preWordPost = pre + word + post;
-            if (word.Length == 0)
-            {
-                return preWordPost;
-            }
-
-            if (word.Contains('?'))
-            {
-                var match = RegExQuestion.Match(word);
-                if (match.Success)
-                {
-                    word = word.Insert(match.Index + 2, " ");
-                }
-            }
-
-            if (GetReplaceWord(pre, word, post, out var res))
-            {
-                return res;
-            }
-
-            var oldWord = word;
-            if (Configuration.Settings.Tools.OcrFixUseHardcodedRules)
-            {
-                // uppercase I or 1 inside lowercase fromWord (will be replaced by lowercase L)
-                word = FixIor1InsideLowerCaseWord(word);
-
-                // uppercase 0 inside lowercase fromWord (will be replaced by lowercase L)
-                word = Fix0InsideLowerCaseWord(word);
-
-                // uppercase I or 1 inside lowercase fromWord (will be replaced by lowercase L)
-                word = FixIor1InsideLowerCaseWord(word);
-
-                word = FixLowerCaseLInsideUpperCaseWord(word); // eg. SCARLETTl => SCARLETTI
-            }
-
-
-            if (oldWord != word)
-            {
-                // Retry fromWord replace list
-                if (GetReplaceWord(pre, word, post, out var result))
-                {
-                    return result;
-                }
-            }
-
-            return preWordPost;
+            return word;
         }
 
         private bool GetReplaceWord(string pre, string word, string post, out string result)
@@ -912,6 +1338,7 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
                 if (DeletePartialLineFromWordList(word))
                 {
                     PartialLineWordBoundaryReplaceList.Remove(word);
+                    _partialLineEntries = null;
                     return true;
                 }
                 return false;
@@ -1036,7 +1463,7 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
             return doc;
         }
 
-        private string ReplaceListXmlFileNameUser => Path.Combine(Path.GetDirectoryName(_replaceListXmlFileName) ?? throw new InvalidOperationException(), Path.GetFileNameWithoutExtension(_replaceListXmlFileName) + "_User" + Path.GetExtension(_replaceListXmlFileName));
+        private string ReplaceListXmlFileNameUser => GetUserFileName(_replaceListXmlFileName);
 
         private XmlDocument LoadXmlReplaceListUserDocument()
         {
@@ -1070,6 +1497,7 @@ namespace Nikse.SubtitleEdit.UiLogic.Ocr.FixEngine
                     if (!PartialLineWordBoundaryReplaceList.ContainsKey(fromWord))
                     {
                         PartialLineWordBoundaryReplaceList.Add(fromWord, toWord);
+                        _partialLineEntries = null;
                     }
                     return true;
                 }

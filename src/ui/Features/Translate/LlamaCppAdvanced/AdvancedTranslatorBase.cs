@@ -15,12 +15,12 @@ namespace Nikse.SubtitleEdit.Features.Translate.LlamaCppAdvanced;
 /// Shared batch/context translation loop of the "advanced" local-LLM engines: sends numbered
 /// batches with a rolling history of already-translated lines plus user-configured
 /// synopsis/glossary/style, and requires a schema-constrained JSON reply so line alignment is
-/// guaranteed. The Auto-translate loop calls <see cref="TranslateBatchAsync"/> directly; the
-/// plain <see cref="Translate"/> path (used for "translate current line") is a context-free
-/// batch of one. Subclasses only supply the endpoint and, where the server needs one, the
-/// model name.
+/// guaranteed. The Auto-translate loop and batch convert both call <see cref="TranslateBatchAsync"/>
+/// (via <see cref="IBatchContextTranslator"/>); the plain <see cref="Translate"/> path (used for
+/// "translate current line") is a context-free batch of one. Subclasses only supply the endpoint
+/// and, where the server needs one, the model name.
 /// </summary>
-public abstract class AdvancedTranslatorBase : IAutoTranslator, IDisposable
+public abstract class AdvancedTranslatorBase : IAutoTranslator, IBatchContextTranslator, IDisposable
 {
     private LlamaCppAdvancedClient? _client;
 
@@ -53,9 +53,14 @@ public abstract class AdvancedTranslatorBase : IAutoTranslator, IDisposable
 
     public async Task<string> Translate(string text, string sourceLanguageCode, string targetLanguageCode, CancellationToken cancellationToken)
     {
-        var lines = new List<LlamaCppAdvancedProtocol.BatchLine> { new(1, text.Trim()) };
+        var stripped = StrippedLine.Strip(text.Trim());
+        var lines = new List<LlamaCppAdvancedProtocol.BatchLine> { new(1, stripped.Text) };
         var map = await TranslateLinesAsync(lines, new List<LlamaCppAdvancedProtocol.HistoryPair>(), sourceLanguageCode, targetLanguageCode, cancellationToken);
-        return map.TryGetValue(1, out var translation) ? translation : string.Empty;
+        // An echo that survived the warmer retry in TranslateLinesAsync is accepted: the line may
+        // legitimately read the same in both languages, and failing it would abort the translation.
+        return map.TryGetValue(1, out var translation) && translation.Length > 0
+            ? stripped.Restore(translation)
+            : string.Empty;
     }
 
     /// <summary>
@@ -68,23 +73,49 @@ public abstract class AdvancedTranslatorBase : IAutoTranslator, IDisposable
     {
         var settings = Se.Settings.AutoTranslate.LlamaCppAdvanced;
         var batchSize = Math.Clamp(settings.BatchSize, 1, 50);
-        var count = Math.Min(batchSize, rows.Count - index);
+        if (MergeAndSplitHelper.IsKeptUntranslated(rows[index].Text))
+        {
+            var row = rows[index];
+            Dispatcher.UIThread.Invoke(() => row.TranslatedText = row.Text);
+            return 1;
+        }
+
+        // Stop the batch before the next music line kept in the source language (#9969).
+        var count = 1;
+        var maxCount = Math.Min(batchSize, rows.Count - index);
+        while (count < maxCount && !MergeAndSplitHelper.IsKeptUntranslated(rows[index + count].Text))
+        {
+            count++;
+        }
+
         return await TranslateChunkAsync(rows, index, count, sourceLanguageCode, targetLanguageCode, cancellationToken);
     }
 
     private async Task<int> TranslateChunkAsync(ObservableCollection<TranslateRow> rows, int index, int count, string sourceLanguageCode, string targetLanguageCode, CancellationToken cancellationToken)
     {
+        // This path deliberately skips MergeAndSplitHelper (its merge/split heuristics would
+        // break the alignment the reply schema guarantees), and with it the Formatting pass that
+        // takes ASSA override blocks off every other engine's input. Strip them here instead:
+        // they cost a lot of tokens, and small models "normalize" them into something that no
+        // longer matches the source (#13927). A pure override/drawing line strips to empty, and
+        // IsComplete then accepts the model's empty answer for it rather than failing the batch.
         var lines = new List<LlamaCppAdvancedProtocol.BatchLine>(count);
+        var stripped = new StrippedLine[count];
         for (var i = 0; i < count; i++)
         {
-            lines.Add(new LlamaCppAdvancedProtocol.BatchLine(i + 1, rows[index + i].Text));
+            stripped[i] = StrippedLine.Strip(rows[index + i].Text);
+            lines.Add(new LlamaCppAdvancedProtocol.BatchLine(i + 1, stripped[i].Text));
         }
 
         // Translation-tuned models (TranslateGemma) can echo history into a lone line's
         // translation, so the single-line case - including bisection retries - goes context-free.
         var history = count > 1 ? CollectHistory(rows, index) : new List<LlamaCppAdvancedProtocol.HistoryPair>();
         var map = await TranslateLinesAsync(lines, history, sourceLanguageCode, targetLanguageCode, cancellationToken);
-        if (IsComplete(map, lines))
+
+        // An echoed line in a batch is bisected down to that line; a single line that still comes
+        // back unchanged after the warmer retry is accepted - it may legitimately read the same in
+        // both languages, and throwing would abort the whole translation.
+        if (IsComplete(map, lines) && (count == 1 || FindUntranslatedEcho(map, lines, sourceLanguageCode, targetLanguageCode) < 0))
         {
             // Runs on the background translation loop; the rows are DataGrid-bound, so the
             // writes must happen on the UI thread.
@@ -93,7 +124,9 @@ public abstract class AdvancedTranslatorBase : IAutoTranslator, IDisposable
                 for (var i = 0; i < count; i++)
                 {
                     var translation = map[i + 1];
-                    rows[index + i].TranslatedText = translation.Length > 0 ? translation : rows[index + i].Text;
+                    rows[index + i].TranslatedText = translation.Length > 0
+                        ? stripped[i].Restore(translation)
+                        : rows[index + i].Text;
                 }
             });
 
@@ -123,19 +156,46 @@ public abstract class AdvancedTranslatorBase : IAutoTranslator, IDisposable
         var userContent = LlamaCppAdvancedProtocol.BuildUserContent(history, lines);
         var responseFormat = LlamaCppAdvancedProtocol.BuildResponseFormatJson(lines);
 
+        // Generous output budget for the batch (a translation is roughly source-sized; the JSON
+        // wrapper adds a little per line). Only a fallback: the user's MaxTokens setting wins in
+        // the client. Without any cap a grammar-cornered model generates until the server context
+        // fills (#13830) - with it, the runaway becomes an incomplete reply that the normal
+        // retry/bisection path handles.
+        var defaultMaxTokens = 200;
+        foreach (var line in lines)
+        {
+            defaultMaxTokens += 32 + 2 * line.Text.Length;
+        }
+
         var map = new Dictionary<int, string>();
+        Dictionary<int, string>? echoedMap = null;
+        var echoed = false;
         for (var attempt = 0; attempt < 2 && !cancellationToken.IsCancellationRequested; attempt++)
         {
             try
             {
-                var reply = await client.ChatAsync(url, systemPrompt, userContent, responseFormat, cancellationToken, GetModel());
+                // After an untranslated echo the retry runs a little warmer: at the same low
+                // temperature the same request tends to echo again.
+                var temperatureBump = echoed ? EchoRetryTemperatureBump : 0;
+                var reply = await client.ChatAsync(url, systemPrompt, userContent, responseFormat, cancellationToken, GetModel(), defaultMaxTokens, temperatureBump);
                 map = LlamaCppAdvancedProtocol.ParseTranslations(reply);
                 if (IsComplete(map, lines))
                 {
-                    return map;
+                    var echoedLine = FindUntranslatedEcho(map, lines, sourceLanguageCode, targetLanguageCode);
+                    if (echoedLine < 0)
+                    {
+                        return map;
+                    }
+
+                    // The model handed a line back in the source language (TranslateGemma 12B does
+                    // this). Retried here, then the caller bisects the batch (a lone line is accepted).
+                    echoed = true;
+                    echoedMap = map;
+                    Error = "line " + echoedLine + " came back untranslated (" + sourceLanguageCode + " source instead of " + targetLanguageCode + "): " + map[echoedLine];
+                    continue;
                 }
 
-                Error = reply;
+                Error = DescribeUnusableReply(reply, client.ReplyFromReasoning);
             }
             catch (HttpRequestException)
             {
@@ -148,7 +208,26 @@ public abstract class AdvancedTranslatorBase : IAutoTranslator, IDisposable
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        return map;
+
+        // A complete (if echoed) reply beats an unusable retry - the caller decides about echoes.
+        return echoedMap != null && !IsComplete(map, lines) ? echoedMap : map;
+    }
+
+    /// <summary>
+    /// What goes after "No usable translation in ... reply": the reply itself, or why there was
+    /// none - an empty reply used to leave the message bare, which made a server that streams
+    /// the answer somewhere else impossible to tell from a model that answered badly (#15009).
+    /// </summary>
+    internal static string DescribeUnusableReply(string reply, bool fromReasoning)
+    {
+        if (string.IsNullOrWhiteSpace(reply))
+        {
+            return "the server returned an empty reply (no \"content\" and no \"reasoning_content\")";
+        }
+
+        return fromReasoning
+            ? "the server left \"content\" empty and answered in \"reasoning_content\" only - the model looks to be in thinking mode, turn thinking off on the server: " + reply
+            : reply;
     }
 
     /// <summary>
@@ -161,14 +240,45 @@ public abstract class AdvancedTranslatorBase : IAutoTranslator, IDisposable
         var history = new List<LlamaCppAdvancedProtocol.HistoryPair>(maxPairs);
         for (var i = index - 1; i >= 0 && history.Count < maxPairs; i--)
         {
-            if (!string.IsNullOrEmpty(rows[i].TranslatedText))
+            if (string.IsNullOrEmpty(rows[i].TranslatedText))
             {
-                history.Add(new LlamaCppAdvancedProtocol.HistoryPair(rows[i].Text, rows[i].TranslatedText));
+                continue;
             }
+
+            // Same stripping as the batch itself: override blocks carry no context and would
+            // otherwise fill the window twice per pair - once on each side (#13927).
+            var source = StrippedLine.Strip(rows[i].Text).Text;
+            var target = StrippedLine.Strip(rows[i].TranslatedText).Text;
+            if (source.Length == 0 || target.Length == 0)
+            {
+                continue; // a pure override/drawing line is no use as an example pair
+            }
+
+            history.Add(new LlamaCppAdvancedProtocol.HistoryPair(source, target));
         }
 
         history.Reverse();
         return history;
+    }
+
+    private const double EchoRetryTemperatureBump = 0.3;
+
+    /// <summary>
+    /// The number of the first line whose translation is just its source text again (see
+    /// <see cref="TranslationEchoGuard"/>), or -1 when there is none.
+    /// </summary>
+    internal static int FindUntranslatedEcho(Dictionary<int, string> map, List<LlamaCppAdvancedProtocol.BatchLine> lines, string sourceLanguageCode, string targetLanguageCode)
+    {
+        foreach (var line in lines)
+        {
+            if (map.TryGetValue(line.Number, out var translation) &&
+                TranslationEchoGuard.IsUntranslatedEcho(line.Text, translation, sourceLanguageCode, targetLanguageCode))
+            {
+                return line.Number;
+            }
+        }
+
+        return -1;
     }
 
     /// <summary>Every requested line number must be present, and non-empty for non-empty sources.</summary>

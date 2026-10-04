@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -58,7 +58,7 @@ public partial class PickMp4TrackViewModel : ObservableObject
     {
         _mp4Tracks = mp4Tracks;
         _fileName = fileName;
-        WindowTitle = string.Format(Se.Language.File.PickMp4TrackX, fileName);
+        WindowTitle = UiUtil.FormatTitleWithFileName(Se.Language.File.PickMp4TrackX, fileName);
         foreach (var track in _mp4Tracks)
         {
             // A trak box without an mdia child carries no media information at all;
@@ -82,6 +82,11 @@ public partial class PickMp4TrackViewModel : ObservableObject
                 language = string.IsNullOrEmpty(mdia.HandlerName) ? mdia.HandlerType : mdia.HandlerName;
             }
 
+            if (mdia.Minf?.Stbl?.Stsd?.IsForcedSubtitle == true)
+            {
+                language += $" ({Se.Language.General.Forced})";
+            }
+
             var display = new Mp4TrackInfoDisplay
             {
                 HandlerType = mdia.HandlerType,
@@ -102,7 +107,7 @@ public partial class PickMp4TrackViewModel : ObservableObject
     public void Initialize(List<Mp4FragmentedSubtitleTrack> fragmentedTracks, string fileName)
     {
         _fileName = fileName;
-        WindowTitle = string.Format(Se.Language.File.PickMp4TrackX, fileName);
+        WindowTitle = UiUtil.FormatTitleWithFileName(Se.Language.File.PickMp4TrackX, fileName);
         foreach (var track in fragmentedTracks)
         {
             Tracks.Add(new Mp4TrackInfoDisplay
@@ -196,16 +201,23 @@ public partial class PickMp4TrackViewModel : ObservableObject
             {
                 var subPicture = subPictures[i];
                 var paragraph = paragraphs[i];
-                exportHandler.WriteParagraph(new ImageParameter
+                using var bitmap = subPicture.GetBitmap(palette, SKColors.Transparent, SKColors.Black, SKColors.White, SKColors.Black, false);
+                var ip = new ImageParameter
                 {
-                    Bitmap = subPicture.GetBitmap(palette, SKColors.Transparent, SKColors.Black, SKColors.White, SKColors.Black, false),
+                    Bitmap = bitmap,
                     StartTime = TimeSpan.FromMilliseconds(paragraph.StartTime.TotalMilliseconds),
                     EndTime = TimeSpan.FromMilliseconds(paragraph.EndTime.TotalMilliseconds),
                     ScreenWidth = screenWidth,
                     ScreenHeight = screenHeight,
                     Index = i + 1,
-                    OverridePosition = new SKPointI(subPicture.ImageDisplayArea.Left, subPicture.ImageDisplayArea.Top),
-                });
+                    // The bitmap above is cropped to the ink; ImagePosition is where that crop sits.
+                    OverridePosition = subPicture.ImagePosition,
+                };
+
+                // WriteParagraph only writes ImageParameter.Buffer, and CreateParagraph is what
+                // fills it - without this every cue wrote zero bytes and the .sup came out empty.
+                exportHandler.CreateParagraph(ip);
+                exportHandler.WriteParagraph(ip);
             }
 
             exportHandler.WriteFooter();
@@ -275,22 +287,29 @@ public partial class PickMp4TrackViewModel : ObservableObject
 
         Rows.Clear();
         var subtitles = GetTrackParagraphs(selectedTrack);
-        SubtitleCountText = string.Format(Se.Language.File.Import.NumberOfSubtitlesX, subtitles.Count);
+        SubtitleCountText = string.Format(Se.Language.File.Import.NumberOfSubtitlesX, subtitles.Count.ToString("N0"));
         var i = 0;
         foreach (var item in subtitles)
         {
             i++;
             var cue = new Mp4SubtitleCueDisplay()
             {
-                Number = i + 1,
+                // i is already 1-based here (the Matroska picker's i is 0-based), so "+ 1" made
+                // the "#" column start at 2.
+                Number = i,
                 Show = item.StartTime.TimeSpan,
                 Hide = item.EndTime.TimeSpan,
                 Duration = TimeSpan.FromMilliseconds(item.EndTime.TotalMilliseconds - item.StartTime.TotalMilliseconds),
             };
 
-            if (selectedTrack.IsVobSubSubtitle && selectedTrack.Track is { } trackinfo)
+            // Export guards the same pairing with Math.Min, so the two lists demonstrably can
+            // differ in length - indexing blindly threw out of the selection-changed handler.
+            if (selectedTrack.IsVobSubSubtitle && selectedTrack.Track is { } trackinfo &&
+                i - 1 < trackinfo.Mdia.Minf.Stbl.SubPictures.Count)
             {
-                cue.Image = new Image { Source = trackinfo.Mdia.Minf.Stbl.SubPictures[i - 1].GetBitmap(trackinfo.Mdia.Minf.Stbl.VobSubPalette, SKColors.Transparent, SKColors.Black, SKColors.White, SKColors.Black, false).ToAvaloniaBitmap() };
+                using var subPictureBitmap = trackinfo.Mdia.Minf.Stbl.SubPictures[i - 1]
+                    .GetBitmap(trackinfo.Mdia.Minf.Stbl.VobSubPalette, SKColors.Transparent, SKColors.Black, SKColors.White, SKColors.Black, false);
+                cue.Image = new Image { Source = subPictureBitmap.ToAvaloniaBitmap() };
             }
             else
             {

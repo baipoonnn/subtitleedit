@@ -90,16 +90,17 @@ public class ExportHandlerDCinemaInteropPng : IExportHandler
         _sb.AppendLine("<Subtitle FadeDownTime=\"" + 0 + "\" FadeUpTime=\"" + 0 + "\" TimeOut=\"" + DCinemaInterop.ConvertToTimeString(new TimeCode(param.EndTime)) +
                        "\" TimeIn=\"" +
                        DCinemaInterop.ConvertToTimeString(new TimeCode(param.StartTime)) + "\" SpotNumber=\"" + _imagesSavedCount + "\">");
-        // if (param.Depth3D == 0)
+        // The export's 3D depth: stereoscopic cinema places the image in depth by its Z-position.
+        if (param.Depth3D == 0)
         {
             _sb.AppendLine("<Image VPosition=\"" + vPos + "\" HPosition=\"" + hPos + "\" VAlign=\"" + verticalAlignment + "\" HAlign=\"" + horizontalAlignment + "\">" +
                            numberString + ".png" + "</Image>");
         }
-        // else
-        // {
-        //     sb.AppendLine("<Image VPosition=\"" + vPos + "\" HPosition=\"" + hPos + "\" ZPosition=\"" + param.Depth3D + "\" VAlign=\"" + verticalAlignment + "\" HAlign=\"" +
-        //                   horizontalAlignment + "\">" + numberString + ".png" + "</Image>");
-        // }
+        else
+        {
+            _sb.AppendLine("<Image VPosition=\"" + vPos + "\" HPosition=\"" + hPos + "\" ZPosition=\"" + param.Depth3D.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                           "\" VAlign=\"" + verticalAlignment + "\" HAlign=\"" + horizontalAlignment + "\">" + numberString + ".png" + "</Image>");
+        }
 
         _sb.AppendLine("</Subtitle>");
     }
@@ -107,7 +108,10 @@ public class ExportHandlerDCinemaInteropPng : IExportHandler
     public void WriteFooter()
     {
         var doc = new XmlDocument();
-        string title = Path.GetFileNameWithoutExtension(_folderName);
+        // The folder name goes straight into XML, so an "&", "<" or ">" in it made LoadXml throw -
+        // in WriteFooter, i.e. after every PNG was already on disk, leaving a folder of images
+        // with no index.xml. The FCP handler escapes exactly this kind of value.
+        string title = System.Security.SecurityElement.Escape(Path.GetFileNameWithoutExtension(_folderName)) ?? string.Empty;
 
         string guid = Guid.NewGuid().ToString().RemoveChar('-').Insert(8, "-").Insert(13, "-").Insert(18, "-").Insert(23, "-");
         doc.LoadXml("<?xml version=\"1.0\" encoding=\"UTF-8\"?>" + Environment.NewLine +

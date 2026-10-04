@@ -75,6 +75,70 @@ public class CrispAsrParakeet : CrispAsrEngineBase
                     "https://huggingface.co/cstr/parakeet-tdt-0.6b-v3-GGUF/resolve/main/parakeet-tdt-0.6b-v3.gguf",
                 ],
             },
+
+            // Parakeet Ultra - moondream's post-trained parakeet-tdt-0.6b-v3 (same architecture,
+            // tokenizer and 25 languages, CC-BY-4.0). Lower WER than v3 on every benchmark on its
+            // model card, most on FLEURS and long-form audio. q4_k is upstream's registry default.
+            new WhisperModel
+            {
+                Name = "parakeet-ultra-q4_k.gguf",
+                Size = "402 MB",
+                Urls =
+                [
+                    "https://huggingface.co/cstr/parakeet-ultra-GGUF/resolve/main/parakeet-ultra-q4_k.gguf",
+                ],
+            },
+            new WhisperModel
+            {
+                Name = "parakeet-ultra-q8_0.gguf",
+                Size = "674 MB",
+                Urls =
+                [
+                    "https://huggingface.co/cstr/parakeet-ultra-GGUF/resolve/main/parakeet-ultra-q8_0.gguf",
+                ],
+            },
+            new WhisperModel
+            {
+                Name = "parakeet-ultra-f16.gguf",
+                Size = "1.26 GB",
+                Urls =
+                [
+                    "https://huggingface.co/cstr/parakeet-ultra-GGUF/resolve/main/parakeet-ultra-f16.gguf",
+                ],
+            },
+
+            // Phonon-2 - Fermion Research's English-only retrain of parakeet-tdt-0.6b-v3
+            // (CC-BY-4.0), wired into CrispASR v0.8.40. Same runtime, punctuated mixed-case
+            // output. q8_0 is upstream's registry default; q4_k drifts more from the reference
+            // (15/21 exact transcripts against 19/21 for q8_0 in upstream's check).
+            new WhisperModel
+            {
+                Name = "phonon2-q4_k.gguf",
+                Size = "402 MB",
+                Urls =
+                [
+                    "https://huggingface.co/cstr/phonon2-GGUF/resolve/main/phonon2-q4_k.gguf",
+                ],
+            },
+            new WhisperModel
+            {
+                Name = "phonon2-q8_0.gguf",
+                Size = "674 MB",
+                Urls =
+                [
+                    "https://huggingface.co/cstr/phonon2-GGUF/resolve/main/phonon2-q8_0.gguf",
+                ],
+            },
+            new WhisperModel
+            {
+                Name = "phonon2-f16.gguf",
+                Size = "1.26 GB",
+                Urls =
+                [
+                    "https://huggingface.co/cstr/phonon2-GGUF/resolve/main/phonon2-f16.gguf",
+                ],
+            },
+
             new WhisperModel
             {
                 Name = "parakeet-tdt-0.6b-ja-q4_k.gguf",
@@ -102,6 +166,67 @@ public class CrispAsrParakeet : CrispAsrEngineBase
                 Urls =
                 [
                     "https://huggingface.co/cstr/parakeet-tdt-0.6b-ja-GGUF/resolve/main/parakeet-tdt-0.6b-ja.gguf",
+                ],
+            },
+
+            // ReazonSpeech NeMo v2 - Japanese-only FastConformer-RNNT trained on ~35k hours
+            // of Japanese audio. Runs on the parakeet backend (RNNT decode path picked from
+            // the GGUF metadata); q8_0 is upstream's recommended default.
+            new WhisperModel
+            {
+                Name = "reazonspeech-nemo-v2-q4_k.gguf",
+                Size = "406 MB",
+                Urls =
+                [
+                    "https://huggingface.co/cstr/reazonspeech-nemo-v2-GGUF/resolve/main/reazonspeech-nemo-v2-q4_k.gguf",
+                ],
+            },
+            new WhisperModel
+            {
+                Name = "reazonspeech-nemo-v2-q8_0.gguf",
+                Size = "667 MB",
+                Urls =
+                [
+                    "https://huggingface.co/cstr/reazonspeech-nemo-v2-GGUF/resolve/main/reazonspeech-nemo-v2-q8_0.gguf",
+                ],
+            },
+            new WhisperModel
+            {
+                Name = "reazonspeech-nemo-v2-f16.gguf",
+                Size = "1.24 GB",
+                Urls =
+                [
+                    "https://huggingface.co/cstr/reazonspeech-nemo-v2-GGUF/resolve/main/reazonspeech-nemo-v2-f16.gguf",
+                ],
+            },
+
+            // Japanese fine-tune of parakeet-ctc-1.1b - CTC head, so it is far less sensitive
+            // to quantization than the small ja TDT decoder (which can loop).
+            new WhisperModel
+            {
+                Name = "parakeet-ctc-1.1b-ja-q4_k.gguf",
+                Size = "672 MB",
+                Urls =
+                [
+                    "https://huggingface.co/cstr/parakeet-ctc-1.1b-ja-GGUF/resolve/main/parakeet-ctc-1.1b-ja-q4_k.gguf",
+                ],
+            },
+            new WhisperModel
+            {
+                Name = "parakeet-ctc-1.1b-ja-q8_0.gguf",
+                Size = "1.14 GB",
+                Urls =
+                [
+                    "https://huggingface.co/cstr/parakeet-ctc-1.1b-ja-GGUF/resolve/main/parakeet-ctc-1.1b-ja-q8_0.gguf",
+                ],
+            },
+            new WhisperModel
+            {
+                Name = "parakeet-ctc-1.1b-ja-f16.gguf",
+                Size = "2.13 GB",
+                Urls =
+                [
+                    "https://huggingface.co/cstr/parakeet-ctc-1.1b-ja-GGUF/resolve/main/parakeet-ctc-1.1b-ja-f16.gguf",
                 ],
             },
             new WhisperModel

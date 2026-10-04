@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -76,8 +76,28 @@ public class OpenAiSttService : ISttTranscriber
         IProgress<OpenAiCompatibleSegment>? segmentProgress = null,
         CancellationToken cancellationToken = default)
     {
-        using var fileStream = File.OpenRead(audioFilePath);
-        return await TranscribeAsync(fileStream, Path.GetFileName(audioFilePath), language, progress, segmentProgress, cancellationToken);
+        try
+        {
+            using var fileStream = File.OpenRead(audioFilePath);
+            return await TranscribeAsync(fileStream, Path.GetFileName(audioFilePath), language, progress, segmentProgress, cancellationToken);
+        }
+        catch (HttpRequestException exception) when (!_settings.Stream && IsVerboseJsonRejected(exception))
+        {
+            // vLLM only does verbose_json for models with Whisper-style timestamp tokens and
+            // answers 400 for any other model. Ask again for plain json - the text comes back
+            // without segments and the caller spreads it over sentences. The file is opened
+            // again, as the first request disposed its stream.
+            _settings.Logger?.Invoke("OpenAI-compatible STT: server rejected verbose_json, retrying with json");
+            using var fileStream = File.OpenRead(audioFilePath);
+            return await TranscribeAsync(fileStream, Path.GetFileName(audioFilePath), language, progress, segmentProgress, cancellationToken, forceJson: true);
+        }
+    }
+
+    private static bool IsVerboseJsonRejected(HttpRequestException exception)
+    {
+        var status = (int?)exception.StatusCode;
+        return status is >= 400 and < 500 &&
+               exception.Message.Contains("verbose_json", StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task<OpenAiCompatibleSttResponse> TranscribeAsync(
@@ -87,6 +107,18 @@ public class OpenAiSttService : ISttTranscriber
         IProgress<string>? progress = null,
         IProgress<OpenAiCompatibleSegment>? segmentProgress = null,
         CancellationToken cancellationToken = default)
+    {
+        return await TranscribeAsync(audioStream, fileName, language, progress, segmentProgress, cancellationToken, forceJson: false);
+    }
+
+    private async Task<OpenAiCompatibleSttResponse> TranscribeAsync(
+        Stream audioStream,
+        string fileName,
+        string? language,
+        IProgress<string>? progress,
+        IProgress<OpenAiCompatibleSegment>? segmentProgress,
+        CancellationToken cancellationToken,
+        bool forceJson)
     {
         // Apply the per-call deadline via a linked CTS rather than the shared
         // HttpClient.Timeout, so the shared client stays unmodified.
@@ -98,7 +130,7 @@ public class OpenAiSttService : ISttTranscriber
 
         try
         {
-            return await TranscribeCoreAsync(audioStream, fileName, language, progress, segmentProgress, timeoutCts.Token);
+            return await TranscribeCoreAsync(audioStream, fileName, language, progress, segmentProgress, forceJson, timeoutCts.Token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -114,6 +146,7 @@ public class OpenAiSttService : ISttTranscriber
         string? language,
         IProgress<string>? progress,
         IProgress<OpenAiCompatibleSegment>? segmentProgress,
+        bool forceJson,
         CancellationToken cancellationToken)
     {
         using var content = new MultipartFormDataContent();
@@ -147,10 +180,11 @@ public class OpenAiSttService : ISttTranscriber
         // unless `response_format=verbose_json` (issue #11146). Send the
         // granularity hints only with verbose_json — segments come through
         // the SSE `transcript.text.done` event anyway during streaming.
-        var responseFormat = _settings.Stream ? "json" : "verbose_json";
+        var useJson = _settings.Stream || forceJson;
+        var responseFormat = useJson ? "json" : "verbose_json";
         content.Add(new StringContent(responseFormat), "response_format");
 
-        if (!_settings.Stream)
+        if (!useJson)
         {
             content.Add(new StringContent("segment"), "timestamp_granularities[]");
             content.Add(new StringContent("word"), "timestamp_granularities[]");
@@ -210,7 +244,7 @@ public class OpenAiSttService : ISttTranscriber
             var temperatureSummary = _settings.Temperature > 0
                 ? _settings.Temperature.ToString("F2", CultureInfo.InvariantCulture)
                 : "(not sent)";
-            var granularitiesSummary = _settings.Stream ? "(not sent)" : "[segment,word]";
+            var granularitiesSummary = useJson ? "(not sent)" : "[segment,word]";
             var paramSummary =
                 $"model={_settings.Model}, language={languageToUse}, " +
                 $"response_format={responseFormat}, timestamp_granularities={granularitiesSummary}, " +
@@ -265,17 +299,22 @@ public class OpenAiSttService : ISttTranscriber
         string eventType = "";
         var dataBuilder = new StringBuilder();
 
-        while ((line = await reader.ReadLineAsync()) != null)
+        // Pass the token: without it a server that opens the stream and then stalls blocks here
+        // forever, and the per-call timeout never fires.
+        while ((line = await reader.ReadLineAsync(cancellationToken)) != null)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             if (string.IsNullOrWhiteSpace(line))
             {
                 // Empty line = end of event, process it
-                if (dataBuilder.Length > 0 && !string.IsNullOrEmpty(eventType))
+                if (dataBuilder.Length > 0)
                 {
                     var data = dataBuilder.ToString().Trim();
-                    ProcessSseEvent(eventType, data, segments, fullText, progress, segmentProgress, ref currentSegmentText, ref currentSegmentId, ref currentSegmentStart, ref currentSegmentEnd);
+                    // Per the SSE spec an event with no "event:" line is type "message", and
+                    // the transcription payloads carry their own "type" field - keying only
+                    // off "event:" discarded every event from servers that omit it.
+                    ProcessSseEvent(ResolveSseEventType(eventType, data), data, segments, fullText, progress, segmentProgress, ref currentSegmentText, ref currentSegmentId, ref currentSegmentStart, ref currentSegmentEnd);
                 }
                 eventType = "";
                 dataBuilder.Clear();
@@ -293,10 +332,10 @@ public class OpenAiSttService : ISttTranscriber
         }
 
         // Process any remaining event
-        if (dataBuilder.Length > 0 && !string.IsNullOrEmpty(eventType))
+        if (dataBuilder.Length > 0)
         {
             var data = dataBuilder.ToString().Trim();
-            ProcessSseEvent(eventType, data, segments, fullText, progress, segmentProgress, ref currentSegmentText, ref currentSegmentId, ref currentSegmentStart, ref currentSegmentEnd);
+            ProcessSseEvent(ResolveSseEventType(eventType, data), data, segments, fullText, progress, segmentProgress, ref currentSegmentText, ref currentSegmentId, ref currentSegmentStart, ref currentSegmentEnd);
         }
 
         return new OpenAiCompatibleSttResponse
@@ -306,6 +345,36 @@ public class OpenAiSttService : ISttTranscriber
             Language = null,
             Duration = segments.Count > 0 ? segments[^1].End : 0
         };
+    }
+
+    /// <summary>
+    /// The event type to dispatch on: the SSE "event:" field when the server sends one,
+    /// otherwise the "type" the JSON payload carries itself (OpenAI's transcription stream
+    /// sends bare "data: {"type":"transcript.text.delta",...}" lines).
+    /// </summary>
+    private static string ResolveSseEventType(string eventType, string data)
+    {
+        if (!string.IsNullOrEmpty(eventType))
+        {
+            return eventType;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(data);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                doc.RootElement.TryGetProperty("type", out var typeElement) &&
+                typeElement.ValueKind == JsonValueKind.String)
+            {
+                return typeElement.GetString() ?? string.Empty;
+            }
+        }
+        catch (JsonException)
+        {
+            // Not JSON (e.g. the "[DONE]" sentinel) - nothing to dispatch on.
+        }
+
+        return string.Empty;
     }
 
     private static void ProcessSseEvent(
@@ -341,6 +410,16 @@ public class OpenAiSttService : ISttTranscriber
             else if (eventType == "transcript.text.done")
             {
                 var doneObj = JsonSerializer.Deserialize<TranscriptDone>(data, options);
+
+                // The done event carries the complete transcript. Servers that stream nothing but
+                // this final event (and any run whose deltas were dropped as malformed) left
+                // fullText empty, so the whole transcription came back blank.
+                if (fullText.Length == 0 && !string.IsNullOrEmpty(doneObj?.Text))
+                {
+                    fullText.Append(doneObj.Text);
+                    progress?.Report(doneObj.Text);
+                }
+
                 if (doneObj?.Segments != null && doneObj.Segments.Count > 0)
                 {
                     if (segments.Count == 0)
@@ -352,22 +431,11 @@ public class OpenAiSttService : ISttTranscriber
                         }
                     }
                 }
-                else if (segments.Count == 0)
-                {
-                    // No segments from streaming or from done.segments array
-                    if (!string.IsNullOrEmpty(doneObj?.Text) && fullText.Length > 0)
-                    {
-                        var newSeg = new OpenAiCompatibleSegment
-                        {
-                            Id = 0,
-                            Start = 0,
-                            End = 0,
-                            Text = fullText.ToString().Trim()
-                        };
-                        segments.Add(newSeg);
-                        segmentProgress?.Report(newSeg);
-                    }
-                }
+                // No segments from streaming or from the done.segments array: leave the
+                // text to be returned as Text with no segments, so the caller's
+                // sentence-spreading fallback gives it real time codes. Synthesising a
+                // 0/0 segment here instead produced one cue holding the whole transcript
+                // at 00:00:00,000 --> 00:00:00,000 and suppressed that fallback.
             }
             else if (eventType == "transcript.segment" || eventType == "transcript.text.segment")
             {
@@ -378,10 +446,59 @@ public class OpenAiSttService : ISttTranscriber
                     segmentProgress?.Report(segObj.Segment);
                 }
             }
+            else if (eventType.Length == 0)
+            {
+                ProcessUntypedSseChunk(data, fullText, progress);
+            }
         }
         catch (JsonException)
         {
             // Ignore malformed JSON
+        }
+    }
+
+    /// <summary>
+    /// Chunks without an event type: vLLM streams its transcription chat-completion style, as
+    /// <c>{"object":"transcription.chunk","choices":[{"delta":{"content":"..."}}]}</c>, and reports
+    /// a failure mid-stream as <c>{"error":{"message":"..."}}</c>.
+    /// </summary>
+    private static void ProcessUntypedSseChunk(string data, StringBuilder fullText, IProgress<string>? progress)
+    {
+        using var doc = JsonDocument.Parse(data);
+        var root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        if (root.TryGetProperty("error", out var error) && error.ValueKind != JsonValueKind.Null)
+        {
+            var message = error.ValueKind == JsonValueKind.Object && error.TryGetProperty("message", out var messageElement)
+                ? messageElement.ToString()
+                : error.ToString();
+            throw new HttpRequestException("STT stream failed: " + message);
+        }
+
+        if (!root.TryGetProperty("choices", out var choices) || choices.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        foreach (var choice in choices.EnumerateArray())
+        {
+            if (choice.ValueKind == JsonValueKind.Object &&
+                choice.TryGetProperty("delta", out var delta) &&
+                delta.ValueKind == JsonValueKind.Object &&
+                delta.TryGetProperty("content", out var content) &&
+                content.ValueKind == JsonValueKind.String)
+            {
+                var text = content.GetString();
+                if (!string.IsNullOrEmpty(text))
+                {
+                    fullText.Append(text);
+                    progress?.Report(text);
+                }
+            }
         }
     }
 
@@ -417,19 +534,13 @@ public class OpenAiSttService : ISttTranscriber
             // If verbose_json fails, try simple text response
         }
 
-        // Fallback: treat as plain text response
+        // Fallback: treat as plain text response. No synthetic segment - the caller takes the
+        // segments branch whenever Segments.Count > 0, so a 0/0 entry put the whole transcript in
+        // one cue at 00:00:00,000 --> 00:00:00,000 and suppressed the sentence-spreading
+        // fallback. Same fix as the streaming path above; OpenRouterSttService does it this way.
         return new OpenAiCompatibleSttResponse
         {
             Text = jsonResponse.Trim(),
-            Segments = new List<OpenAiCompatibleSegment>
-            {
-                new OpenAiCompatibleSegment
-                {
-                    Start = 0,
-                    End = 0,
-                    Text = jsonResponse.Trim()
-                }
-            }
         };
     }
 
@@ -579,6 +690,7 @@ public class OpenAiSttService : ISttTranscriber
             "mp3" => "mp3",
             "m4a" => "m4a",
             "webm" => "webm",
+            "flac" => "flac",
             _ => "wav",
         };
     }

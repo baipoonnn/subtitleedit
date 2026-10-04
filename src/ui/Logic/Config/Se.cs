@@ -3,6 +3,7 @@ using Nikse.SubtitleEdit.Core.Forms.FixCommonErrors;
 using Nikse.SubtitleEdit.Core.SubtitleFormats;
 using Nikse.SubtitleEdit.Features.Main;
 using Nikse.SubtitleEdit.Logic.Config.Language;
+using Nikse.SubtitleEdit.UiLogic.Ocr;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -17,12 +18,14 @@ namespace Nikse.SubtitleEdit.Logic.Config;
 public class Se
 {
     internal const int CurrentMacOsFontMigrationVersion = 1;
-    internal const int CurrentShortcutsMigrationVersion = 2;
+    internal const int CurrentShortcutsMigrationVersion = 5;
+    internal const int CurrentLayoutMigrationVersion = 2;
 
-    public static string Version { get; set; } = "v5.2.0-beta11";
+    public static string Version { get; set; } = "v5.3.0-beta20";
 
     public SeGeneral General { get; set; } = new();
     public List<SeShortCut> Shortcuts { get; set; } = new();
+    public List<SeCustomShortcut> CustomShortcuts { get; set; } = new();
     public int? ShortcutsMigrationVersion { get; set; }
     public string Color1 { get; set; } = "#ffff00ff";
     public string Color2 { get; set; } = "#ff0000ff";
@@ -38,16 +41,42 @@ public class Se
     public string Surround2Right { get; set; } = "♫";
     public string Surround3Left { get; set; } = "[";
     public string Surround3Right { get; set; } = "]";
-    public string Actor1 { get; set; } = "Actor 1";
-    public string Actor2 { get; set; } = "Actor 2";
-    public string Actor3 { get; set; } = "Actor 3";
-    public string Actor4 { get; set; } = "Actor 4";
-    public string Actor5 { get; set; } = "Actor 5";
-    public string Actor6 { get; set; } = "Actor 6";
-    public string Actor7 { get; set; } = "Actor 7";
-    public string Actor8 { get; set; } = "Actor 8";
-    public string Actor9 { get; set; } = "Actor 9";
-    public string Actor10 { get; set; } = "Actor 10";
+    public string Surround4Left { get; set; } = string.Empty;
+    public string Surround4Right { get; set; } = string.Empty;
+    public string Surround5Left { get; set; } = string.Empty;
+    public string Surround5Right { get; set; } = string.Empty;
+    public string Surround6Left { get; set; } = string.Empty;
+    public string Surround6Right { get; set; } = string.Empty;
+    public string Surround7Left { get; set; } = string.Empty;
+    public string Surround7Right { get; set; } = string.Empty;
+    public string Surround8Left { get; set; } = string.Empty;
+    public string Surround8Right { get; set; } = string.Empty;
+    public string Surround1Behavior { get; set; } = nameof(SurroundWithBehavior.Toggle);
+    public string Surround2Behavior { get; set; } = nameof(SurroundWithBehavior.Toggle);
+    public string Surround3Behavior { get; set; } = nameof(SurroundWithBehavior.Toggle);
+    public string Surround4Behavior { get; set; } = nameof(SurroundWithBehavior.Toggle);
+    public string Surround5Behavior { get; set; } = nameof(SurroundWithBehavior.Toggle);
+    public string Surround6Behavior { get; set; } = nameof(SurroundWithBehavior.Toggle);
+    public string Surround7Behavior { get; set; } = nameof(SurroundWithBehavior.Toggle);
+    public string Surround8Behavior { get; set; } = nameof(SurroundWithBehavior.Toggle);
+    public string Surround1Scope { get; set; } = nameof(SurroundWithScope.SelectionOrText);
+    public string Surround2Scope { get; set; } = nameof(SurroundWithScope.SelectionOrText);
+    public string Surround3Scope { get; set; } = nameof(SurroundWithScope.SelectionOrText);
+    public string Surround4Scope { get; set; } = nameof(SurroundWithScope.SelectionOrText);
+    public string Surround5Scope { get; set; } = nameof(SurroundWithScope.SelectionOrText);
+    public string Surround6Scope { get; set; } = nameof(SurroundWithScope.SelectionOrText);
+    public string Surround7Scope { get; set; } = nameof(SurroundWithScope.SelectionOrText);
+    public string Surround8Scope { get; set; } = nameof(SurroundWithScope.SelectionOrText);
+    public string CustomSearch1Name { get; set; } = "The Free Dictionary";
+    public string CustomSearch1Url { get; set; } = "https://www.thefreedictionary.com/{0}";
+    public string CustomSearch2Name { get; set; } = "Wikipedia";
+    public string CustomSearch2Url { get; set; } = "https://en.wikipedia.org/wiki?search={0}";
+    public string CustomSearch3Name { get; set; } = "DuckDuckGo";
+    public string CustomSearch3Url { get; set; } = "https://duckduckgo.com/?q={0}";
+    public string CustomSearch4Name { get; set; } = string.Empty;
+    public string CustomSearch4Url { get; set; } = string.Empty;
+    public string CustomSearch5Name { get; set; } = string.Empty;
+    public string CustomSearch5Url { get; set; } = string.Empty;
     public SeFile File { get; set; } = new();
     public SeEdit Edit { get; set; } = new();
     public SeTools Tools { get; set; } = new();
@@ -164,14 +193,29 @@ public class Se
     public static string ThemesFolder => Path.Combine(DataFolder, "Themes");
     public static string FontsFolder => Path.Combine(DataFolder, "Fonts");
     public static string AutoBackupFolder => Path.Combine(DataFolder, "AutoBackup");
+
+    /// <summary>
+    /// Daily copies of Settings.json. A sub-folder of the subtitle auto-backup folder so the
+    /// non-recursive subtitle scan never lists them, and so both live under one place to clean.
+    /// </summary>
+    public static string SettingsBackupFolder => Path.Combine(AutoBackupFolder, "Settings");
     public static string FfmpegFolder => Path.Combine(DataFolder, "ffmpeg");
+
+    /// <summary>FFmpeg shared libraries (avcodec etc.) for the ffmpeg video player - kept apart from the static ffmpeg.exe above.</summary>
+    public static string FfmpegLibFolder => Path.Combine(FfmpegFolder, "lib");
     public static string TextToSpeechFolder => Path.Combine(DataFolder, "TextToSpeech");
     public static string SpeechToTextFolder => Path.Combine(DataFolder, "SpeechToText");
     public static string CrispAsrFolder => Path.Combine(DataFolder, "CrispASR");
     public static string LlamaCppFolder => Path.Combine(DataFolder, "llama.cpp");
+    // audio.cpp is a multi-model runtime (TTS, ASR, VAD, separation), so it sits at the top
+    // level like CrispASR and llama.cpp rather than under a single feature's folder — the
+    // binaries are shared the moment a second audio.cpp-backed engine is added.
+    public static string AudioCppFolder => Path.Combine(DataFolder, "audio.cpp");
     public static string WaveformsFolder => Path.Combine(DataFolder, "Waveforms");
     public static string SpectrogramsFolder => Path.Combine(DataFolder, "Spectrograms");
     public static string ShotChangesFolder => Path.Combine(DataFolder, "ShotChanges");
+    public static string TimeCodesFolder => Path.Combine(DataFolder, "TimeCodes");
+    public static string ChaptersFolder => Path.Combine(DataFolder, "Chapters");
     public static string PluginsFolder => Path.Combine(DataFolder, "Plugins");
 
     /// <summary>Root for persistent per-plugin data folders; not scanned for plugins (no manifest).</summary>
@@ -179,12 +223,62 @@ public class Se
 
     public static string OcrFolder => Path.Combine(DataFolder, "OCR");
     public static string TranslationFolder => Path.Combine(DataFolder, "Languages");
-    public static string PaddleOcrFolder => Path.Combine(OcrFolder, "PaddleOCR3-1");
+    // The folder name carries the PaddleOCR version the bundled standalone engine is built
+    // from (3-7 = PaddleOCR 3.7 = PaddleOCR-Standalone v3.7.0; upstream re-aligned its tag
+    // scheme to the PaddleOCR version, so v1.4.0 is followed by v3.7.0). Bump it whenever the
+    // engine or the support-files bundle moves to a new PaddleOCR release: extracting a new
+    // build over an old one would leave orphaned files from the previous Python/paddle
+    // runtime, and the old models bundle is missing recognition models the current language
+    // list offers (the 3.4 bundle has no PP-OCRv6 models, the 3.1 one has no arabic/cyrillic/
+    // devanagari PP-OCRv5 or el/ta/te/th/ka models at all). A new folder means engine and
+    // models always come from the same release.
+    public static string PaddleOcrFolder => Path.Combine(OcrFolder, "PaddleOCR3-7");
     public static string PaddleOcrModelsFolder => Path.Combine(PaddleOcrFolder, "models");
+
+    /// <summary>Install folders of superseded PaddleOCR versions, deleted after a new install succeeds.</summary>
+    public static IReadOnlyList<string> PaddleOcrLegacyFolders => new[]
+    {
+        Path.Combine(OcrFolder, "PaddleOCR3-1"),
+        Path.Combine(OcrFolder, "PaddleOCR3-4"),
+    };
     public static string GoogleLensOcrFolder => Path.Combine(OcrFolder, "Google-Lens");
     public static string CrispEmbedFolder => Path.Combine(OcrFolder, "CrispEmbed");
     public static string VlcFolder => Path.Combine(DataFolder, "VLC");
     public static string SevenZipFolder => Path.Combine(DataFolder, "7Zip");
+    private const string TesseractFolderName = "Tesseract";
+    private const string LegacyTesseractFolderName = "Tesseract550";
+
+    private static readonly Lazy<string> _tesseractDataFolder = new(ResolveTesseractDataFolder);
+
+    // Holds the Tesseract binaries (Windows only) and the downloaded models (all platforms).
+    // The name used to carry the Tesseract version, which orphaned every downloaded model on
+    // each bump - and on macOS/Linux, where the binary comes from brew/apt, models were the
+    // only thing in there. Rename it once, version-less, and move the old folder across.
+    private static string ResolveTesseractDataFolder() => ResolveTesseractDataFolder(DataFolder);
+
+    internal static string ResolveTesseractDataFolder(string dataFolder)
+    {
+        var folder = Path.Combine(dataFolder, TesseractFolderName);
+        var legacyFolder = Path.Combine(dataFolder, LegacyTesseractFolderName);
+        if (Directory.Exists(folder) || !Directory.Exists(legacyFolder))
+        {
+            return folder;
+        }
+
+        try
+        {
+            Directory.Move(legacyFolder, folder);
+        }
+        catch (Exception exception)
+        {
+            // Keep using the old folder rather than silently hiding the models that are in it.
+            SeLogger.Error($"Could not move \"{legacyFolder}\" to \"{folder}\": {exception.Message}");
+            return legacyFolder;
+        }
+
+        return folder;
+    }
+
     private static readonly Lazy<string> _tesseractFolder = new(ResolveTesseractFolder);
     public static string TesseractFolder => _tesseractFolder.Value;
 
@@ -192,7 +286,7 @@ public class Se
     {
         if (OperatingSystem.IsWindows())
         {
-            return Path.Combine(DataFolder, "Tesseract550");
+            return _tesseractDataFolder.Value;
         }
 
         var folders = new List<string>();
@@ -219,7 +313,7 @@ public class Se
             }
         }
 
-        return Path.Combine(DataFolder, "Tesseract550");
+        return _tesseractDataFolder.Value;
     }
 
     private static readonly Lazy<string> _tesseractModelFolder = new(ResolveTesseractModelFolder);
@@ -227,7 +321,7 @@ public class Se
 
     private static string ResolveTesseractModelFolder()
     {
-        var modelFolder = Path.Combine(DataFolder, "Tesseract550", "tessdata");
+        var modelFolder = Path.Combine(_tesseractDataFolder.Value, "tessdata");
         SeedBundledTesseractModels(modelFolder);
         return modelFolder;
     }
@@ -256,6 +350,200 @@ public class Se
         catch (Exception ex)
         {
             SeLogger.Error("Error seeding bundled Tesseract model: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Number of configurable "surround with" slots (#14232). Slots are one-based; the ones left
+    /// blank are simply hidden from the subtitle grid context menu.
+    /// </summary>
+    public const int SurroundWithSlotCount = 8;
+
+    public string GetSurroundLeft(int slotNumber) => slotNumber switch
+    {
+        1 => Surround1Left,
+        2 => Surround2Left,
+        3 => Surround3Left,
+        4 => Surround4Left,
+        5 => Surround5Left,
+        6 => Surround6Left,
+        7 => Surround7Left,
+        8 => Surround8Left,
+        _ => string.Empty,
+    };
+
+    public string GetSurroundRight(int slotNumber) => slotNumber switch
+    {
+        1 => Surround1Right,
+        2 => Surround2Right,
+        3 => Surround3Right,
+        4 => Surround4Right,
+        5 => Surround5Right,
+        6 => Surround6Right,
+        7 => Surround7Right,
+        8 => Surround8Right,
+        _ => string.Empty,
+    };
+
+    public void SetSurround(int slotNumber, string left, string right)
+    {
+        switch (slotNumber)
+        {
+            case 1: Surround1Left = left; Surround1Right = right; break;
+            case 2: Surround2Left = left; Surround2Right = right; break;
+            case 3: Surround3Left = left; Surround3Right = right; break;
+            case 4: Surround4Left = left; Surround4Right = right; break;
+            case 5: Surround5Left = left; Surround5Right = right; break;
+            case 6: Surround6Left = left; Surround6Right = right; break;
+            case 7: Surround7Left = left; Surround7Right = right; break;
+            case 8: Surround8Left = left; Surround8Right = right; break;
+        }
+    }
+
+    /// <summary>
+    /// What a "surround with" slot does when fired: toggle (default), always add, or only remove.
+    /// Unknown or missing values fall back to toggle.
+    /// </summary>
+    public SurroundWithBehavior GetSurroundBehavior(int slotNumber)
+    {
+        var value = slotNumber switch
+        {
+            1 => Surround1Behavior,
+            2 => Surround2Behavior,
+            3 => Surround3Behavior,
+            4 => Surround4Behavior,
+            5 => Surround5Behavior,
+            6 => Surround6Behavior,
+            7 => Surround7Behavior,
+            8 => Surround8Behavior,
+            _ => null,
+        };
+
+        return Enum.TryParse<SurroundWithBehavior>(value, true, out var behavior) && Enum.IsDefined(behavior)
+            ? behavior
+            : SurroundWithBehavior.Toggle;
+    }
+
+    public void SetSurroundBehavior(int slotNumber, SurroundWithBehavior behavior)
+    {
+        var value = behavior.ToString();
+        switch (slotNumber)
+        {
+            case 1: Surround1Behavior = value; break;
+            case 2: Surround2Behavior = value; break;
+            case 3: Surround3Behavior = value; break;
+            case 4: Surround4Behavior = value; break;
+            case 5: Surround5Behavior = value; break;
+            case 6: Surround6Behavior = value; break;
+            case 7: Surround7Behavior = value; break;
+            case 8: Surround8Behavior = value; break;
+        }
+    }
+
+    /// <summary>
+    /// What text a "surround with" slot works on. Unknown or missing values fall back to
+    /// "selection, else whole text".
+    /// </summary>
+    public SurroundWithScope GetSurroundScope(int slotNumber)
+    {
+        var value = slotNumber switch
+        {
+            1 => Surround1Scope,
+            2 => Surround2Scope,
+            3 => Surround3Scope,
+            4 => Surround4Scope,
+            5 => Surround5Scope,
+            6 => Surround6Scope,
+            7 => Surround7Scope,
+            8 => Surround8Scope,
+            _ => null,
+        };
+
+        return Enum.TryParse<SurroundWithScope>(value, true, out var scope) && Enum.IsDefined(scope)
+            ? scope
+            : SurroundWithScope.SelectionOrText;
+    }
+
+    public void SetSurroundScope(int slotNumber, SurroundWithScope scope)
+    {
+        var value = scope.ToString();
+        switch (slotNumber)
+        {
+            case 1: Surround1Scope = value; break;
+            case 2: Surround2Scope = value; break;
+            case 3: Surround3Scope = value; break;
+            case 4: Surround4Scope = value; break;
+            case 5: Surround5Scope = value; break;
+            case 6: Surround6Scope = value; break;
+            case 7: Surround7Scope = value; break;
+            case 8: Surround8Scope = value; break;
+        }
+    }
+
+    /// <summary>
+    /// Number of custom shortcut slots ("Custom shortcut 1-8"), each a list of steps.
+    /// </summary>
+    public const int CustomShortcutSlotCount = 8;
+
+    public SeCustomShortcut GetCustomShortcut(int slotNumber)
+    {
+        var index = slotNumber - 1;
+        return CustomShortcuts != null && index >= 0 && index < CustomShortcuts.Count && CustomShortcuts[index] != null
+            ? CustomShortcuts[index]
+            : new SeCustomShortcut();
+    }
+
+    public void SetCustomShortcut(int slotNumber, SeCustomShortcut customShortcut)
+    {
+        if (slotNumber < 1 || slotNumber > CustomShortcutSlotCount)
+        {
+            return;
+        }
+
+        CustomShortcuts ??= new List<SeCustomShortcut>();
+        while (CustomShortcuts.Count < CustomShortcutSlotCount)
+        {
+            CustomShortcuts.Add(new SeCustomShortcut());
+        }
+
+        CustomShortcuts[slotNumber - 1] = customShortcut;
+    }
+
+    /// <summary>
+    /// Number of configurable "search via" slots (name + URL, SE 4 parity). Slots are one-based;
+    /// a slot without a URL is hidden from the text box context menu.
+    /// </summary>
+    public const int CustomSearchSlotCount = 5;
+
+    public string GetCustomSearchName(int slotNumber) => slotNumber switch
+    {
+        1 => CustomSearch1Name,
+        2 => CustomSearch2Name,
+        3 => CustomSearch3Name,
+        4 => CustomSearch4Name,
+        5 => CustomSearch5Name,
+        _ => string.Empty,
+    };
+
+    public string GetCustomSearchUrl(int slotNumber) => slotNumber switch
+    {
+        1 => CustomSearch1Url,
+        2 => CustomSearch2Url,
+        3 => CustomSearch3Url,
+        4 => CustomSearch4Url,
+        5 => CustomSearch5Url,
+        _ => string.Empty,
+    };
+
+    public void SetCustomSearch(int slotNumber, string name, string url)
+    {
+        switch (slotNumber)
+        {
+            case 1: CustomSearch1Name = name; CustomSearch1Url = url; break;
+            case 2: CustomSearch2Name = name; CustomSearch2Url = url; break;
+            case 3: CustomSearch3Name = name; CustomSearch3Url = url; break;
+            case 4: CustomSearch4Name = name; CustomSearch4Url = url; break;
+            case 5: CustomSearch5Name = name; CustomSearch5Url = url; break;
         }
     }
 
@@ -295,8 +583,21 @@ public class Se
     /// Version 2: "Text box: Delete selection (no clipboard)" grew into the forward-delete
     /// (Delete key) command and was renamed; the persisted entry is renamed with it so user
     /// assignments - including a deliberately cleared binding - survive.
+    ///
+    /// Version 4 (macOS only): several defaults moved off standard macOS shortcuts (#14941, see
+    /// <see cref="ShortcutsMain.MacOsDefaultChanges"/>). Bindings still on the old default move to
+    /// the new one, unless another action already uses the new keys.
+    ///
+    /// Version 5: v5.3.0 betas shipped Ctrl+Shift+V (Cmd+Shift+V on macOS) as the default for the
+    /// voice manager, which "fill selected lines with clipboard text" already had (#15326). The
+    /// voice manager has no default now, and bindings still on the stale default are cleared.
     /// </summary>
     internal void MigrateShortcuts()
+    {
+        MigrateShortcuts(OperatingSystem.IsMacOS());
+    }
+
+    internal void MigrateShortcuts(bool isMacOS)
     {
         var fromVersion = ShortcutsMigrationVersion.GetValueOrDefault();
         if (fromVersion >= CurrentShortcutsMigrationVersion)
@@ -329,6 +630,124 @@ public class Se
                 }
             }
         }
+
+        if (fromVersion < 3 && isMacOS)
+        {
+            // The old macOS default Option+Shift+Cmd+D never reached the app (#14508); the default
+            // gained Control, so move users who still sit on the dead chord onto the new one.
+            foreach (var shortcut in Shortcuts)
+            {
+                if (shortcut.ActionName == nameof(MainViewModel.OpenDataFolderCommand) &&
+                    IsSameKeys(shortcut.Keys, ["Win", "Alt", "Shift", "D"]))
+                {
+                    shortcut.Keys = ["Ctrl", "Win", "Alt", "Shift", "D"];
+                }
+            }
+        }
+
+        if (fromVersion < 4 && isMacOS)
+        {
+            MigrateMacOsDefaultShortcuts();
+        }
+
+        if (fromVersion < 5)
+        {
+            string[] oldVoiceManagerKeys = [isMacOS ? "Win" : "Control", "Shift", "V"];
+            foreach (var shortcut in Shortcuts)
+            {
+                if (shortcut.ActionName == nameof(MainViewModel.ShowVideoVoiceManagerCommand) &&
+                    shortcut.Keys != null &&
+                    IsSameKeys([.. shortcut.Keys.Select(ShortcutManager.NormalizeKeyToken)], oldVoiceManagerKeys))
+                {
+                    shortcut.Keys.Clear();
+                }
+            }
+        }
+    }
+
+    private void MigrateMacOsDefaultShortcuts()
+    {
+        var moves = new List<(SeShortCut Shortcut, string[] NewKeys)>();
+        foreach (var change in ShortcutsMain.MacOsDefaultChanges)
+        {
+            foreach (var shortcut in Shortcuts)
+            {
+                if (shortcut.ActionName == change.ActionName && IsSameKeys(shortcut.Keys, change.OldKeys))
+                {
+                    moves.Add((shortcut, change.NewKeys));
+                }
+            }
+        }
+
+        ApplyShortcutMoves(Shortcuts, moves);
+    }
+
+    /// <summary>
+    /// The way back, for shortcuts exported on macOS and imported on Windows/Linux: bindings on a
+    /// macOS-only default (<see cref="ShortcutsMain.MacOsDefaultChanges"/>, and the Control added
+    /// to "open data folder" in version 3) go to the default every system shares - still with the
+    /// macOS modifier names, the caller renames those. Without it Cmd+G (find next) and Ctrl+G
+    /// (go to line) both became Ctrl+G, and Delete no longer deleted lines.
+    /// </summary>
+    internal static void RevertMacOsDefaultShortcuts(List<SeShortCut> shortcuts)
+    {
+        var moves = new List<(SeShortCut Shortcut, string[] NewKeys)>();
+        foreach (var shortcut in shortcuts)
+        {
+            if (shortcut.Keys == null)
+            {
+                continue;
+            }
+
+            foreach (var change in ShortcutsMain.MacOsDefaultChanges)
+            {
+                if (change.NewKeys.Length > 0 && shortcut.ActionName == change.ActionName && IsSameKeys(shortcut.Keys, change.NewKeys))
+                {
+                    moves.Add((shortcut, change.OldKeys));
+                }
+            }
+
+            if (shortcut.ActionName == nameof(MainViewModel.OpenDataFolderCommand) &&
+                IsSameKeys(shortcut.Keys, ["Ctrl", "Win", "Alt", "Shift", "D"]))
+            {
+                moves.Add((shortcut, ["Win", "Alt", "Shift", "D"]));
+            }
+        }
+
+        ApplyShortcutMoves(shortcuts, moves);
+    }
+
+    private static void ApplyShortcutMoves(List<SeShortCut> shortcuts, List<(SeShortCut Shortcut, string[] NewKeys)> moves)
+    {
+        // Never create a duplicate binding: skip a move whose new keys are held by an action that
+        // stays put. Skipping one can block another (Cmd+G only frees up when go-to-line moves),
+        // so repeat until nothing changes.
+        bool skipped;
+        do
+        {
+            skipped = false;
+            foreach (var move in moves.ToList())
+            {
+                if (move.NewKeys.Length > 0 &&
+                    shortcuts.Any(s => s.Keys != null && !moves.Any(m => ReferenceEquals(m.Shortcut, s)) && IsSameKeys(s.Keys, move.NewKeys)))
+                {
+                    moves.Remove(move);
+                    skipped = true;
+                }
+            }
+        } while (skipped);
+
+        foreach (var (shortcut, newKeys) in moves)
+        {
+            shortcut.Keys = [.. newKeys];
+        }
+    }
+
+    private static bool IsSameKeys(List<string> keys, string[] expected)
+    {
+        return keys.Count == expected.Length &&
+               !keys.Except(expected, StringComparer.OrdinalIgnoreCase).Any() &&
+               !expected.Except(keys, StringComparer.OrdinalIgnoreCase).Any();
     }
 
     public static void SaveSettings()
@@ -382,30 +801,77 @@ public class Se
 
     public static void LoadSettings(string settingsFileName)
     {
-        if (!System.IO.File.Exists(settingsFileName))
+        // Only the deserialize is conditional. Returning early on a missing file also skipped
+        // UpdateLibSeSettings() - the single bridge onto libse's Configuration.Settings - so on a
+        // first run libse kept its own defaults for the whole session. Among them
+        // RememberUseAlwaysList, which gates every <lang>_UseAlways.xml load and save, so spell
+        // check's "Change all" was silently session-only until the first settings save.
+        var settingsFileExists = System.IO.File.Exists(settingsFileName);
+        if (settingsFileExists)
         {
-            MigrateMacOsFontSettings(Settings.Appearance, OperatingSystem.IsMacOS(), false);
-            return;
+            Settings = TryDeserializeSettings(settingsFileName) ?? new Se();
+            SetDefaultValues();
         }
 
+        ApplyLoadedSettings(settingsFileExists);
+    }
+
+    /// <summary>
+    /// Loads a settings file the way <see cref="LoadSettings(string)"/> does, but only replaces
+    /// the live <see cref="Settings"/> when the file parses. A truncated or foreign file leaves
+    /// the current settings untouched and returns false, where <see cref="LoadSettings(string)"/>
+    /// falls back to defaults so the app can still start - the right call at startup, the wrong
+    /// one when the user picks a backup to restore.
+    /// </summary>
+    public static bool TryLoadSettings(string settingsFileName)
+    {
+        if (!System.IO.File.Exists(settingsFileName))
+        {
+            return false;
+        }
+
+        var loaded = TryDeserializeSettings(settingsFileName);
+        if (loaded == null)
+        {
+            return false;
+        }
+
+        Settings = loaded;
+        SetDefaultValues();
+        ApplyLoadedSettings(settingsFileExists: true);
+        return true;
+    }
+
+    private static Se? TryDeserializeSettings(string settingsFileName)
+    {
         try
         {
             // Stream + source-generated metadata: no UTF-16 string round-trip and no
             // runtime reflection over the settings type graph.
             using var stream = System.IO.File.OpenRead(settingsFileName);
-            Settings = JsonSerializer.Deserialize(stream, SeJsonContext.Default.Se)!;
+            return JsonSerializer.Deserialize(stream, SeJsonContext.Default.Se);
         }
         catch (Exception exception)
         {
             Se.LogError(exception);
-            Settings = new Se();
+            return null;
         }
+    }
 
-        SetDefaultValues();
-
-        MigrateMacOsFontSettings(Settings.Appearance, OperatingSystem.IsMacOS(), true);
+    /// <summary>Post-load migrations and the libse bridge, shared by every load path.</summary>
+    private static void ApplyLoadedSettings(bool settingsFileExists)
+    {
+        MigrateMacOsFontSettings(Settings.Appearance, OperatingSystem.IsMacOS(), settingsFileExists);
+        MigrateLayoutNumber(Settings.General);
 
         UpdateLibSeSettings();
+
+        // Startup-only: the libse mirror of these is session truth - Ebu.LoadSubtitle re-seeds it
+        // from every loaded STL file - so the persisted values may only win before any file is
+        // open (see the note in UpdateLibSeSettings).
+        Configuration.Settings.SubtitleSettings.EbuStlTeletextUseBox = Settings.File.EbuSaveOptions.TeletextUseBox;
+        Configuration.Settings.SubtitleSettings.EbuStlTeletextUseDoubleHeight = Settings.File.EbuSaveOptions.TeletextUseDoubleHeight;
+        ApplyStartupOnlyDCinemaSettings();
     }
 
     internal static void MigrateMacOsFontSettings(SeAppearance appearance, bool isMacOs, bool isLegacySettings)
@@ -422,6 +888,133 @@ public class Se
 
         // Once marked, a later explicit System Font selection must remain untouched.
         appearance.MacOsFontMigrationVersion = CurrentMacOsFontMigrationVersion;
+    }
+
+    /// <summary>
+    /// Version 1: layouts 12 and 13 (text box below the video player, issue #14812) were inserted
+    /// before the "no video" layout, which moved from 12 to 14. A persisted 12 from before that
+    /// still means "no video", so it is moved along once.
+    /// <para>
+    /// Version 2: the editor-style layout (timeline with video and subtitle rows) took number 14,
+    /// and "no video" moved on to 15 to stay last in the picker. The steps run in order, so a
+    /// settings file from before version 1 goes 12 -> 14 -> 15.
+    /// </para>
+    /// </summary>
+    internal static void MigrateLayoutNumber(SeGeneral general)
+    {
+        var version = general.LayoutMigrationVersion.GetValueOrDefault();
+        if (version >= CurrentLayoutMigrationVersion)
+        {
+            return;
+        }
+
+        if (version < 1 && general.LayoutNumber == 12)
+        {
+            general.LayoutNumber = 14;
+        }
+
+        if (version < 2 && general.LayoutNumber == 14)
+        {
+            general.LayoutNumber = 15;
+        }
+
+        general.LayoutMigrationVersion = CurrentLayoutMigrationVersion;
+    }
+
+    /// <summary>
+    /// Moves a settings file still holding the pre-#14221 llama.cpp OCR prompt onto the current
+    /// default. That prompt asked the models to "preserve line breaks", which measurably merged
+    /// two-line subtitles into one (see <see cref="SeOcrDefaults.LlamaCppOcrPrompt"/>), and the
+    /// default is persisted, so without this only fresh installs would ever get the fix. Matched
+    /// verbatim: a user who has edited the prompt at all keeps their own version.
+    /// </summary>
+    internal static void MigrateLlamaCppOcrPrompt(SeOcr ocr)
+    {
+        const string legacyPrompt = "Extract all text exactly as written. The language is {language}. Preserve line breaks.";
+        if (ocr.LlamaCppOcrPrompt?.Trim() == legacyPrompt)
+        {
+            ocr.LlamaCppOcrPrompt = SeOcrDefaults.LlamaCppOcrPrompt;
+        }
+    }
+
+    /// <summary>
+    /// Drops "-vsync vfr" from a settings file written before ffmpeg 9. ffmpeg 9 removed the
+    /// long-deprecated -vsync option, so it aborts with "Unrecognized option 'vsync'" and shot
+    /// change detection silently finds nothing. The option was a no-op for this command line
+    /// (the output goes to "-f null -"), so removing it changes nothing on older ffmpeg builds.
+    /// A user who has edited the arguments in any other way keeps their own version.
+    /// </summary>
+    /// <summary>
+    /// Makes sure the video controls layout has one item per type, and moves the old "Show stop
+    /// button" / "Show full-screen button" settings into the items' visibility (#15286).
+    /// </summary>
+    internal static void MigrateVideoControlsItems(SeVideo video)
+    {
+        video.ControlsItems = SeVideoControlsItem.Normalize(video.ControlsItems);
+
+        if (video.ShowStopButton == false)
+        {
+            video.ControlsItems.First(p => p.Type == SeVideoControlsItemType.Stop).IsVisible = false;
+        }
+
+        if (video.ShowFullscreenButton == false)
+        {
+            video.ControlsItems.First(p => p.Type == SeVideoControlsItemType.FullScreen).IsVisible = false;
+        }
+
+        video.ShowStopButton = null;
+        video.ShowFullscreenButton = null;
+    }
+
+    internal static void MigrateShotChangesFfmpegArguments(SeVideo video)
+    {
+        var arguments = video.ShowChangesFFmpegArguments;
+        if (string.IsNullOrEmpty(arguments))
+        {
+            return;
+        }
+
+        const string option = "-vsync ";
+        var index = arguments.IndexOf(option, StringComparison.Ordinal);
+        if (index < 0)
+        {
+            return;
+        }
+
+        while (index >= 0)
+        {
+            // -vsync takes a value ("vfr", "0", ...); drop that too, plus the space in front of
+            // the option so the remaining arguments stay separated by single spaces.
+            var end = arguments.IndexOf(' ', index + option.Length);
+            if (end < 0)
+            {
+                end = arguments.Length;
+            }
+
+            var start = index > 0 && arguments[index - 1] == ' ' ? index - 1 : index;
+            arguments = arguments.Remove(start, end - start);
+            index = arguments.IndexOf(option, StringComparison.Ordinal);
+        }
+
+        video.ShowChangesFFmpegArguments = arguments.Trim();
+    }
+
+    /// <summary>
+    /// Resets a persisted mpv "audio-buffer" of 0.05 s - the default SE shipped from 5.2.0
+    /// beta 20 through rc2 - back to "use mpv's default". A buffer that small let ordinary
+    /// audio-thread hiccups underrun the device; mpv then stops audio, refills, restarts, and
+    /// its clock stands still meanwhile, seen as the waveform cursor and time display freezing
+    /// for up to a second or two, worst around pause/resume (#14523). The value is persisted
+    /// with the rest of the settings, so without this only fresh installs would get the fix.
+    /// Matched to the shipped value only: anyone who set a different buffer keeps it.
+    /// </summary>
+    internal static void MigrateMpvAudioBuffer(SeVideo video)
+    {
+        const double legacyDefault = 0.05;
+        if (Math.Abs(video.MpvAudioBufferSeconds - legacyDefault) < 0.0001)
+        {
+            video.MpvAudioBufferSeconds = 0;
+        }
     }
 
     /// <summary>
@@ -568,6 +1161,11 @@ public class Se
             Settings.Video = new();
         }
 
+        MigrateShotChangesFfmpegArguments(Settings.Video);
+        MigrateMpvAudioBuffer(Settings.Video);
+
+        MigrateVideoControlsItems(Settings.Video);
+
         if (Settings.Waveform == null)
         {
             Settings.Waveform = new();
@@ -582,10 +1180,14 @@ public class Se
             Settings.BeautifyTimeCodes = new();
         }
 
+        Settings.BeautifyTimeCodes.CustomProfiles ??= new();
+
         if (Settings.Ocr == null)
         {
             Settings.Ocr = new();
         }
+
+        MigrateLlamaCppOcrPrompt(Settings.Ocr);
 
         if (Settings.Formats == null)
         {
@@ -635,6 +1237,10 @@ public class Se
     {
         Configuration.Settings.General.FFmpegLocation = Settings.General.FfmpegPath;
         Configuration.Settings.General.UseTimeFormatHHMMSSFF = Settings.General.UseFrameMode;
+        if (Settings.General.CurrentFrameRate > 0)
+        {
+            Configuration.Settings.General.CurrentFrameRate = Settings.General.CurrentFrameRate;
+        }
 
         Configuration.Settings.Proxy.ProxyAddress = Settings.General.ProxyAddress ?? string.Empty;
         Configuration.Settings.Proxy.UserName = Settings.General.ProxyUserName ?? string.Empty;
@@ -670,6 +1276,11 @@ public class Se
 
 
         Configuration.Settings.Tools.AutoTranslateDelaySeconds = (int)Math.Round(Settings.AutoTranslate.RequestDelaySeconds, MidpointRounding.AwayFromZero);
+        Configuration.Settings.Tools.AutoTranslateKeepMusicLines = Settings.AutoTranslate.KeepMusicLinesUntranslated;
+        if (Settings.AutoTranslate.RequestMaxBytes > 0)
+        {
+            Configuration.Settings.Tools.AutoTranslateMaxBytes = (int)Math.Round(Settings.AutoTranslate.RequestMaxBytes, MidpointRounding.AwayFromZero);
+        }
 
         // BeautifyTimeCodes profile: skip apply on a fresh install so libse's built-in
         // default-preset values stay intact. Once the user clicks OK in the profile editor,
@@ -685,13 +1296,65 @@ public class Se
 
         var dc = Settings.File.DCinemaSmpte;
         var ss = Configuration.Settings.SubtitleSettings;
+
+        // Ebu.Save reads these off the libse Configuration singleton, so a plain "Save" that
+        // never opens the EBU save options dialog must still see the persisted choices. The
+        // teletext box/double-height flags are deliberately NOT re-applied here: Ebu.LoadSubtitle
+        // seeds them from the loaded file, and this sync runs after every SaveSettings - it would
+        // clobber the file's flags. They are applied once at startup in LoadSettings instead.
+        var ebu = Settings.File.EbuSaveOptions;
+        ss.EbuStlJustificationCode = ebu.JustificationCode;
+        ss.EbuStlMarginTop = ebu.MarginTop;
+        ss.EbuStlMarginBottom = ebu.MarginBottom;
+        ss.EbuStlNewLineRows = ebu.NewLineRows;
+
         ss.WebVttUseXTimestampMap = Settings.Formats.WebVttUseXTimestampMap;
         ss.WebVttUseMultipleXTimestampMap = Settings.Formats.WebVttUseMultipleXTimestampMap;
+        ss.WebVttMergeLinesWithSameText = Settings.Formats.WebVttMergeLinesWithSameText;
+        ss.WebVttDoNoMergeTags = Settings.Formats.WebVttDoNoMergeTags;
+        ss.WebVttCueAn1 = Settings.Formats.WebVttCueAn1 ?? string.Empty;
+        ss.WebVttCueAn2 = Settings.Formats.WebVttCueAn2 ?? string.Empty;
+        ss.WebVttCueAn3 = Settings.Formats.WebVttCueAn3 ?? string.Empty;
+        ss.WebVttCueAn4 = Settings.Formats.WebVttCueAn4 ?? string.Empty;
+        ss.WebVttCueAn5 = Settings.Formats.WebVttCueAn5 ?? string.Empty;
+        ss.WebVttCueAn6 = Settings.Formats.WebVttCueAn6 ?? string.Empty;
+        ss.WebVttCueAn7 = Settings.Formats.WebVttCueAn7 ?? string.Empty;
+        ss.WebVttCueAn8 = Settings.Formats.WebVttCueAn8 ?? string.Empty;
+        ss.WebVttCueAn9 = Settings.Formats.WebVttCueAn9 ?? string.Empty;
+        ss.TimedText10TimeCodeFormat = Settings.Formats.TimedText10TimeCodeFormat;
+        ss.TimedText10FileExtension = Settings.Formats.TimedText10FileExtension;
+        ss.TimedTextItunesTopOrigin = Settings.Formats.TimedTextItunesTopOrigin;
+        ss.TimedTextItunesTopExtent = Settings.Formats.TimedTextItunesTopExtent;
+        ss.TimedTextItunesBottomOrigin = Settings.Formats.TimedTextItunesBottomOrigin;
+        ss.TimedTextItunesBottomExtent = Settings.Formats.TimedTextItunesBottomExtent;
+        ss.TimedTextItunesTimeCodeFormat = Settings.Formats.TimedTextItunesTimeCodeFormat;
+        ss.TimedTextItunesStyleAttribute = Settings.Formats.TimedTextItunesStyleAttribute;
+        ss.TimedTextItunesLanguage = Settings.Formats.TimedTextItunesLanguage ?? string.Empty;
+        ss.TimedTextImsc11TimeCodeFormat = Settings.Formats.TimedTextImsc11TimeCodeFormat;
+        ss.TimedTextImsc11FileExtension = Settings.Formats.TimedTextImsc11FileExtension;
+
         ss.DCinemaAutoGenerateSubtitleId = dc.DCinemaAutoGenerateSubtitleId;
         ss.DCinemaFontSize = dc.DCinemaFontSize;
         ss.DCinemaBottomMargin = dc.DCinemaBottomMargin;
         ss.DCinemaFadeUpTime = dc.DCinemaFadeUpTime;
         ss.DCinemaFadeDownTime = dc.DCinemaFadeDownTime;
+        Configuration.Settings.Tools.RememberUseAlwaysList = Settings.Tools.SpellCheckRememberUseAlwaysList;
+        Configuration.Settings.Tools.FixShortDisplayTimesAllowMoveStartTime = Settings.Tools.FixShortDisplayTimesAllowMoveStartTime;
+    }
+
+    /// <summary>
+    /// The "current D-Cinema file" values, applied at startup only. Same reason as the EBU
+    /// teletext flags above: DCinemaSmpte2007/2010/2014.LoadSubtitle seeds every one of these from
+    /// the opened file, so re-applying the persisted defaults after every SaveSettings (any dialog
+    /// OK) threw away the reel number, rates and start time of the file the user has open. The
+    /// D-Cinema properties dialogs push their own values through
+    /// MainViewModel.CopyCurrentDCinemaSettingsFromSe instead.
+    /// </summary>
+    private static void ApplyStartupOnlyDCinemaSettings()
+    {
+        var dc = Settings.File.DCinemaSmpte;
+        var ss = Configuration.Settings.SubtitleSettings;
+
         ss.CurrentDCinemaSubtitleId = dc.CurrentDCinemaSubtitleId;
         ss.CurrentDCinemaMovieTitle = dc.CurrentDCinemaMovieTitle;
         ss.CurrentDCinemaReelNumber = dc.CurrentDCinemaReelNumber;
@@ -832,24 +1495,44 @@ public class Se
 
     public static void LogError(Exception exception)
     {
-        LogError(exception.Message + Environment.NewLine + exception.StackTrace);
+        // ToString() includes the inner exceptions - a window created via reflection otherwise
+        // only logs "Exception has been thrown by the target of an invocation" (#15562).
+        LogError(exception.ToString());
     }
 
     public static void LogError(Exception exception, string message)
     {
-        LogError(exception.Message + Environment.NewLine + message + Environment.NewLine + exception.StackTrace);
+        LogError(message + Environment.NewLine + exception);
     }
+
+    private static readonly ErrorLogThrottle ErrorThrottle = new();
 
     public static void LogError(string error)
     {
         try
         {
+            // An error raised from a timer repeats at 6-60 Hz - see ErrorLogThrottle.
+            if (!ErrorThrottle.ShouldLog(error, Environment.TickCount64, out var suppressedBefore, out var isLastInWindow))
+            {
+                return;
+            }
+
             var filePath = GetErrorLogFilePath();
             using var writer = new StreamWriter(filePath, true, Encoding.UTF8);
             writer.WriteLine("-----------------------------------------------------------------------------");
             writer.WriteLine($"Date: {DateTime.Now.ToString(CultureInfo.InvariantCulture)}");
             writer.WriteLine($"SE: {GetSeInfo()}");
             writer.WriteLine(error);
+            if (suppressedBefore > 0)
+            {
+                writer.WriteLine($"(This error occurred {suppressedBefore.ToString(CultureInfo.InvariantCulture)} more times since it was last logged)");
+            }
+
+            if (isLastInWindow)
+            {
+                writer.WriteLine($"(Logged {ErrorLogThrottle.MaxEntriesPerWindow} times within a minute - for the rest of that minute identical errors are only counted)");
+            }
+
             writer.WriteLine();
         }
         catch

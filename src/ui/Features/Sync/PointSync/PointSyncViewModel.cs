@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -45,6 +45,12 @@ public partial class PointSyncViewModel : ObservableObject
     private string _videoFileName;
     private AudioVisualizer? _audioVisualizer;
 
+    // Carried down to the "Set sync point" dialog, which opens its own player (issue #13995).
+    private int _audioTrackId = -1;
+
+    // Only passed on to "Set sync point", which draws the subtitle on its video (#13767).
+    private VideoPreviewSubtitleContext _previewContext = VideoPreviewSubtitleContext.Default;
+
     public PointSyncViewModel(IFileHelper fileHelper, IWindowService windowService)
     {
         _fileHelper = fileHelper;
@@ -60,20 +66,25 @@ public partial class PointSyncViewModel : ObservableObject
 
     public void Initialize(
         List<SubtitleLineViewModel> subtitles,
-        List<SubtitleLineViewModel> selectedSubtitles,
-        string videoFileName, 
-        string fileName, 
-        AudioVisualizer? audioVisualizer)
+        int selectedIndex,
+        string videoFileName,
+        string fileName,
+        VideoPreviewSubtitleContext previewContext,
+        AudioVisualizer? audioVisualizer,
+        int audioTrackId = -1)
     {
+        _audioTrackId = audioTrackId;
         Subtitles.Clear();
         Subtitles.AddRange(subtitles);
         FileName = fileName;
         _videoFileName = videoFileName;
         _audioVisualizer = audioVisualizer;
+        _previewContext = previewContext;
 
         if (Subtitles.Count > 0)
         {
-            SelectedSubtitle = Subtitles[0];
+            // Start at the line selected in the main window (issue #15062).
+            SelectedSubtitle = Subtitles[Math.Clamp(selectedIndex, 0, Subtitles.Count - 1)];
         }
     }
 
@@ -93,7 +104,7 @@ public partial class PointSyncViewModel : ObservableObject
 
         var result = await _windowService.ShowDialogAsync<SetSyncPointWindow, SetSyncPointViewModel>(Window, vm =>
         {
-            vm.Initialize(Subtitles.ToList(), SelectedSubtitle, _videoFileName, FileName, _audioVisualizer);
+            vm.Initialize(Subtitles.ToList(), SelectedSubtitle, _videoFileName, FileName, _previewContext, _audioVisualizer, _audioTrackId);
         });
 
         // Keep a video opened (or found) in there, so the next sync point starts with it loaded -

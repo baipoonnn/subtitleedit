@@ -5,6 +5,7 @@ public class LanguageAssa
     // ASSA Draw
     public string AssaDraw { get; set; }
     public string DrawSelectTool { get; set; }
+    public string DrawUseShapeForErase { get; set; }
     public string DrawLineTool { get; set; }
     public string DrawBezierTool { get; set; }
     public string DrawRectangleTool { get; set; }
@@ -64,6 +65,16 @@ public class LanguageAssa
     public string FontCollectorAndXMoreFonts { get; set; }
     public string FontCollectorNoFontsToEmbed { get; set; }
     public string FontCollectorXFontFilesEmbedded { get; set; }
+    public string FontCollectorTrimFonts { get; set; }
+    public string TrimFontsDotDotDot { get; set; }
+    public string TrimFontsPromptX { get; set; }
+    public string TrimFontsNoFontsToTrim { get; set; }
+    public string TrimFontsXFontsTrimmedSavedYZ { get; set; }
+    public string TrimFontsTotalSavingX { get; set; }
+    public string TrimFontsReasonNotTrueType { get; set; }
+    public string TrimFontsReasonFontCollection { get; set; }
+    public string TrimFontsReasonCouldNotParse { get; set; }
+    public string TrimFontsReasonNoSavings { get; set; }
 
     // Resolution Resampler
     public string ResolutionResamplerTitle { get; set; }
@@ -76,6 +87,8 @@ public class LanguageAssa
     public string ResolutionResamplerFromVideo { get; set; }
     public string ResolutionResamplerSourceAndTargetEqual { get; set; }
     public string ResolutionResamplerNothingSelected { get; set; }
+    public string ResolutionResamplerVideoDiffers { get; set; }
+    public string ResolutionResamplerAskOnVideoOpen { get; set; }
 
     // Background Box Generator
     public string BackgroundBoxGenerator { get; set; }
@@ -117,6 +130,13 @@ public class LanguageAssa
     public string Graphics { get; set; }
     public string CopyToStorageStyles { get; set; }
     public string CopyToFileStyles { get; set; }
+    public string StyleXAlreadyExistsInStorage { get; set; }
+    public string StyleXAlreadyExistsInFile { get; set; }
+    public string StyleNameCannotBeEmpty { get; set; }
+    public string StyleNameXIsUsedMoreThanOnce { get; set; }
+    public string Overwrite { get; set; }
+    public string KeepBoth { get; set; }
+    public string DoThisForAllConflictingStyles { get; set; }
     public string SetStyleAsDefault { get; set; }
     public string TakeUsagesFromDotDotDot { get; set; }
     public string ReplaceStyleWithDotDotDot { get; set; }
@@ -124,6 +144,7 @@ public class LanguageAssa
     public string DeleteStyleQuestion { get; set; }
     public string DeleteStylesQuestion { get; set; }
     public string OpenStyleImportFile { get; set; }
+    public string StyleImportFiles { get; set; }
     public string Primary { get; set; }
     public string Secondary { get; set; }
     public string ApplyOverrideTags { get; set; }
@@ -236,6 +257,7 @@ public class LanguageAssa
         // ASSA Draw
         AssaDraw = "ASSA Draw";
         DrawSelectTool = "Select (move points)";
+        DrawUseShapeForErase = "Use shape for erase (iclip)";
         DrawLineTool = "Line Tool (F4)";
         DrawBezierTool = "Bezier Curve (F5)";
         DrawRectangleTool = "Rectangle (F6)";
@@ -293,6 +315,16 @@ public class LanguageAssa
         FontCollectorAndXMoreFonts = "...and {0} more";
         FontCollectorNoFontsToEmbed = "No new fonts to embed - the needed fonts are already embedded or were not found.";
         FontCollectorXFontFilesEmbedded = "{0} font file(s) embedded in the subtitle.";
+        FontCollectorTrimFonts = "Only embed used characters (trim fonts)";
+        TrimFontsDotDotDot = "Trim fonts to used characters...";
+        TrimFontsPromptX = "Trim {0} embedded font(s) to only the characters currently used?\n\nText added to the subtitle later may show missing characters, so trim as a final step.";
+        TrimFontsNoFontsToTrim = "No embedded fonts to trim.";
+        TrimFontsXFontsTrimmedSavedYZ = "{0} font(s) trimmed, saving {1}.\n\n{2}";
+        TrimFontsTotalSavingX = "Total saving: {0}";
+        TrimFontsReasonNotTrueType = "only TrueType fonts can be trimmed";
+        TrimFontsReasonFontCollection = "font collections are not supported";
+        TrimFontsReasonCouldNotParse = "the font could not be read";
+        TrimFontsReasonNoSavings = "no size reduction";
         ResolutionResamplerTitle = "Change resolution";
         ResolutionResamplerSourceRes = "Source resolution";
         ResolutionResamplerTargetRes = "Target resolution";
@@ -303,6 +335,8 @@ public class LanguageAssa
         ResolutionResamplerFromVideo = "From video...";
         ResolutionResamplerSourceAndTargetEqual = "Source and target resolution are the same - nothing to do.";
         ResolutionResamplerNothingSelected = "Please select at least one option to change.";
+        ResolutionResamplerVideoDiffers = "The subtitle resolution ({0}x{1}) differs from the video resolution ({2}x{3}).\nChange the subtitle to match the video?";
+        ResolutionResamplerAskOnVideoOpen = "Ask when a video with a different resolution is opened";
 
         // Background Box Generator
         BackgroundBoxGenerator = "ASSA background box generator";
@@ -345,6 +379,13 @@ public class LanguageAssa
         Graphics = "Graphics";
         CopyToStorageStyles = "Copy to storage styles";
         CopyToFileStyles = "Copy to file styles";
+        StyleXAlreadyExistsInStorage = "A style named \"{0}\" already exists in storage.\n\nOverwrite it, or keep both (the copy gets a new name)?";
+        StyleXAlreadyExistsInFile = "A style named \"{0}\" already exists in the file.\n\nOverwrite it, or keep both (the copy gets a new name)?";
+        StyleNameCannotBeEmpty = "A style name cannot be empty.";
+        StyleNameXIsUsedMoreThanOnce = "The style name \"{0}\" is used by more than one style in the file.";
+        Overwrite = "Overwrite";
+        KeepBoth = "Keep both";
+        DoThisForAllConflictingStyles = "Do this for all conflicting styles";
         SetStyleAsDefault = "Set style as default";
         TakeUsagesFromDotDotDot = "Take usages from...";
         ReplaceStyleWithDotDotDot = "Replace style with...";
@@ -352,6 +393,7 @@ public class LanguageAssa
         DeleteStyleQuestion = "Delete style?";
         DeleteStylesQuestion = "Delete styles?";
         OpenStyleImportFile = "Open subtitle file to import styles from";
+        StyleImportFiles = "Style files (.ass, .sty, Subtitle Edit 4 categories .template)";
         Primary = "Primary";
         Secondary = "Secondary";
         ApplyOverrideTags = "Apply override tags";

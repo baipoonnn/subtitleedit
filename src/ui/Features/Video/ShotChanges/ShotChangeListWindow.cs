@@ -4,6 +4,8 @@ using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Layout;
 using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
 using Nikse.SubtitleEdit.Logic.ValueConverters;
@@ -30,8 +32,9 @@ public class ShotChangeListWindow : Window
 
         var buttonGoTo = UiUtil.MakeButton(Se.Language.General.GoTo, vm.GoToCommand).WithBindIsEnabled(nameof(vm.HasShotChanges));
         var buttonClear = UiUtil.MakeButton(Se.Language.General.Clear, vm.ClearCommand).WithBindIsEnabled(nameof(vm.HasShotChanges));
+        var buttonExport = UiUtil.MakeButton(Se.Language.General.ExportDotDotDot, vm.ExportCommand).WithBindIsEnabled(nameof(vm.HasShotChanges));
         var buttonCancel = UiUtil.MakeButtonDone(vm.CancelCommand);
-        var panelButtons = UiUtil.MakeButtonBar(buttonGoTo, buttonClear, buttonCancel);
+        var panelButtons = UiUtil.MakeButtonBar(buttonGoTo, buttonClear, buttonExport, buttonCancel);
 
         var grid = new Grid
         {
@@ -56,7 +59,7 @@ public class ShotChangeListWindow : Window
 
         Content = grid;
 
-        Activated += delegate { buttonCancel.Focus(); }; // hack to make OnKeyDown work
+        UiUtil.FocusOnFirstActivation(this, buttonCancel); // hack to make OnKeyDown work
     }
 
     private static Border MakeBookmarkGridView(ShotChangeListViewModel vm)
@@ -89,6 +92,14 @@ public class ShotChangeListWindow : Window
         TableViewExtras.BindSelectedItem(tableView, vm, nameof(vm.SelectedShotChange));
         tableView.DoubleTapped += (s, e) => vm.GoToCommand.Execute(null);
         tableView.KeyDown += (s, e) => vm.GridKeyDown(e);
+        tableView.KeyDown += async (s, e) =>
+        {
+            if (e.Key == Key.C && (e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta)))
+            {
+                e.Handled = true;
+                await vm.CopyToClipboard(GetSelected(tableView));
+            }
+        };
         tableView.AddHandler(InputElement.KeyDownEvent, (object? _, KeyEventArgs e) =>
         {
             if (e.Key is Key.Home or Key.End && tableView.ItemsSource is IList items && items.Count > 0)
@@ -105,6 +116,9 @@ public class ShotChangeListWindow : Window
         }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
 
         var flyout = new MenuFlyout();
+        var copyMenuItem = new MenuItem { Header = Se.Language.General.Copy };
+        copyMenuItem.Click += async (_, _) => await vm.CopyToClipboard(GetSelected(tableView));
+        flyout.Items.Add(copyMenuItem);
         var deleteMenuItem = new MenuItem 
         { 
             Header = Se.Language.General.Delete,
@@ -119,6 +133,11 @@ public class ShotChangeListWindow : Window
         UiUtil.AttachMacContextFlyoutHandler(tableView);
 
         return UiUtil.MakeBorderForControl(tableView);
+    }
+
+    private static List<ShotChangeItem> GetSelected(TableView tableView)
+    {
+        return tableView.SelectedItems?.OfType<ShotChangeItem>().ToList() ?? new List<ShotChangeItem>();
     }
 
     protected override void OnKeyDown(KeyEventArgs e)

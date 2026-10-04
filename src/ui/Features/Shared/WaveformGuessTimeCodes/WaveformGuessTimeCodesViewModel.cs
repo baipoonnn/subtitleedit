@@ -3,6 +3,7 @@ using Avalonia.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Nikse.SubtitleEdit.Logic.Config;
+using Nikse.SubtitleEdit.Logic;
 
 namespace Nikse.SubtitleEdit.Features.Shared.WaveformGuessTimeCodes;
 
@@ -71,6 +72,12 @@ public partial class WaveformGuessTimeCodesViewModel : ObservableObject
 
     private void SaveSettings()
     {
+        var s = Se.Settings.Waveform;
+        s.GuessTimeCodeStartFromBeginning = StartFromBeginning;
+        s.GuessTimeCodeScanBlockSize = ScanBlockSize ?? 100;
+        s.GuessTimeCodeScanBlockAverageMin = ScanBlockAverageMin ?? 35;
+        s.GuessTimeCodeScanBlockAverageMax = ScanBlockAverageMax ?? 70;
+        s.GuessTimeCodeSplitLongSubtitlesAtMs = SplitLongSubtitlesAtMs ?? 3500;
         Se.SaveSettings();
     }
 
@@ -94,6 +101,11 @@ public partial class WaveformGuessTimeCodesViewModel : ObservableObject
         {
             e.Handled = true;
             Window?.Close();
+        }
+        else if (UiUtil.IsHelp(e))
+        {
+            e.Handled = true;
+            UiUtil.ShowHelp("features/audio-visualizer");
         }
     }
 }

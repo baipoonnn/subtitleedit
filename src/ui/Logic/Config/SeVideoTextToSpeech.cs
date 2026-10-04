@@ -28,6 +28,22 @@ public class SeVideoTextToSpeech
     public string MurfStyle { get; set; }
     public string MistralApiKey { get; set; }
     public string MistralModel { get; set; }
+    // OpenAI-compatible /v1/audio/speech engine: "OpenAI", "OpenRouter" or "Custom".
+    public string OpenAiCompatibleProvider { get; set; }
+    public string OpenAiApiKey { get; set; }
+    public string OpenAiModel { get; set; }
+    public string OpenRouterTtsApiKey { get; set; }
+    public string OpenRouterTtsModel { get; set; }
+    public string OpenAiCompatibleCustomUrl { get; set; }
+    public string OpenAiCompatibleCustomApiKey { get; set; }
+    public string OpenAiCompatibleCustomModel { get; set; }
+    // Comma-separated; the custom server's model and voice names can't be discovered.
+    public string OpenAiCompatibleCustomModels { get; set; }
+    public string OpenAiCompatibleCustomVoices { get; set; }
+    public string OpenAiCompatibleInstructions { get; set; }
+    public double OpenAiCompatibleSpeed { get; set; }
+    // "auto", "mp3" or "pcm" - some models (e.g. Gemini TTS on OpenRouter) only return pcm.
+    public string OpenAiCompatibleResponseFormat { get; set; }
     public string Qwen3TtsCppModel { get; set; }
     public string Qwen3TtsCppVulkanPath { get; set; }
     public string Qwen3TtsCppInstruction { get; set; }
@@ -38,6 +54,44 @@ public class SeVideoTextToSpeech
     public double VibeVoiceCrispAsrSpeed { get; set; }
     public string IndexTtsCrispAsrModel { get; set; }
     public double IndexTtsCrispAsrSpeed { get; set; }
+    public string PocketTtsCrispAsrModel { get; set; }
+    public double PocketTtsCrispAsrSpeed { get; set; }
+    public string SupertonicCrispAsrLanguage { get; set; }
+    public double SupertonicCrispAsrSpeed { get; set; }
+    public string DotsTtsCrispAsrModel { get; set; }
+    // Flow-matching Euler steps for dots.tts (8-32, default 16). Higher is better and slower;
+    // there is no CLI flag for it, so the engine passes it as CRISPASR_DOTS_ODE_STEPS.
+    public int DotsTtsCrispAsrOdeSteps { get; set; }
+    public string Confucius4TtsCrispAsrModel { get; set; }
+    // Display name of the picked Confucius4-TTS target language (empty = English, the backend's
+    // implicit default — there is no auto-detection).
+    public string Confucius4TtsCrispAsrLanguage { get; set; }
+    // Flow-matching Euler steps for the Confucius4-TTS S2A stage (10-40, default 20). Higher is
+    // better and slower; passed as --tts-steps.
+    public int Confucius4TtsCrispAsrOdeSteps { get; set; }
+    public string IndexTts25AudioCppModel { get; set; }
+    // Licence version the user accepted for the IndexTTS-2.5 weights (bilibili Model Use
+    // License, not OSI-approved). Empty until accepted; a version bump re-prompts.
+    public string IndexTts25AudioCppLicenseAccepted { get; set; }
+    // ggml backend of the installed audio.cpp archive: metal, cuda, vulkan or cpu.
+    public string IndexTts25AudioCppBackend { get; set; }
+    // The model's own duration control (>1 slower, <1 faster) rather than a resample, so
+    // pitch is unaffected. Valid range 0.5-2.0.
+    public double IndexTts25AudioCppDurationFactor { get; set; }
+    // One of IndexTts25AudioCpp.EmotionNames, or empty/"none" for no emotion conditioning.
+    public string IndexTts25AudioCppEmotion { get; set; }
+    public double IndexTts25AudioCppEmotionAlpha { get; set; }
+
+    // Higgs Audio v3 (audio.cpp). The runtime backend is shared with IndexTTS 2.5 —
+    // see AudioCppRuntime.GetBackend — so only model choice and licence live here.
+    public string HiggsTtsAudioCppModel { get; set; }
+    public string HiggsTtsAudioCppLicenseAccepted { get; set; }
+
+    // Fish Audio S2 Pro (audio.cpp). Same sharing as above.
+    public string FishTtsAudioCppModel { get; set; }
+    public string FishTtsAudioCppLicenseAccepted { get; set; }
+    public string FireRedTts3AudioCppModel { get; set; }
+    public string FireRedTts3AudioCppLanguage { get; set; }
     public string CosyVoice3CrispAsrModel { get; set; }
     public double CosyVoice3CrispAsrSpeed { get; set; }
     // Display name of the picked CosyVoice3 target language ("Auto" = plain zero-shot cloning).
@@ -61,6 +115,9 @@ public class SeVideoTextToSpeech
     public string OmniVoiceTtsCppInstruction { get; set; }
     public string ChatterboxModel { get; set; }
     public string ChatterboxCrispAsrLanguage { get; set; }
+    public string ChatterboxCrispAsrSourceLanguage { get; set; }
+    // Display name of the picked Zonos output language (empty = backend default, English US).
+    public string ZonosTtsCrispAsrLanguage { get; set; }
     public string KokoroVoice { get; set; }
     public string GoogleApiKey { get; set; }
     public string GoogleKeyFile { get; set; }
@@ -73,12 +130,19 @@ public class SeVideoTextToSpeech
     // manifest, and refuses to clone a reference WAV at all.
     public bool AcceptVoiceCloning { get; set; }
 
+    // Version stamp of the voice-cloning terms the user accepted in the first-clone dialog, empty
+    // until then. Separate from AcceptVoiceCloning (which defaults on and predates the dialog) so
+    // the prompt can be shown once, and shown again if the terms change.
+    // See Features.Video.TextToSpeech.Engines.VoiceCloningConsent.
+    public string VoiceCloningConsent { get; set; }
+
     // Pro audio post-processing
     public bool ProAudioChainEnabled { get; set; }
 
     // Audio ducking (mix original audio at reduced volume)
     public bool AudioDuckingEnabled { get; set; }
     public int AudioDuckingOriginalVolume { get; set; }
+    public bool RemoveOriginalSpeech { get; set; }
 
     // Edge-TTS prosody parameters
     public string EdgeTtsRate { get; set; }
@@ -100,6 +164,16 @@ public class SeVideoTextToSpeech
 
     // Output sample rate (0 = default)
     public int OutputSampleRate { get; set; }
+
+    // Base folder the generation clips are written into while a run is in progress. Empty = the
+    // system temp folder. Each run still gets its own "se-tts-<guid>" subfolder inside it, so
+    // pointing this at the subtitle folder keeps the clips next to the work instead of buried in
+    // %TMP% (#13332).
+    public string GenerationFolder { get; set; }
+
+    // Remove the run's generation folder when the Text to speech window closes. Turn it off to
+    // keep the per-line clips around for inspection - nothing else sweeps them.
+    public bool DeleteTempFiles { get; set; }
 
     // Remembered actor/voice mappings. Pre-fills the cast dialog so users don't have to
     // re-assign the same character voices every time they open a new subtitle. Keyed by actor
@@ -131,6 +205,19 @@ public class SeVideoTextToSpeech
         MurfStyle = "Conversational";
         MistralApiKey = string.Empty;
         MistralModel = "voxtral-mini-tts-2603";
+        OpenAiCompatibleProvider = "OpenAI";
+        OpenAiApiKey = string.Empty;
+        OpenAiModel = "gpt-4o-mini-tts";
+        OpenRouterTtsApiKey = string.Empty;
+        OpenRouterTtsModel = string.Empty;
+        OpenAiCompatibleCustomUrl = "http://localhost:8880/v1/audio/speech";
+        OpenAiCompatibleCustomApiKey = string.Empty;
+        OpenAiCompatibleCustomModel = string.Empty;
+        OpenAiCompatibleCustomModels = "tts-1";
+        OpenAiCompatibleCustomVoices = "alloy";
+        OpenAiCompatibleInstructions = string.Empty;
+        OpenAiCompatibleSpeed = 1.0;
+        OpenAiCompatibleResponseFormat = "auto";
         Qwen3TtsCppModel = "0.6B";
         Qwen3TtsCppVulkanPath = string.Empty;
         Qwen3TtsCppInstruction = string.Empty;
@@ -140,6 +227,27 @@ public class SeVideoTextToSpeech
         VibeVoiceCrispAsrSpeed = 1.1;
         IndexTtsCrispAsrModel = "Q8_0 (~870 MB)";
         IndexTtsCrispAsrSpeed = 1.0;
+        PocketTtsCrispAsrModel = "English F16 (~219 MB)";
+        PocketTtsCrispAsrSpeed = 1.0;
+        SupertonicCrispAsrLanguage = string.Empty;
+        SupertonicCrispAsrSpeed = 1.0;
+        DotsTtsCrispAsrModel = "Q8_0 (~3.5 GB)";
+        DotsTtsCrispAsrOdeSteps = 16;
+        Confucius4TtsCrispAsrModel = "Q8_0 (~1.9 GB)";
+        Confucius4TtsCrispAsrLanguage = string.Empty;
+        Confucius4TtsCrispAsrOdeSteps = 20;
+        IndexTts25AudioCppModel = "Q8_0 (~3.3 GB)";
+        IndexTts25AudioCppLicenseAccepted = string.Empty;
+        IndexTts25AudioCppBackend = string.Empty;
+        IndexTts25AudioCppDurationFactor = 1.0;
+        IndexTts25AudioCppEmotion = string.Empty;
+        IndexTts25AudioCppEmotionAlpha = 0.8;
+        HiggsTtsAudioCppModel = "Q8_0 (~4.7 GB)";
+        HiggsTtsAudioCppLicenseAccepted = string.Empty;
+        FishTtsAudioCppModel = "Q8_0 (~5.9 GB)";
+        FishTtsAudioCppLicenseAccepted = string.Empty;
+        FireRedTts3AudioCppModel = "Q8_0 (~3.9 GB)";
+        FireRedTts3AudioCppLanguage = string.Empty;
         CosyVoice3CrispAsrModel = "Q4_K (~1.6 GB total)";
         CosyVoice3CrispAsrSpeed = 1.0;
         CosyVoice3CrispAsrLanguage = string.Empty;
@@ -158,10 +266,13 @@ public class SeVideoTextToSpeech
         OmniVoiceTtsCppInstruction = string.Empty;
         ChatterboxModel = "Base";
         ChatterboxCrispAsrLanguage = string.Empty;
+        ChatterboxCrispAsrSourceLanguage = string.Empty;
+        ZonosTtsCrispAsrLanguage = string.Empty;
         KokoroVoice = "af_maple";
         GoogleApiKey = string.Empty;
         GoogleKeyFile = string.Empty;
         AcceptVoiceCloning = true;
+        VoiceCloningConsent = string.Empty;
         ProAudioChainEnabled = false;
         AudioDuckingEnabled = false;
         AudioDuckingOriginalVolume = 15;
@@ -174,6 +285,8 @@ public class SeVideoTextToSpeech
         HighQualityTimeStretchEnabled = false;
         SilencePaddingMs = 0;
         OutputSampleRate = 0;
+        GenerationFolder = string.Empty;
+        DeleteTempFiles = true;
         LastActorVoiceMappings = new List<ActorVoiceMapping>();
     }
 }

@@ -23,6 +23,9 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
         public override string Name => NameOfFormat;
 
+        // Carries the region of every paragraph, and the regions themselves in the header.
+        public override bool HasPositionSupport => true;
+
         public static string TtmlNamespace => "http://www.w3.org/ns/ttml";
         public static string TtmlParameterNamespace => "http://www.w3.org/ns/ttml#parameter";
         public static string TtmlStylingNamespace => "http://www.w3.org/ns/ttml#styling";
@@ -30,9 +33,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
         public override bool IsMine(List<string> lines, string fileName)
         {
-            var sb = new StringBuilder();
-            lines.ForEach(line => sb.AppendLine(line));
-            var xmlAsString = sb.ToString().Trim();
+            var xmlAsString = JoinLinesTrimmed(lines);
 
             if (xmlAsString.Contains("xmlns:tts=\"http://www.w3.org/2006/04"))
             {
@@ -99,6 +100,18 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             return false;
         }
 
+        private static readonly Regex UnsupportedAngleBracketRegex = new Regex(@"<(?!(/?(i|b|u)>|font[ >]|/font>|br\s*/?>))", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        /// <summary>
+        /// Escapes '&lt;' characters that do not open a known markup tag, so literal angle
+        /// brackets in subtitle text (e.g. "3 &lt; 5") survive the XML parse instead of making
+        /// it fail - which would strip all brackets from the paragraph.
+        /// </summary>
+        internal static string EscapeUnsupportedAngleBrackets(string text)
+        {
+            return UnsupportedAngleBracketRegex.Replace(text, "&lt;");
+        }
+
         internal static string ConvertToTimeString(TimeCode time)
         {
             return ConvertToTimeString(time, Configuration.Settings.SubtitleSettings.TimedText10TimeCodeFormat);
@@ -124,7 +137,12 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 case "hh:mm:ss.ms":
                     return string.Format(CultureInfo.InvariantCulture, "{0:00}:{1:00}:{2:00}.{3:000}", time.Hours, time.Minutes, time.Seconds, time.Milliseconds);
                 case "hh:mm:ss.ms-two-digits":
-                    return string.Format(CultureInfo.InvariantCulture, "{0:00}:{1:00}:{2:00}.{3:00}", time.Hours, time.Minutes, time.Seconds, (int)Math.Round(time.Milliseconds / 10.0));
+                    {
+                        // round on the total so 995-999 ms carries into the second instead of
+                        // writing a three-digit ".100" that reloads 0.9 s early
+                        var hundredths = new TimeCode(Math.Round(time.TotalMilliseconds / 10.0) * 10.0);
+                        return string.Format(CultureInfo.InvariantCulture, "{0:00}:{1:00}:{2:00}.{3:00}", hundredths.Hours, hundredths.Minutes, hundredths.Seconds, hundredths.Milliseconds / 10);
+                    }
                 case "hh:mm:ss,ms":
                     return string.Format(CultureInfo.InvariantCulture, "{0:00}:{1:00}:{2:00},{3:000}", time.Hours, time.Minutes, time.Seconds, time.Milliseconds);
                 default:
@@ -311,8 +329,9 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             }
 
             var no = 0;
-            var headerStyles = GetStylesFromHeader(ToUtf8XmlString(xml));
-            var regions = GetRegionsFromHeader(ToUtf8XmlString(xml));
+            var headerStyles = GetStylesFromHeader(xml);
+            var regions = GetRegionsFromHeader(xml);
+            var regionsCache = new TopBottomRegionsCache();
             var languages = GetUsedLanguages(subtitle);
             if (languages.Count > 0)
             {
@@ -326,7 +345,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                             div = xml.CreateElement("div", TtmlNamespace);
                             divParentNode.AppendChild(div);
                         }
-                        XmlNode paragraph = MakeParagraph(subtitle, xml, defaultStyle, no, headerStyles, regions, p);
+                        XmlNode paragraph = MakeParagraph(subtitle, xml, defaultStyle, no, headerStyles, regions, regionsCache, p);
                         div.AppendChild(paragraph);
                         no++;
                     }
@@ -353,7 +372,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                                 divParentNode.AppendChild(div);
                             }
                             firstParagraph = false;
-                            XmlNode paragraph = MakeParagraph(subtitle, xml, defaultStyle, no, headerStyles, regions, p);
+                            XmlNode paragraph = MakeParagraph(subtitle, xml, defaultStyle, no, headerStyles, regions, regionsCache, p);
                             div.AppendChild(paragraph);
                             no++;
                         }
@@ -380,7 +399,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                         p.Style = p.Extra;
                     }
 
-                    XmlNode paragraph = MakeParagraph(subtitle, xml, defaultStyle, no, headerStyles, regions, p);
+                    XmlNode paragraph = MakeParagraph(subtitle, xml, defaultStyle, no, headerStyles, regions, regionsCache, p);
                     div.AppendChild(paragraph);
                     no++;
                 }
@@ -432,7 +451,19 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             return x.OuterXml;
         }
 
-        private static XmlNode MakeParagraph(Subtitle subtitle, XmlDocument xml, string defaultStyle, int no, List<string> headerStyles, List<string> regions, Paragraph p)
+        /// <summary>
+        /// Caches <see cref="GetRegionsTopFromHeader"/> / <see cref="GetRegionsBottomFromHeader"/>
+        /// across one ToText run. Both walk the entire document with an absolute XPath, so calling
+        /// them per paragraph made saving quadratic - paragraph n scanned a document already
+        /// holding n paragraphs. Invalidated when a default region is added mid-save.
+        /// </summary>
+        private sealed class TopBottomRegionsCache
+        {
+            public List<string> Top;
+            public List<string> Bottom;
+        }
+
+        private static XmlNode MakeParagraph(Subtitle subtitle, XmlDocument xml, string defaultStyle, int no, List<string> headerStyles, List<string> regions, TopBottomRegionsCache regionsCache, Paragraph p)
         {
             XmlNode paragraph = xml.CreateElement("p", "http://www.w3.org/ns/ttml");
             string text = p.Text.RemoveControlCharactersButWhiteSpace();
@@ -445,6 +476,13 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
             if (string.IsNullOrEmpty(region))
             {
+                if (text.StartsWith("{\\an", StringComparison.Ordinal))
+                {
+                    // AddDefaultRegionIfNotExists below may add a region to the document.
+                    regionsCache.Top = null;
+                    regionsCache.Bottom = null;
+                }
+
                 if (text.StartsWith("{\\an1}", StringComparison.Ordinal) && AddDefaultRegionIfNotExists(xml, "bottomLeft"))
                 {
                     region = "bottomLeft";
@@ -467,7 +505,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
                 if (text.StartsWith("{\\an5}", StringComparison.Ordinal) && AddDefaultRegionIfNotExists(xml, "centerCenter"))
                 {
-                    region = "centerСenter";
+                    region = "centerCenter";
                 }
 
                 if (text.StartsWith("{\\an6}", StringComparison.Ordinal) && AddDefaultRegionIfNotExists(xml, "centerRight"))
@@ -494,7 +532,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             {
                 if (text.StartsWith("{\\an8}", StringComparison.Ordinal))
                 {
-                    var topRegions = GetRegionsTopFromHeader(xml);
+                    var topRegions = regionsCache.Top ??= GetRegionsTopFromHeader(xml);
                     if (topRegions.Count == 1)
                     {
                         region = topRegions[0];
@@ -511,7 +549,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 }
                 else if (text.StartsWith("{\\an2}", StringComparison.Ordinal) || !text.Contains("{\\an"))
                 {
-                    var bottomRegions = GetRegionsBottomFromHeader(xml);
+                    var bottomRegions = regionsCache.Bottom ??= GetRegionsBottomFromHeader(xml);
                     if (bottomRegions.Count == 1)
                     {
                         region = bottomRegions[0];
@@ -551,10 +589,20 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
                 ConvertParagraphNodeToTtmlNode(paragraphContent.DocumentElement, xml, paragraph);
             }
-            catch  // Wrong markup, clear it
+            catch  // Wrong markup (e.g. a literal "5 < 6" in the text): keep the words and line breaks, drop the tags
             {
-                text = Regex.Replace(text, "[<>]", "");
-                paragraph.AppendChild(xml.CreateTextNode(text));
+                // Stripping every < and > turned "<i>Two</i> lines<br/>here 5 < 6" into
+                // "iTwo/i linesbr/here 5 6" - the tags became text and the line break was lost.
+                var fallbackLines = text.Split(new[] { "<br/>" }, StringSplitOptions.None);
+                for (var i = 0; i < fallbackLines.Length; i++)
+                {
+                    if (i > 0)
+                    {
+                        paragraph.AppendChild(xml.CreateElement("br"));
+                    }
+
+                    paragraph.AppendChild(xml.CreateTextNode(HtmlUtil.RemoveHtmlTags(fallbackLines[i], true)));
+                }
             }
 
             XmlAttribute start = xml.CreateAttribute("begin");
@@ -764,16 +812,14 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
         {
             _errorCount = 0;
 
-            var sb = new StringBuilder();
-            lines.ForEach(line => sb.AppendLine(line));
             var xml = new XmlDocument { XmlResolver = null, PreserveWhitespace = true };
             try
             {
-                xml.LoadXml(sb.ToString().RemoveControlCharactersButWhiteSpace().Trim());
+                xml.LoadXml(JoinLines(lines).RemoveControlCharactersButWhiteSpace().Trim());
             }
             catch
             {
-                xml.LoadXml(FixBadXml(sb.ToString()));
+                xml.LoadXml(FixBadXml(JoinLines(lines)));
             }
 
             const string ns = "http://www.w3.org/ns/ttml";
@@ -827,8 +873,9 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             }
 
             Configuration.Settings.SubtitleSettings.TimedText10TimeCodeFormatSource = null;
-            subtitle.Header = sb.ToString();
+            subtitle.Header = JoinLines(lines);
             var styles = GetStylesFromHeader(subtitle.Header);
+            var headIndex = TtmlHeadIndex.Build(xml);
             string defaultStyle = null;
             if (body.Attributes["style"] != null)
             {
@@ -858,7 +905,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 {
                     // Parse and convert paragraph text
                     pText.Clear();
-                    ReadParagraph(pText, node, styles, xml);
+                    ReadParagraph(pText, node, styles, headIndex);
 
                     // Time codes
                     ExtractTimeCodes(node, subtitle, out var begin, out var end);
@@ -1011,7 +1058,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             }
             else if (subtitle.Paragraphs.Count > 0)
             {
-                begin = new TimeCode(subtitle.Paragraphs[subtitle.Paragraphs.Count - 1].EndTime.Milliseconds);
+                begin = new TimeCode(subtitle.Paragraphs[subtitle.Paragraphs.Count - 1].EndTime.TotalMilliseconds);
             }
 
             end = new TimeCode(begin.TotalMilliseconds + 3000);
@@ -1153,7 +1200,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             return $"{style} / {lang}";
         }
 
-        private static void ReadParagraph(StringBuilder pText, XmlNode node, List<string> styles, XmlDocument xml)
+        private static void ReadParagraph(StringBuilder pText, XmlNode node, List<string> styles, TtmlHeadIndex headIndex)
         {
             foreach (XmlNode child in node.ChildNodes)
             {
@@ -1182,53 +1229,31 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                     if (child.Attributes["style"] != null)
                     {
                         var styleName = child.Attributes["style"].Value;
-                        if (styles.Contains(styleName))
+                        if (styles.Contains(styleName) && headIndex.HasHead)
                         {
-                            try
+                            // Indexed once per load - this used to run a document-wide XPath per span.
+                            foreach (var styleNode in headIndex.GetStyles(styleName))
                             {
-                                var nsmgr = new XmlNamespaceManager(xml.NameTable);
-                                nsmgr.AddNamespace("ttml", "http://www.w3.org/ns/ttml");
-                                XmlNode head = xml.DocumentElement.SelectSingleNode("ttml:head", nsmgr);
-                                foreach (XmlNode styleNode in head.SelectNodes("//ttml:style", nsmgr))
+                                if (styleNode.Attributes["tts:fontStyle"] != null && styleNode.Attributes["tts:fontStyle"].Value == "italic")
                                 {
-                                    string currentStyle = null;
-                                    if (styleNode.Attributes["xml:id"] != null)
-                                    {
-                                        currentStyle = styleNode.Attributes["xml:id"].Value;
-                                    }
-                                    else if (styleNode.Attributes["id"] != null)
-                                    {
-                                        currentStyle = styleNode.Attributes["id"].Value;
-                                    }
-
-                                    if (currentStyle == styleName)
-                                    {
-                                        if (styleNode.Attributes["tts:fontStyle"] != null && styleNode.Attributes["tts:fontStyle"].Value == "italic")
-                                        {
-                                            isItalic = true;
-                                        }
-                                        if (styleNode.Attributes["tts:fontWeight"] != null && styleNode.Attributes["tts:fontWeight"].Value == "bold")
-                                        {
-                                            isBold = true;
-                                        }
-                                        if (styleNode.Attributes["tts:textDecoration"] != null && styleNode.Attributes["tts:textDecoration"].Value == "underline")
-                                        {
-                                            isUnderlined = true;
-                                        }
-                                        if (styleNode.Attributes["tts:fontFamily"] != null)
-                                        {
-                                            fontFamily = styleNode.Attributes["tts:fontFamily"].Value;
-                                        }
-                                        if (styleNode.Attributes["tts:color"] != null)
-                                        {
-                                            color = styleNode.Attributes["tts:color"].Value;
-                                        }
-                                    }
+                                    isItalic = true;
                                 }
-                            }
-                            catch (Exception e)
-                            {
-                                System.Diagnostics.Debug.WriteLine(e);
+                                if (styleNode.Attributes["tts:fontWeight"] != null && styleNode.Attributes["tts:fontWeight"].Value == "bold")
+                                {
+                                    isBold = true;
+                                }
+                                if (styleNode.Attributes["tts:textDecoration"] != null && styleNode.Attributes["tts:textDecoration"].Value == "underline")
+                                {
+                                    isUnderlined = true;
+                                }
+                                if (styleNode.Attributes["tts:fontFamily"] != null)
+                                {
+                                    fontFamily = styleNode.Attributes["tts:fontFamily"].Value;
+                                }
+                                if (styleNode.Attributes["tts:color"] != null)
+                                {
+                                    color = styleNode.Attributes["tts:color"].Value;
+                                }
                             }
                         }
                     }
@@ -1292,7 +1317,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                         pText.Append(">");
                     }
 
-                    ReadParagraph(pText, child, styles, xml);
+                    ReadParagraph(pText, child, styles, headIndex);
 
                     if (!string.IsNullOrEmpty(fontFamily) || !string.IsNullOrEmpty(color))
                     {
@@ -1411,11 +1436,29 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
         public static List<string> GetStylesFromHeader(string xmlAsString)
         {
-            var list = new List<string>();
             var xml = new XmlDocument();
             try
             {
                 xml.LoadXml(xmlAsString);
+            }
+            catch
+            {
+                return new List<string>();
+            }
+
+            return GetStylesFromHeader(xml);
+        }
+
+        /// <summary>
+        /// Same as <see cref="GetStylesFromHeader(string)"/> but reads the live document -
+        /// the save path already has one, and serializing + re-parsing the whole document
+        /// just to read the style ids was two full copies per call.
+        /// </summary>
+        public static List<string> GetStylesFromHeader(XmlDocument xml)
+        {
+            var list = new List<string>();
+            try
+            {
                 var nsmgr = new XmlNamespaceManager(xml.NameTable);
                 nsmgr.AddNamespace("ttml", "http://www.w3.org/ns/ttml");
                 XmlNode head = xml.DocumentElement.SelectSingleNode("ttml:head", nsmgr);
@@ -1451,11 +1494,28 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
         public static List<string> GetRegionsFromHeader(string xmlAsString)
         {
-            var list = new List<string>();
             var xml = new XmlDocument();
             try
             {
                 xml.LoadXml(xmlAsString);
+            }
+            catch
+            {
+                return new List<string>();
+            }
+
+            return GetRegionsFromHeader(xml);
+        }
+
+        /// <summary>
+        /// Same as <see cref="GetRegionsFromHeader(string)"/> but reads the live document -
+        /// see <see cref="GetStylesFromHeader(XmlDocument)"/>.
+        /// </summary>
+        public static List<string> GetRegionsFromHeader(XmlDocument xml)
+        {
+            var list = new List<string>();
+            try
+            {
                 var nsmgr = new XmlNamespaceManager(xml.NameTable);
                 nsmgr.AddNamespace("ttml", "http://www.w3.org/ns/ttml");
                 XmlNode head = xml.DocumentElement.SelectSingleNode("ttml:head", nsmgr);

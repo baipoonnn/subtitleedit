@@ -18,7 +18,7 @@ public class LlamaCppAdvancedSettingsWindow : Window
     public LlamaCppAdvancedSettingsWindow(LlamaCppAdvancedSettingsViewModel vm)
     {
         UiUtil.InitializeWindow(this, GetType().Name);
-        Title = Se.Language.Translate.AdvancedSettings;
+        Title = Se.Language.General.AdvancedSettings;
         // Explicit width: WidthAndHeight sizing comes out too wide on macOS.
         Width = 680;
         SizeToContent = SizeToContent.Height;
@@ -40,14 +40,14 @@ public class LlamaCppAdvancedSettingsWindow : Window
             {
                 new TextBlock
                 {
-                    Text = Se.Language.Translate.AdvancedSettings,
-                    FontSize = 18,
+                    Text = Se.Language.General.AdvancedSettings,
+                    FontSize = UiUtil.ScaledFontSize(18),
                     FontWeight = FontWeight.SemiBold,
                 },
                 new TextBlock
                 {
                     Text = Se.Language.Translate.AdvancedSettingsSubtitle,
-                    FontSize = 12,
+                    FontSize = UiUtil.ScaledFontSize(12),
                     Opacity = 0.75,
                     Margin = new Thickness(0, 2, 0, 0),
                 },
@@ -94,7 +94,22 @@ public class LlamaCppAdvancedSettingsWindow : Window
         var promptBox = MakeMultilineTextBox(vm, nameof(vm.Prompt), 56);
         promptBox.PlaceholderText = LlamaCppAdvancedProtocol.DefaultPrompt;
         SetHint(promptBox, Se.Language.Translate.CustomPromptHint);
-        AddRow(grid, 2, Se.Language.Translate.PromptText, promptBox);
+        // The prompt label carries the reset button, so the editor column keeps its full width.
+        var promptTextLabel = MakeSmallLabel(Se.Language.Translate.PromptText);
+        promptBox.WithLabeledBy(promptTextLabel); // wrapped in a panel, so not auto-linked (#12087)
+        var promptLabel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 5,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                promptTextLabel,
+                UiUtil.MakeButton(vm.ResetPromptCommand, IconNames.Restore, Se.Language.Translate.ResetPromptToDefault),
+            },
+        };
+        grid.Add(promptLabel, 2, 0);
+        grid.Add(promptBox, 2, 1);
 
         AddRow(grid, 3, Se.Language.Translate.PreviousLinesAsContext,
             UiUtil.MakeNumericUpDownInt(0, 50, 12, 120, vm, nameof(vm.HistoryPairs)));
@@ -133,7 +148,7 @@ public class LlamaCppAdvancedSettingsWindow : Window
             ColumnSpacing = 12,
             RowSpacing = 10,
         };
-        for (var i = 0; i < 5; i++)
+        for (var i = 0; i < 7; i++)
         {
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) });
         }
@@ -167,6 +182,22 @@ public class LlamaCppAdvancedSettingsWindow : Window
         grid.Add(MakeSmallLabel(Se.Language.Translate.ServerContextSizeTokens), 4, 0);
         grid.Add(contextSize, 4, 1);
         Grid.SetColumnSpan(contextSize, 3);
+
+        // Free-form llama-server arguments for the SE-managed local server (#13830) - lets users
+        // tune flags SE does not curate (e.g. partial GPU offload on a too-small card).
+        var serverArguments = UiUtil.MakeTextBox(280, vm, nameof(vm.ServerArguments))
+            .WithAccessibleName(Se.Language.Translate.ExtraServerParameters);
+        SetHint(serverArguments, Se.Language.Translate.ExtraServerParametersHint);
+        grid.Add(MakeSmallLabel(Se.Language.Translate.ExtraServerParameters), 5, 0);
+        grid.Add(serverArguments, 5, 1);
+        Grid.SetColumnSpan(serverArguments, 3);
+
+        // Opt out of SE's own launch flags entirely (#13865): appending user arguments last already
+        // overrides anything that takes a value, but a bare switch like --swa-full cannot be undone.
+        var serverArgumentsOnly = UiUtil.MakeCheckBox(Se.Language.Translate.UseOnlyExtraServerParameters, vm, nameof(vm.ServerArgumentsOnly));
+        SetHint(serverArgumentsOnly, Se.Language.Translate.UseOnlyExtraServerParametersHint);
+        grid.Add(serverArgumentsOnly, 6, 1);
+        Grid.SetColumnSpan(serverArgumentsOnly, 3);
 
         return grid;
     }

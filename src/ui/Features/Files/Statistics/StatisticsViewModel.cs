@@ -152,7 +152,7 @@ https://github.com/SubtitleEdit/subtitleedit
         }
 
         var statistic = string.Format(WriteFormat, TextGeneral, TextMostUsedWords, TextMostUsedLines);
-        System.IO.File.WriteAllText(textFileName, statistic);
+        await System.IO.File.WriteAllTextAsync(textFileName, statistic);
 
         _ = await _windowService.ShowDialogAsync<PromptFileSavedWindow, PromptFileSavedViewModel>(Window!, vm =>
         {
@@ -187,7 +187,7 @@ https://github.com/SubtitleEdit/subtitleedit
             }
             else
             {
-                Title = string.Format(_l.TitleWithFileName, _fileName);
+                Title = UiUtil.FormatTitleWithFileName(_l.TitleWithFileName, _fileName);
             }
         });
     }
@@ -360,14 +360,14 @@ https://github.com/SubtitleEdit/subtitleedit
         sb.AppendLine(string.Format(_l.SingleLineLengthMaximum, maximumSingleLineLength) + " (" + GetIndicesWithSingleLineLength(maximumSingleLineLength) + ")");
         sb.AppendLine(string.Format(_l.SingleLineLengthAverage, (double)totalSingleLineLength / totalSingleLines));
         sb.AppendLine();
-        sb.AppendLine(string.Format(_l.SingleLineLengthExceedingMaximum, Configuration.Settings.General.SubtitleLineMaximumLength, aboveMaximumLineLengthCount, ((double)aboveMaximumLineLengthCount / _subtitle.Paragraphs.Count) * 100.0));
+        sb.AppendLine(string.Format(_l.SingleLineLengthExceedingMaximum, Configuration.Settings.General.SubtitleLineMaximumLength, aboveMaximumLineLengthCount, ((double)aboveMaximumLineLengthCount / Math.Max(1, totalSingleLines)) * 100.0));
         sb.AppendLine();
 
         sb.AppendLine(string.Format(_l.SingleLineWidthMinimum, minimumSingleLineWidth) + " (" + GetIndicesWithSingleLineWidth(minimumSingleLineWidth) + ")");
         sb.AppendLine(string.Format(_l.SingleLineWidthMaximum, maximumSingleLineWidth) + " (" + GetIndicesWithSingleLineWidth(maximumSingleLineWidth) + ")");
         sb.AppendLine(string.Format(_l.SingleLineWidthAverage, (double)totalSingleLineWidth / totalSingleLines));
         sb.AppendLine();
-        sb.AppendLine(string.Format(_l.SingleLineWidthExceedingMaximum, Configuration.Settings.General.SubtitleLineMaximumPixelWidth, aboveMaximumLineWidthCount, ((double)aboveMaximumLineWidthCount / _subtitle.Paragraphs.Count) * 100.0));
+        sb.AppendLine(string.Format(_l.SingleLineWidthExceedingMaximum, Configuration.Settings.General.SubtitleLineMaximumPixelWidth, aboveMaximumLineWidthCount, ((double)aboveMaximumLineWidthCount / Math.Max(1, totalSingleLines)) * 100.0));
         sb.AppendLine();
 
         sb.AppendLine(string.Format(_l.DurationMinimum, minimumDuration / TimeCode.BaseUnit) + " (" + GetIndicesWithDuration(minimumDuration) + ")");
@@ -397,7 +397,7 @@ https://github.com/SubtitleEdit/subtitleedit
             sb.AppendLine(string.Format(_l.GapMaximum, gapMaximum) + " (" + GetIndicesWithGap(gapMaximum) + ")");
             sb.AppendLine(string.Format(_l.GapAverage, gapTotal / (_subtitle.Paragraphs.Count - 1)));
             sb.AppendLine();
-            sb.AppendLine(string.Format(_l.GapExceedingMinimum, Configuration.Settings.General.MinimumMillisecondsBetweenLines, belowMinimumGapCount, ((double)belowMinimumGapCount / _subtitle.Paragraphs.Count) * 100.0));
+            sb.AppendLine(string.Format(_l.GapExceedingMinimum, Configuration.Settings.General.MinimumMillisecondsBetweenLines, belowMinimumGapCount, ((double)belowMinimumGapCount / Math.Max(1, _subtitle.Paragraphs.Count - 1)) * 100.0));
             sb.AppendLine();
         }
 
@@ -807,12 +807,14 @@ https://github.com/SubtitleEdit/subtitleedit
         var sb = new StringBuilder();
         if (sortedTable.Count > 0)
         {
-            var temp = string.Empty;
-            foreach (KeyValuePair<string, string> item in sortedTable)
+            // Most frequent first: the table sorts ascending, so emit it back to front. This was
+            // a prepend concatenation per entry - quadratic in the size of the word/line table.
+            foreach (var item in sortedTable.Reverse())
             {
-                temp = item.Value + Environment.NewLine + temp;
+                sb.Append(item.Value).Append(Environment.NewLine);
             }
-            sb.AppendLine(temp);
+
+            sb.AppendLine();
         }
         else
         {
@@ -851,12 +853,14 @@ https://github.com/SubtitleEdit/subtitleedit
         var sb = new StringBuilder();
         if (sortedTable.Count > 0)
         {
-            var temp = string.Empty;
-            foreach (KeyValuePair<string, string> item in sortedTable)
+            // Most frequent first: the table sorts ascending, so emit it back to front. This was
+            // a prepend concatenation per entry - quadratic in the size of the word/line table.
+            foreach (var item in sortedTable.Reverse())
             {
-                temp = item.Value + Environment.NewLine + temp;
+                sb.Append(item.Value).Append(Environment.NewLine);
             }
-            sb.AppendLine(temp);
+
+            sb.AppendLine();
         }
         else
         {

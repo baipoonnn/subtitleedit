@@ -12,9 +12,9 @@ namespace Nikse.SubtitleEdit.Features.Video.SpeechToText.Engines;
 
 /// <summary>
 /// Online speech-to-text via OpenRouter's audio transcription API. OpenRouter
-/// routes to Whisper / GPT-4o-transcribe / Groq / Chirp behind one endpoint and
-/// one API key, and returns the same verbose_json segment/word shape we already
-/// parse. See <see cref="OpenRouterSttService"/> for the request encoding.
+/// routes to Whisper / GPT transcription / Groq / Chirp behind one endpoint and
+/// one API key. Response formats are selected per model; see
+/// <see cref="OpenRouterSttService"/> for the request encoding.
 /// </summary>
 public class OpenRouterSttEngine : IOnlineSttEngine
 {
@@ -29,6 +29,22 @@ public class OpenRouterSttEngine : IOnlineSttEngine
     // 32 kbps mp3 (~240 KB/min), so ~2.5 MB keeps chunks near 10 minutes.
     private const long UploadThreshold = 3L * 1024 * 1024;
     private const long ChunkSize = 2560L * 1024;
+
+    // Chirp models need wav instead of mp3 (see OpenRouterSttService.RequiresWavAudio).
+    // Chirp via OpenRouter also turns out to have a much tighter constraint than the
+    // 60-second provider timeout above: it looks like the synchronous (non-long-running)
+    // Google Speech-to-Text API underneath, which has its own hard ~60-second audio
+    // duration cap independent of file size or timeout - confirmed empirically by sending
+    // identical audio at 60s (succeeds), 65s and 180s (both fail with the same opaque
+    // "Provider returned 400", regardless of language/prompt, which are not the cause).
+    // Sizing has to survive silence snapping: ComputeAdjustedBoundaries moves each cut up
+    // to maxOffsetSeconds (10s by default) to land on a silence, and a chunk sits between
+    // two independently snapped cuts - so a chunk can run up to 20s longer than its target,
+    // not 10s. 16 kHz mono 16-bit PCM is ~32 KB/s, so 1 MB targets ~33 seconds and the
+    // worst case is ~53 seconds, still under the confirmed ~60s failure point. (1.4 MB
+    // would target ~45s but allow ~65s, i.e. past the cap on an unlucky pair of snaps.)
+    private const long WavUploadThreshold = 1152L * 1024;
+    private const long WavChunkSize = 1024L * 1024;
 
     public override string ToString() => Name;
 
@@ -55,8 +71,10 @@ public class OpenRouterSttEngine : IOnlineSttEngine
     }
 
     public string ProbeUrl => "https://openrouter.ai";
-    public long UploadThresholdBytes => UploadThreshold;
-    public long ChunkSizeBytes => ChunkSize;
+
+    private static bool UsesWavAudio => OpenRouterSttService.RequiresWavAudio(Se.Settings.Tools.OpenRouterSttModel);
+    public long UploadThresholdBytes => UsesWavAudio ? WavUploadThreshold : UploadThreshold;
+    public long ChunkSizeBytes => UsesWavAudio ? WavChunkSize : ChunkSize;
 
     public string GetAndCreateWhisperFolder() => WhisperHelper.GetWhisperFolder(WhisperChoice.OpenRouter) ?? string.Empty;
     public string GetAndCreateWhisperModelFolder(WhisperModel? whisperModel) => new WhisperModel().ModelFolder;

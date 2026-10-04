@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
+using Nikse.SubtitleEdit.Controls;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
 
@@ -56,7 +57,7 @@ public class CustomContinuationStyleWindow : Window
 
         Content = grid;
 
-        Activated += delegate { comboBoxFirstInput.Focus(); }; // initial focus on an input, not an action button - a focused button clicks on bare Space
+        UiUtil.FocusOnFirstActivation(this, comboBoxFirstInput); // initial focus on an input, not an action button - a focused button clicks on bare Space
         KeyDown += vm.KeyDown;
     }
 
@@ -144,7 +145,7 @@ public class CustomContinuationStyleWindow : Window
             .WithBindEnabled(nameof(vm.UseSpecialStyleAfterLongGaps));
         checkBoxLongSuffixRemoveComma.IsCheckedChanged += (s, e) => vm.StyleChanged();
 
-        var splitButtonLoad = new SplitButton
+        var splitButtonLoad = new SeSplitButton
         {
             VerticalAlignment = VerticalAlignment.Bottom,
             Content = Se.Language.General.LoadDefaults,

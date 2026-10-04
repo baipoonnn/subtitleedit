@@ -5,6 +5,8 @@ namespace LibSETests.Common;
 
 public class FileUtilTest
 {
+    private static readonly byte[] MxfHeaderPartitionPackId = { 0x06, 0x0E, 0x2B, 0x34, 0x02, 0x05, 0x01, 0x01, 0x0D, 0x01, 0x02 };
+
     private static byte[] MakeRawPgsSegment(byte segmentType, int payloadSize)
     {
         var segment = new byte[3 + payloadSize];
@@ -74,6 +76,49 @@ public class FileUtilTest
         WithTempFile(bytes, path => Assert.False(FileUtil.IsRawPgsSegmentStream(path)));
     }
 
+    // The Header Partition PackId is 11 bytes and may sit anywhere in the first 64 KB, so the
+    // interesting offsets are the two edges of the search window. The byte-at-a-time loop this
+    // replaced stopped at start offset count - 12, which missed a pack ending on the last byte.
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(50)]
+    [InlineData(2048 - 12)]
+    [InlineData(2048 - 11)] // the pack ends on the very last byte read
+    public void IsMaterialExchangeFormatFindsPackIdAtAnyOffset(int offset)
+    {
+        var bytes = new byte[2048];
+        MxfHeaderPartitionPackId.CopyTo(bytes, offset);
+
+        WithTempFile(bytes, path => Assert.True(FileUtil.IsMaterialExchangeFormat(path)));
+    }
+
+    [Fact]
+    public void IsMaterialExchangeFormatRejectsFileWithoutPackId()
+    {
+        var bytes = new byte[2048];
+        for (var i = 0; i < bytes.Length; i++)
+        {
+            bytes[i] = (byte)(i % 251);
+        }
+
+        // A truncated pack (one byte short of the full signature) must not match either.
+        MxfHeaderPartitionPackId.AsSpan(0, MxfHeaderPartitionPackId.Length - 1).CopyTo(bytes.AsSpan(100));
+        bytes[100 + MxfHeaderPartitionPackId.Length - 1] = 0xFF;
+
+        WithTempFile(bytes, path => Assert.False(FileUtil.IsMaterialExchangeFormat(path)));
+    }
+
+    [Fact]
+    public void IsMaterialExchangeFormatRejectsFileShorterThanHundredBytes()
+    {
+        // The pack is there, but a file this short cannot be an MXF - the size guard wins.
+        var bytes = new byte[99];
+        MxfHeaderPartitionPackId.CopyTo(bytes, 0);
+
+        WithTempFile(bytes, path => Assert.False(FileUtil.IsMaterialExchangeFormat(path)));
+    }
+
     // The UTF-16LE BOM is FF FE; ReadAllLinesShared used to test FE FF (the UTF-16BE BOM),
     // so the BOM was never stripped and U+FEFF leaked into the first line.
     [Fact]
@@ -96,5 +141,19 @@ public class FileUtilTest
         {
             File.Delete(path);
         }
+    }
+
+    /// <summary>
+    /// A Blu-ray .sup saved under another extension (.sub) is recognised by its content - the
+    /// segment chain, not just the two "PG" bytes, which also start plenty of text files.
+    /// </summary>
+    [Fact]
+    public void IsBluRaySupByContentNeedsASegmentChain()
+    {
+        var sup = File.ReadAllBytes(Path.Combine(Directory.GetCurrentDirectory(), "Files", "sample_BDSUP_multi_image.sup"));
+        WithTempFile(sup, path => Assert.True(FileUtil.IsBluRaySupByContent(path)));
+        WithTempFile(Encoding.ASCII.GetBytes("PG-13 rated, 1" + Environment.NewLine + "00:00:01,000 --> 00:00:02,000" + Environment.NewLine + "Hi"),
+            path => Assert.False(FileUtil.IsBluRaySupByContent(path)));
+        WithTempFile(sup.Take(14).ToArray(), path => Assert.False(FileUtil.IsBluRaySupByContent(path)));
     }
 }

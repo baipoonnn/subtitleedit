@@ -1,14 +1,17 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Nikse.SubtitleEdit.Core.Cea608;
 using Nikse.SubtitleEdit.Core.Common;
+using Nikse.SubtitleEdit.Core.ContainerFormats.ProgramStream;
 using Nikse.SubtitleEdit.Core.ContainerFormats.TransportStream;
 using Nikse.SubtitleEdit.Features.Ocr;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 
@@ -29,6 +32,7 @@ public partial class PickTsTrackViewModel : ObservableObject
 
     private string _fileName = string.Empty;
     private TransportStreamParser? _tsParser;
+    private SortedDictionary<int, List<UmdVideoSubtitle>>? _umdTracks;
 
     public PickTsTrackViewModel()
     {
@@ -44,7 +48,7 @@ public partial class PickTsTrackViewModel : ObservableObject
     {
         _tsParser = tsParser;
         _fileName = fileName;
-        WindowTitle = string.Format(Se.Language.File.PickTransportStreamTrackX, fileName);
+        WindowTitle = UiUtil.FormatTitleWithFileName(Se.Language.File.PickTransportStreamTrackX, fileName);
 
         var programMapTableParser = new ProgramMapTableParser();
         programMapTableParser.Parse(fileName); // get languages
@@ -109,6 +113,84 @@ public partial class PickTsTrackViewModel : ObservableObject
                 Tracks.Add(display);
             }
         }
+
+        foreach (var videoPid in tsParser.ClosedCaptionSubtitlesLookup)
+        {
+            foreach (var track in videoPid.Value)
+            {
+                var display = new TsTrackInfoDisplay
+                {
+                    TrackNumber = videoPid.Key,
+                    Teletext = track.Value,
+                    IsDefault = false,
+                    IsForced = false,
+                    Codec = ClosedCaptionExtractor.GetTrackName(track.Key),
+                    IsTeletext = true, // text track - same preview/open handling as teletext
+                };
+                Tracks.Add(display);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Teletext pages from a Manzanita dump, which is a single elementary stream and so has no
+    /// program map table to take packet ids or languages from.
+    /// </summary>
+    internal void Initialize(Dictionary<int, List<Paragraph>> teletextPages, string fileName)
+    {
+        _fileName = fileName;
+        WindowTitle = UiUtil.FormatTitleWithFileName(Se.Language.File.PickTransportStreamTrackX, fileName);
+
+        foreach (var page in teletextPages)
+        {
+            Tracks.Add(new TsTrackInfoDisplay
+            {
+                TrackNumber = page.Key,
+                Teletext = page.Value,
+                Codec = "Teletext",
+                IsTeletext = true,
+            });
+        }
+    }
+
+    /// <summary>
+    /// CEA-608/708 closed caption tracks read from the video track of an .mp4 or .mkv file.
+    /// </summary>
+    /// <param name="captionTracks">Paragraphs per track key (see <see cref="ClosedCaptionDecoder"/>)</param>
+    /// <param name="trackNumber">Video track the captions came from</param>
+    /// <param name="windowTitle">Window title</param>
+    internal void InitializeClosedCaptions(SortedDictionary<int, List<Paragraph>> captionTracks, int trackNumber, string windowTitle)
+    {
+        WindowTitle = windowTitle;
+        foreach (var track in captionTracks)
+        {
+            Tracks.Add(new TsTrackInfoDisplay
+            {
+                TrackNumber = trackNumber,
+                Teletext = track.Value,
+                Codec = ClosedCaptionDecoder.GetTrackName(track.Key),
+                IsTeletext = true, // text track - same preview/open handling as teletext
+            });
+        }
+    }
+
+    /// <summary>
+    /// PSP UMD Video: one image subtitle stream per sub-stream id (0x80 = the first).
+    /// </summary>
+    internal void InitializeUmdVideo(SortedDictionary<int, List<UmdVideoSubtitle>> tracks, string fileName)
+    {
+        _umdTracks = tracks;
+        _fileName = fileName;
+        WindowTitle = UiUtil.FormatTitleWithFileName(Se.Language.File.PickMpegTrackX, fileName);
+        foreach (var track in tracks)
+        {
+            Tracks.Add(new TsTrackInfoDisplay
+            {
+                TrackNumber = track.Key,
+                Codec = "PNG",
+                Name = "#" + (track.Key - 0x80 + 1),
+            });
+        }
     }
 
     private void Close()
@@ -157,7 +239,7 @@ public partial class PickTsTrackViewModel : ObservableObject
     private bool TrackChanged()
     {
         var selectedTrack = SelectedTrack;
-        if (selectedTrack == null || _tsParser == null)
+        if (selectedTrack == null)
         {
             SubtitleCountText = string.Empty;
             return false;
@@ -170,7 +252,7 @@ public partial class PickTsTrackViewModel : ObservableObject
            var subtitle = new Subtitle(selectedTrack.Teletext);
             subtitle.Renumber();
             TeletextSubtitle = subtitle;
-            SubtitleCountText = string.Format(Se.Language.File.Import.NumberOfSubtitlesX, subtitle.Paragraphs.Count);
+            SubtitleCountText = string.Format(Se.Language.File.Import.NumberOfSubtitlesX, subtitle.Paragraphs.Count.ToString("N0"));
             foreach (var p in subtitle.Paragraphs.Take(20))
             {
                 var cue = new TsSubtitleCueDisplay()
@@ -187,6 +269,32 @@ public partial class PickTsTrackViewModel : ObservableObject
             return true;
         }
 
+        if (_umdTracks != null && _umdTracks.TryGetValue(selectedTrack.TrackNumber, out var pictures))
+        {
+            SubtitleCountText = string.Format(Se.Language.File.Import.NumberOfSubtitlesX, pictures.Count.ToString("N0"));
+            for (var i = 0; i < 20 && i < pictures.Count; i++)
+            {
+                var picture = pictures[i];
+                using var bitmap = picture.GetBitmap();
+                Rows.Add(new TsSubtitleCueDisplay
+                {
+                    Number = i + 1,
+                    Show = picture.StartTime,
+                    Hide = picture.EndTime,
+                    Duration = picture.EndTime - picture.StartTime,
+                    Image = new Image { Source = bitmap.ToAvaloniaBitmap() },
+                });
+            }
+
+            return true;
+        }
+
+        if (_tsParser == null)
+        {
+            SubtitleCountText = string.Empty;
+            return false;
+        }
+
         // GetDvbSubtitles returns null for a packet id it decoded no images for - a subtitle PID
         // announced by the stream is not a guarantee that anything came out of it.
         var subtitles = _tsParser.GetDvbSubtitles(selectedTrack.TrackNumber);
@@ -196,7 +304,7 @@ public partial class PickTsTrackViewModel : ObservableObject
             return false;
         }
 
-        SubtitleCountText = string.Format(Se.Language.File.Import.NumberOfSubtitlesX, subtitles.Count);
+        SubtitleCountText = string.Format(Se.Language.File.Import.NumberOfSubtitlesX, subtitles.Count.ToString("N0"));
         for (var i = 0; i < 20 && i < subtitles.Count; i++)
         {
             var item = subtitles[i];

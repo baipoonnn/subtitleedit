@@ -14,6 +14,17 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
         public override bool IsMine(List<string> lines, string fileName)
         {
+            // LoadSubtitle produces no paragraph (so IsMine is false) unless the text starts
+            // with '{'/'[' and every one of these tags is present - test that before the full parse.
+            var allText = JoinLinesTrimmed(lines);
+            if (!(allText.StartsWith('{') || allText.StartsWith('[')) ||
+                !allText.Contains("start_time", StringComparison.Ordinal) ||
+                !allText.Contains("end_time", StringComparison.Ordinal) ||
+                !allText.Contains("text", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
             var subtitle = new Subtitle();
             LoadSubtitle(subtitle, lines, fileName);
             if (_errorCount >= subtitle.Paragraphs.Count)
@@ -65,8 +76,10 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
             foreach (string line in allText.Split('{', '}', '[', ']'))
             {
-                string s = line.Trim();
-                if (s.Length > 10)
+                // Put back the closing brace the split removed: Json.ReadTag needs a ',' or '}' after
+                // a number, so a trailing "end_time" : 16.399 (ELR Studio json) was otherwise lost.
+                string s = line.Trim() + "}";
+                if (s.Length > 11)
                 {
                     string start = Json.ReadTag(s, "start_time");
                     string end = Json.ReadTag(s, "end_time");

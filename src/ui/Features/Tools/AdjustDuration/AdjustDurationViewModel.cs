@@ -2,12 +2,14 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Features.Main;
 using Nikse.SubtitleEdit.Features.Shared;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
 using Nikse.SubtitleEdit.UiLogic.AdjustDuration;
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
@@ -30,6 +32,10 @@ public partial class AdjustDurationViewModel : ObservableObject
 
     public bool OkPressed { get; private set; }
 
+    private ISet<SubtitleLineViewModel>? _onlyLines;
+
+    private bool IsSkipped(SubtitleLineViewModel line) => _onlyLines != null && !_onlyLines.Contains(line);
+
     public AdjustDurationViewModel()
     {
         AdjustTypes = new ObservableCollection<AdjustDurationDisplay>(AdjustDurationDisplay.ListAll());
@@ -37,8 +43,14 @@ public partial class AdjustDurationViewModel : ObservableObject
         LoadSettings();
     }
 
-    public void AdjustDuration(ObservableCollection<SubtitleLineViewModel> subtitles)
+    /// <summary>
+    /// Adjusts every line in <paramref name="subtitles"/>, or only those in <paramref name="onlyLines"/>
+    /// when given. The whole list is still walked so a limited line is capped against its real
+    /// neighbour in the grid, not against the next line that happened to be selected.
+    /// </summary>
+    public void AdjustDuration(ObservableCollection<SubtitleLineViewModel> subtitles, ISet<SubtitleLineViewModel>? onlyLines = null)
     {
+        _onlyLines = onlyLines;
         if (SelectedAdjustType.Type == AdjustDurationType.Seconds)
         {
             DoAdjustViaSeconds(subtitles);
@@ -62,8 +74,21 @@ public partial class AdjustDurationViewModel : ObservableObject
         for (var i = 0; i < subtitles.Count; i++)
         {
             var subtitle = subtitles[i];
+            if (IsSkipped(subtitle))
+            {
+                continue;
+            }
+
             var nextSubtitle = subtitles.GetOrNull(i + 1);
             var newEndTime = subtitle.EndTime + TimeSpan.FromSeconds(AdjustSeconds);
+
+            // A negative adjustment must not push the end time before the start time
+            var minEndTime = subtitle.StartTime + TimeSpan.FromMilliseconds(100);
+            if (AdjustSeconds < 0 && newEndTime < minEndTime)
+            {
+                newEndTime = minEndTime;
+            }
+
             if (nextSubtitle != null && newEndTime <= nextSubtitle.StartTime || nextSubtitle == null)
             {
                 subtitle.EndTime = newEndTime;
@@ -84,13 +109,23 @@ public partial class AdjustDurationViewModel : ObservableObject
         for (int i = 0; i < subtitles.Count; i++)
         {
             var subtitle = subtitles[i];
+            if (IsSkipped(subtitle))
+            {
+                continue;
+            }
+
             var nextSubtitle = subtitles.GetOrNull(i + 1);
             var adjustment = TimeSpan.FromSeconds(AdjustFixed);
             var newEndTime = subtitle.StartTime + adjustment;
 
             if (nextSubtitle != null && newEndTime > nextSubtitle.StartTime)
             {
-                subtitle.EndTime = nextSubtitle.StartTime;
+                // Leave the minimum gap and keep a positive duration, as libse's
+                // SetFixedDuration / AdjustDisplayTimeUsingPercent do (so the dialog and Batch
+                // convert agree). Capping flat at next.Start gave a ZERO-duration line whenever
+                // two rows share a start time, and a negative one when rows are out of order -
+                // the DoAdjustViaSeconds branch above already floors its result.
+                subtitle.EndTime = ClampEndTime(subtitle.StartTime, nextSubtitle.StartTime);
             }
             else
             {
@@ -99,11 +134,32 @@ public partial class AdjustDurationViewModel : ObservableObject
         }
     }
 
+
+    /// <summary>
+    /// An end time that leaves the configured minimum gap before <paramref name="nextStartTime"/>
+    /// and is still at least 1 ms after <paramref name="startTime"/>.
+    /// </summary>
+    private static TimeSpan ClampEndTime(TimeSpan startTime, TimeSpan nextStartTime)
+    {
+        var capped = nextStartTime - TimeSpan.FromMilliseconds(Configuration.Settings.General.MinimumMillisecondsBetweenLines);
+        if (capped <= startTime)
+        {
+            capped = startTime + TimeSpan.FromMilliseconds(1);
+        }
+
+        return capped;
+    }
+
     private void DoAdjustViaPercent(ObservableCollection<SubtitleLineViewModel> subtitles)
     {
         for (int i = 0; i < subtitles.Count; i++)
         {
             var subtitle = subtitles[i];
+            if (IsSkipped(subtitle))
+            {
+                continue;
+            }
+
             var nextSubtitle = subtitles.GetOrNull(i + 1);
 
             var originalDuration = subtitle.EndTime - subtitle.StartTime;
@@ -112,7 +168,12 @@ public partial class AdjustDurationViewModel : ObservableObject
 
             if (nextSubtitle != null && newEndTime > nextSubtitle.StartTime)
             {
-                subtitle.EndTime = nextSubtitle.StartTime;
+                // Leave the minimum gap and keep a positive duration, as libse's
+                // SetFixedDuration / AdjustDisplayTimeUsingPercent do (so the dialog and Batch
+                // convert agree). Capping flat at next.Start gave a ZERO-duration line whenever
+                // two rows share a start time, and a negative one when rows are out of order -
+                // the DoAdjustViaSeconds branch above already floors its result.
+                subtitle.EndTime = ClampEndTime(subtitle.StartTime, nextSubtitle.StartTime);
             }
             else
             {
@@ -126,10 +187,19 @@ public partial class AdjustDurationViewModel : ObservableObject
         for (int i = 0; i < subtitles.Count; i++)
         {
             var subtitle = subtitles[i];
-            var charCount = subtitle.Text?.Length ?? 0;
+            if (IsSkipped(subtitle))
+            {
+                continue;
+            }
 
-            var optimalDuration = TimeSpan.FromSeconds(charCount / AdjustRecalculateOptimalCharacterPerSecond);
-            var maxDuration = TimeSpan.FromSeconds(charCount / AdjustRecalculateMaxCharacterPerSecond);
+            // Count like the grid's CPS column does (tags and line breaks stripped), so the
+            // recalculated durations actually land at the requested chars-per-second.
+            var charCount = (double)(subtitle.Text ?? string.Empty).CountCharacters(true);
+
+            // Whole milliseconds, rounded up: a fractional duration truncates to one ms short on
+            // save, which puts the line just over the CPS it was computed for (#14418).
+            var optimalDuration = CpsHelper.GetDurationForCps(charCount, AdjustRecalculateOptimalCharacterPerSecond);
+            var maxDuration = CpsHelper.GetDurationForCps(charCount, AdjustRecalculateMaxCharacterPerSecond);
 
             var nextSubtitle = subtitles.GetOrNull(i + 1);
             var maxEndTime = nextSubtitle?.StartTime ?? TimeSpan.MaxValue;

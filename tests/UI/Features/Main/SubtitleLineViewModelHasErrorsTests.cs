@@ -1,4 +1,4 @@
-using Avalonia.Headless.XUnit;
+﻿using Avalonia.Headless.XUnit;
 using Nikse.SubtitleEdit.Features.Main;
 using Nikse.SubtitleEdit.Logic.Config;
 using System;
@@ -172,6 +172,51 @@ public class SubtitleLineViewModelHasErrorsTests
         }
     }
 
+    /// <summary>
+    /// The teletext page-width rule (EBU-sourced subtitles) reddens the grid via HasErrors
+    /// regardless of the general "too long" setting - the error list must report the same
+    /// lines, or they silently vanish from "List errors" and batch convert's error list.
+    /// </summary>
+    [AvaloniaFact]
+    public void HasErrors_MatchesGetErrors_WithTeletextLineLengthOn()
+    {
+        var originalSettings = Se.Settings;
+        var originalTeletext = SubtitleLineViewModel.UseTeletextLineLength;
+        try
+        {
+            Se.Settings = new Se();
+            var general = Se.Settings.General;
+            general.ColorDurationTooShort = false;
+            general.ColorDurationTooLong = false;
+            general.ColorTextTooLong = false;
+            general.ColorTextTooWide = false;
+            general.ColorTextTooManyLines = false;
+            general.ColorCharactersPerSecond = false;
+            general.ColorWordsPerMinute = false;
+            general.ColorTimeCodeOverlap = false;
+            general.ColorGapTooShort = false;
+            SubtitleLineViewModel.UseTeletextLineLength = true;
+
+            var lines = new List<SubtitleLineViewModel>
+            {
+                Line("Fits on a teletext row.", 1000, 3000),                              // 23 chars, clean
+                Line("This line is longer than the thirty-seven characters a teletext row holds.", 4000, 8000),
+                Line("<font color=\"#ffff00\">Exactly thirty-seven characters here!</font>", 9000, 12000), // 37 > 36 with color
+            };
+
+            var withErrors = AssertAgrees(lines);
+            Assert.Equal(2, withErrors);
+
+            var errors = lines[1].GetErrorList(lines[0], lines[2]);
+            Assert.Contains(errors, e => e.Type == Nikse.SubtitleEdit.Features.Shared.ErrorList.LineErrorType.LineTooLong);
+        }
+        finally
+        {
+            Se.Settings = originalSettings;
+            SubtitleLineViewModel.UseTeletextLineLength = originalTeletext;
+        }
+    }
+
     /// <summary>The pixel width column reads the same memo, so it must follow the text too.</summary>
     [AvaloniaFact]
     public void PixelWidth_FollowsTextChange()
@@ -191,6 +236,43 @@ public class SubtitleLineViewModelHasErrorsTests
             var wide = line.PixelWidth;
 
             Assert.True(wide > narrow, $"expected the wider text to measure wider, got {wide} <= {narrow}");
+        }
+        finally
+        {
+            Se.Settings = originalSettings;
+        }
+    }
+
+    /// <summary>Repeated \N lifts a subtitle up the screen - empty \N lines are not text lines (#15531).</summary>
+    [AvaloniaTheory]
+    [InlineData("Hello\\N\\N\\N\\N", 1)]
+    [InlineData("\\N\\N\\N{\\i1}\\N\\hHello", 1)]
+    [InlineData("Line one\\NLine two\\N\\N", 2)]
+    [InlineData("Line one\\NLine two\\NLine three", 3)]
+    [InlineData("Line one\r\n\r\nLine two", 3)] // a real empty line still counts
+    [InlineData("Line one\r\nLine two\\N\\N", 2)]
+    public void TooManyLines_IgnoresEmptyAssaHardBreakLines(string text, int expectedLineCount)
+    {
+        var originalSettings = Se.Settings;
+        try
+        {
+            Se.Settings = new Se();
+            var general = Se.Settings.General;
+            general.ColorDurationTooShort = false;
+            general.ColorDurationTooLong = false;
+            general.ColorTextTooLong = false;
+            general.ColorTextTooWide = false;
+            general.ColorTextTooManyLines = true;
+            general.ColorCharactersPerSecond = false;
+            general.ColorWordsPerMinute = false;
+            general.ColorTimeCodeOverlap = false;
+            general.ColorGapTooShort = false;
+            general.MaxNumberOfLines = 2;
+
+            var line = Line(text, 1000, 5000);
+            Assert.Equal(expectedLineCount, line.GetLineCountForMaxLines());
+            Assert.Equal(expectedLineCount > 2, line.HasErrors(null, null));
+            Assert.Equal(expectedLineCount > 2, !string.IsNullOrEmpty(line.GetErrors(null, null)));
         }
         finally
         {

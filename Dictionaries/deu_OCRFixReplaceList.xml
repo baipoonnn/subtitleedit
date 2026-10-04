@@ -37,7 +37,6 @@
     <Word from="00om" to="000 m" />
     <Word from="100m" to="100 m" />
     <Word from="120m" to="120 m" />
-    <Word from="13Oj§hrie" to="130 jährige" />
     <Word from="13Oj§hrie" to="130-jährige" />
     <Word from="145m" to="145 m" />
     <Word from="150m" to="150 m" />
@@ -804,7 +803,6 @@
     <Word from="bltte" to="bitte" />
     <Word from="Blumenstréiulichen" to="Blumensträußchen" />
     <Word from="Blumentépfen" to="Blumentöpfen" />
-    <Word from="Blutgetränkte" to="Blut getränkte" />
     <Word from="Blutgetrénkte" to="Blutgetränkte" />
     <Word from="blutjungl" to="blutjung!" />
     <Word from="blutriinstig" to="blutrünstig" />
@@ -1313,8 +1311,6 @@
     <Word from="entzuckend" to="entzückend" />
     <Word from="entzundet" to="entzündet" />
     <Word from="enzvérmt" to="erwärmt" />
-    <Word from="Er" to="Er" />
-    <Word from="er" to="er" />
     <Word from="Er6ffnen" to="Eröffnen" />
     <Word from="erbérml/ch" to="erbärmlich" />
     <Word from="erbérmlich" to="erbärmlich" />
@@ -1485,8 +1481,6 @@
     <Word from="érztlichen" to="ärztlichen" />
     <Word from="érztlicher" to="ärztlicher" />
     <Word from="erzurnen" to="erzürnen" />
-    <Word from="es" to="es" />
-    <Word from="Es" to="Es" />
     <Word from="ésthetisch" to="ästhetisch" />
     <Word from="etemity" to="eternity" />
     <Word from="etvva" to="etwa" />
@@ -1693,7 +1687,7 @@
     <Word from="Filr" to="Für" />
     <Word from="filrchten" to="fürchten" />
     <Word from="filrchterlich" to="fürchterlich" />
-    <Word from="filr'ne" to="für'ne" />
+    <Word from="filr'ne" to="für 'ne" />
     <Word from="filrs" to="fürs" />
     <Word from="filter" to="älter" />
     <Word from="findem" to="ändern" />
@@ -2226,8 +2220,6 @@
     <Word from="Gerijcht" to="Gerücht" />
     <Word from="Gerllicht" to="Gerücht" />
     <Word from="gerllistet" to="gerüstet" />
-    <Word from="gernhaben" to="gern haben" />
-    <Word from="gernhaben" to="gern-haben" />
     <Word from="gernntgt" to="geröntgt" />
     <Word from="Gértnern" to="Gärtnern" />
     <Word from="geschafff" to="geschafft" />
@@ -2914,7 +2906,6 @@
     <Word from="hierL" to="hieß" />
     <Word from="hierwar" to="hier war" />
     <Word from="hierzum" to="hier zum" />
-    <Word from="hierzum" to="hier-zum" />
     <Word from="Hiétte" to="Hätte" />
     <Word from="Hiibsch" to="Hübsch" />
     <Word from="Hiibsche" to="Hübsche" />
@@ -3213,15 +3204,12 @@
     <Word from="Illfie" to="Wie" />
     <Word from="Ilrger" to="Ärger" />
     <Word from="Ilufierste" to="Äußerste" />
-    <Word from="im" to="im" />
     <Word from="immerja" to="immer ja" />
     <Word from="immerjung" to="immer jung" />
-    <Word from="immerwährende" to="immer währende" />
     <Word from="immerwéhrende" to="immerwährende" />
     <Word from="immerweinen" to="immer weinen" />
     <Word from="Improvisiation" to="Improvisation" />
     <Word from="Impulswellengeschutz" to="Impulswellengeschütz" />
-    <Word from="in" to="in" />
     <Word from="INBRUNSTIGE" to="INBRÜNSTIGE" />
     <Word from="instfindig" to="inständig" />
     <Word from="intramuskulér" to="intramuskulär" />
@@ -3247,7 +3235,6 @@
     <Word from="ITTITTRZ" to="Danke." />
     <Word from="Ivlégliche" to="Mögliche" />
     <Word from="J0Shua" to="Joshua" />
-    <Word from="Ja" to="Ja" />
     <Word from="Jackettkaufen" to="Jackett kaufen" />
     <Word from="jahr" to="Jahr" />
     <Word from="jahre" to="Jahre" />
@@ -4487,7 +4474,6 @@
     <Word from="nutzlich" to="nützlich" />
     <Word from="Nx'emand" to="Niemand" />
     <Word from="O8" to="08" />
-    <Word from="ob" to="ob" />
     <Word from="obdachlosl" to="obdachlos!" />
     <Word from="Obefiléiche" to="Oberfläche" />
     <Word from="OBERFLACHENSCHWERKRAFT" to="OBERFLÄCHENSCHWERKRAFT" />
@@ -4677,8 +4663,6 @@
     <Word from="rachsiichtiger" to="rachsüchtiger" />
     <Word from="ranghéheren" to="ranghöheren" />
     <Word from="ranghfiheren" to="ranghöheren" />
-    <Word from="ranzukommen" to="ran zukommen" />
-    <Word from="ranzukommen" to="ran-zukommen" />
     <Word from="Rasenméherunfall" to="Rasenmäherunfall" />
     <Word from="Rasterllibertragung" to="Rasterübertragung" />
     <Word from="Rasterubertragung" to="Rasterübertragung" />
@@ -4870,8 +4854,6 @@
     <Word from="Runterl" to="Runter!" />
     <Word from="runterspillen" to="runterspülen" />
     <Word from="runterspllllen" to="runterspülen" />
-    <Word from="runterspült" to="runter spült" />
-    <Word from="runterspült" to="runter-spült" />
     <Word from="runtervverfen" to="runterwerfen" />
     <Word from="Rupem" to="Rupert!" />
     <Word from="Rustung" to="Rüstung" />
@@ -5315,7 +5297,6 @@
     <Word from="Slnd" to="Sind" />
     <Word from="Slr" to="Sir" />
     <Word from="Slrs" to="Sirs" />
-    <Word from="So" to="So" />
     <Word from="SoBen" to="Soßen" />
     <Word from="sofortl" to="sofort!" />
     <Word from="sohénen" to="schönen" />
@@ -5351,9 +5332,9 @@
     <Word from="spéit" to="spät" />
     <Word from="spéiter" to="später" />
     <Word from="spektakular" to="spektakulär" />
-    <Word from="Spell" to="Späß" />
+    <Word from="Spell" to="Spaß" />
     <Word from="Spell»" to="Spaß" />
-    <Word from="Spells" to="Späß" />
+    <Word from="Spells" to="Spaß" />
     <Word from="spét" to="spät" />
     <Word from="Spéter" to="Später" />
     <Word from="Spétzchen" to="Spätzchen" />
@@ -5365,7 +5346,6 @@
     <Word from="Spiei" to="Spiel" />
     <Word from="spieie" to="spiele" />
     <Word from="Spielzeuggeschfiftn" to="Spielzeuggeschäft" />
-    <Word from="Spielzeuggeschfiftn" to="Spielzeuggeschäft--" />
     <Word from="spiilte" to="spülte" />
     <Word from="spiiren" to="spüren" />
     <Word from="spiirt" to="spürt" />
@@ -6304,6 +6284,8 @@
     <Word from="vial" to="viel" />
     <Word from="Videoiiben/vachung" to="Videoüberwachung" />
     <Word from="Vie/e" to="Viele" />
+    <Word from="Viei" to="Viel" />
+    <Word from="viei" to="viel" />
     <Word from="Vieien" to="Vielen" />
     <Word from="vieiieicht" to="vielleicht" />
     <Word from="vielféltig" to="vielfältig" />
@@ -6491,7 +6473,7 @@
     <Word from="Weill" to="Weiß" />
     <Word from="weills" to="weiß" />
     <Word from="weillst" to="weißt" />
-    <Word from="weillt" to="weisst" />
+    <Word from="weillt" to="weißt" />
     <Word from="weilS" to="weiß" />
     <Word from="weilSe" to="weiße" />
     <Word from="WeilSglut" to="Weißglut" />
@@ -6573,8 +6555,6 @@
     <Word from="widerspriichliche" to="widersprüchliche" />
     <Word from="Widerwéirtig" to="Widerwärtig" />
     <Word from="wiedergewéihltl" to="wiedergewählt" />
-    <Word from="wiederhaben" to="wieder haben" />
-    <Word from="wiederhaben" to="wieder-haben" />
     <Word from="Wiederhéren" to="Wiederhören" />
     <Word from="Wieheifiternoch" to="Wieheißternoch" />
     <Word from="Wieheiliternoch" to="Wieheißternoch" />
@@ -6837,7 +6817,6 @@
     <Word from="zleht" to="zieht" />
     <Word from="ZLIFUCK" to="zurück" />
     <Word from="Zooschlieliung" to="Zooschließung" />
-    <Word from="zu" to="zu" />
     <Word from="Zuckerschnﬂtchen" to="Zuckerschnütchen" />
     <Word from="zuerstvor" to="zuerst vor" />
     <Word from="Zuféillig" to="Zufällig" />
@@ -7025,6 +7004,7 @@
     <WordPart from="f" to="f " />
     <WordPart from="I" to="l" />
     <WordPart from="i" to="t" />
+    <WordPart from="i" to="l" />
     <WordPart from="ii" to="tt" />
     <WordPart from="ii" to="ü" />
     <WordPart from="IVI" to="M" />
@@ -7106,6 +7086,12 @@
     <!-- traIIer → trailer : I→l mid lowercase word -->
     <RegEx find="\b([a-zäöüß]+)I([a-zäöüß]+)\b" spellCheck="$1l$2" replaceWith="$1l$2" />
 
+    <!-- einmaI → einmal : trailing I→l in lowercase word -->
+    <RegEx find="\b([a-zäöüß]+)I\b" spellCheck="$1l" replaceWith="$1l" />
+
+    <!-- voII → voll / SoII → Soll / AII → All : trailing II→ll -->
+    <RegEx find="\b([A-ZÄÖÜa-zäöüß][a-zäöüß]*)II\b" spellCheck="$1ll" replaceWith="$1ll" />
+
     <!-- trailing I→l in capitalised word (e.g. BerlinI → Berlinl) -->
     <RegEx find="\b([A-ZÄÖÜ][a-zäöüß]+)I\b" spellCheck="$1l" replaceWith="$1l" />
 
@@ -7116,11 +7102,33 @@
     <!-- "Ich" starts with I but is only 3 chars — safe minimum is 4 -->
     <RegEx find="\bI([a-zäöüß]{4,})\b" spellCheck="l$1" replaceWith="l$1" />
 
-    <!-- leading l→I before 2+ lowercase chars -->
-    <RegEx find="\bl([a-zäöüß]{2,})\b" spellCheck="I$1" replaceWith="I$1" />
+    <!-- lst → Ist / ln → In / lm → Im : leading l→I before lowercase chars.  -->
+    <!-- Safe with a single following char too: no German word is "l"+letter, -->
+    <!-- and the spellCheck gate only fires when the I-form is a real word.   -->
+    <RegEx find="\bl([a-zäöüß]+)\b" spellCheck="I$1" replaceWith="I$1" />
 
-    <!-- standalone l → I (Roman numerals, list markers) -->
-    <RegEx find="\bl\b" replaceWith="I" />
+    <!-- No standalone \bl\b → I rule: "l" is the German liter abbreviation  -->
+    <!-- (2 l Milch), and an unconditional rule would corrupt it.            -->
+
+    <!-- ============================================================ -->
+    <!-- ITALIC l MISREAD AS i (#13660)                               -->
+    <!-- Slanted glyphs make binary image compare read l as i:       -->
+    <!--   viel → viei, soll → soii, wollen → woiien                 -->
+    <!-- Correct i-words (Juni/Taxi/Ski) are in the dictionary and   -->
+    <!-- protected by the already-spelled-correctly gate.            -->
+    <!-- ============================================================ -->
+
+    <!-- trailing i→l (viei → viel, Viei → Viel) -->
+    <RegEx find="\b([A-ZÄÖÜa-zäöüß][a-zäöüß]{3,})i\b" spellCheck="$1l" replaceWith="$1l" />
+
+    <!-- double ii→ll (soii → soll, woiien → wollen, Müii → Müll) -->
+    <RegEx find="\b([A-ZÄÖÜa-zäöüß][a-zäöüß]*)ii([a-zäöüß]*)\b" spellCheck="$1ll$2" replaceWith="$1ll$2" />
+
+    <!-- word-initial i to l (iove to love, iieber to lieber) -->
+    <RegEx find="\bi([a-zäöüß]{2,})\b" spellCheck="l$1" replaceWith="l$1" />
+
+    <!-- word-initial ii to ll (iiegar to llegar) -->
+    <RegEx find="\bii([a-zäöüß]+)\b" spellCheck="ll$1" replaceWith="ll$1" />
 
     <!-- ============================================================ -->
     <!-- GERMAN GENITIVE / APOSTROPHE                                 -->
@@ -7210,5 +7218,11 @@
     <!-- inBerlin → in Berlin -->
     <RegEx find="\bin([A-ZÄÖÜ][a-zäöüß]+)\b" spellCheck="$1" replaceWith="in $1" />
 
+
+    <!-- Lowercase l misread as uppercase I (#13660): replace every I in the word, -->
+    <!-- so words with more than one are repaired too (deIectabIe -> delectable,   -->
+    <!-- ExceIIencies -> Excellencies). Words of two letters (AI) are never        -->
+    <!-- touched, and real words (MacIntosh) are kept by the spell check gate.     -->
+    <RegEx find="\b([A-ZÄÖÜa-zäöüß](?=[a-zäöüßI]*I)[a-zäöüßI]{2,})\b" replaceAllFrom="I" replaceAllTo="l" spellCheck="$1" replaceWith="$1" />
   </RegularExpressionsIfSpelledCorrectly>
 </OCRFixReplaceList>

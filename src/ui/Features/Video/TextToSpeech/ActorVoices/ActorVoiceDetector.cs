@@ -130,6 +130,7 @@ public static class ActorVoiceDetector
                 case AzureSpeech when string.IsNullOrWhiteSpace(s.AzureApiKey):
                 case GoogleSpeech when string.IsNullOrWhiteSpace(s.GoogleKeyFile):
                 case MistralSpeech when string.IsNullOrWhiteSpace(s.MistralApiKey):
+                case OpenAiCompatibleSpeech when !OpenAiCompatibleSpeech.IsConfigured():
                     continue;
 
                 case Qwen3TtsCpp when !File.Exists(Qwen3TtsCpp.GetExecutableFileName())
@@ -139,6 +140,17 @@ public static class ActorVoiceDetector
 
                 case KokoroTtsCpp when !File.Exists(KokoroTtsCpp.GetExecutableFileName())
                     || !KokoroTtsCpp.AreModelsInstalled():
+                    continue;
+
+                // Its ten presets are always listed, so unlike the cloning engines (whose voice
+                // lists are empty until something is imported) it would be offered for casting
+                // with no runtime behind it. The model itself may still auto-download.
+                case SupertonicCrispAsr when !File.Exists(SupertonicCrispAsr.GetCrispAsrExecutable()):
+                    continue;
+
+                // Lists its one fixed speaker always, since it stopped posing as a cloning engine.
+                case ZonosTtsCrispAsr when !File.Exists(ZonosTtsCrispAsr.GetCrispAsrExecutable())
+                    || !ZonosTtsCrispAsr.AreModelsInstalled():
                     continue;
             }
 

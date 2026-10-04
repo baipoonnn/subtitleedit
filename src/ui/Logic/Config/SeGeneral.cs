@@ -5,6 +5,7 @@ using Nikse.SubtitleEdit.Core.Enums;
 using Nikse.SubtitleEdit.Core.SubtitleFormats;
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace Nikse.SubtitleEdit.Logic.Config;
 
@@ -13,6 +14,7 @@ public class SeGeneral
     public string Version { get; set; }
     public string Language { get; set; }
     public int LayoutNumber { get; set; } = 0;
+    public int? LayoutMigrationVersion { get; set; }
 
     public string CurrentProfile { get; set; }
     public List<RulesProfile> Profiles { get; set; }
@@ -36,7 +38,27 @@ public class SeGeneral
     public bool FixContinuationStyleIgnoreLyrics { get; set; }
 
 
-    public bool UseFrameMode { get; set; } = false;
+    /// <summary>
+    /// The user's persisted frame-mode choice, stored as "UseFrameMode" in the settings file.
+    /// Read <see cref="UseFrameMode"/> instead, so the temporary override is honored.
+    /// </summary>
+    [JsonPropertyName("UseFrameMode")]
+    public bool UseFrameModePersisted { get; set; }
+
+    /// <summary>
+    /// Session-only frame mode, forced while a frame-based format (EBU STL) is the active
+    /// format (#14076). Managed by the main view when the subtitle format changes; never saved.
+    /// </summary>
+    [JsonIgnore]
+    public bool? UseFrameModeOverride { get; set; }
+
+    [JsonIgnore]
+    public bool UseFrameMode
+    {
+        get => UseFrameModeOverride ?? UseFrameModePersisted;
+        set => UseFrameModePersisted = value;
+    }
+
     public double DefaultFrameRate { get; set; }
     public double CurrentFrameRate { get; set; }
     public string DefaultSubtitleFormat { get; set; }
@@ -61,8 +83,28 @@ public class SeGeneral
     public int NewEmptyDefaultMs { get; set; }
 
     /// <summary>How much the time up/down controls change per step when the caret is on the
-    /// milliseconds part. Frame mode always steps one frame (#12506).</summary>
+    /// milliseconds part, and how much the duration up/down changes per step. Frame mode always
+    /// steps one frame (#12506).</summary>
     public int TimeCodeUpDownStepMs { get; set; }
+    /// <summary>How far the "move selected lines X ms back/forward" shortcuts shift, in
+    /// milliseconds (SE 4 had fixed 100 ms variants; #14789 asks for repeatable drift fixes).</summary>
+    public int MoveSelectedLinesStepMs { get; set; }
+    /// <summary>How far the "move start/end X ms back/forward" shortcuts move a line's start or
+    /// end, in milliseconds - finer than a frame for hitting waveform edges. Visual Sync uses the
+    /// same keys and step to move its video.</summary>
+    public int MoveStartEndStepMs { get; set; }
+    /// <summary>"Move selected lines (and following) X ms": when the move would run into the line
+    /// before/after, shorten that line instead of overlapping it, like VisualSubSync (#15098).</summary>
+    public bool MoveLinesShortenNeighbor { get; set; }
+    /// <summary>Per-shortcut step for the "move lines, custom milliseconds" shortcuts (two slots
+    /// per scope, each used by its back and forward commands). Configured via the gear button in
+    /// Options > Shortcuts, like the custom video seek amounts.</summary>
+    public int MoveSelectedLinesCustom1Ms { get; set; }
+    public int MoveSelectedLinesCustom2Ms { get; set; }
+    public int MoveSelectedLinesAndForwardCustom1Ms { get; set; }
+    public int MoveSelectedLinesAndForwardCustom2Ms { get; set; }
+    public int MoveAllLinesCustom1Ms { get; set; }
+    public int MoveAllLinesCustom2Ms { get; set; }
     public bool PromptBeforeDelete { get; set; }
     public bool LockTimeCodes { get; set; }
 
@@ -80,13 +122,34 @@ public class SeGeneral
     /// </summary>
     public bool ShowOriginalNonMatchingLines { get; set; }
     public bool RememberPositionAndSize { get; set; }
+
+    /// <summary>
+    /// Show the subtitle file's full path in the main window title instead of only its name (#14982).
+    /// </summary>
+    public bool TitleBarFullFileName { get; set; }
     public bool UndockVideoControls { get; set; }
     public List<SeWindowPosition> WindowPositions { get; set; } = new List<SeWindowPosition>();
     public bool AutoSave { get; set; }
     public bool AutoBackupOn { get; set; }
     public int AutoBackupIntervalMinutes { get; set; }
     public int AutoBackupDeleteAfterDays { get; set; }
+    public bool SettingsBackupOn { get; set; }
+    public int SettingsBackupIntervalDays { get; set; }
+    public int SettingsBackupMaxCount { get; set; }
     public bool ForceCrLfOnSave { get; set; }
+
+    /// <summary>
+    /// Linux only: copy text via xclip/wl-copy instead of Avalonia's X11 clipboard, which turns
+    /// non-ASCII characters into '?' for apps requesting the X11 STRING target (issue #15488).
+    /// Falls back to Avalonia when neither tool is installed.
+    /// </summary>
+    public bool LinuxClipboardUseExternalTool { get; set; } = true;
+
+    /// <summary>
+    /// Warn before saving in a format with hard line limits (e.g. SCC's 32 chars x 4 lines) when
+    /// some subtitles exceed them and will be re-wrapped/truncated. Cleared via "Do not show again".
+    /// </summary>
+    public bool ShowFormatLimitWarning { get; set; } = true;
 
     public bool ColorDurationTooShort { get; set; }
     public bool ColorDurationTooLong { get; set; }
@@ -122,7 +185,16 @@ public class SeGeneral
 
     public bool ShowColumnStartTime { get; set; }
     public bool ShowColumnEndTime { get; set; }
+    public bool ShowColumnTeletext { get; set; }
+    public bool TeletextAlignmentPreview { get; set; }
     public bool ShowColumnGap { get; set; }
+
+    /// <summary>
+    /// The "Shot in"/"Shot out" columns: signed distance from the cue to the nearest shot change,
+    /// colored by the beautify time codes profile's zones. Off by default.
+    /// </summary>
+    public bool ShowColumnShotIn { get; set; }
+    public bool ShowColumnShotOut { get; set; }
     public bool ShowColumnDuration { get; set; }
     public bool ShowColumnStyle { get; set; }
     public bool ShowColumnActor { get; set; }
@@ -131,17 +203,41 @@ public class SeGeneral
     public bool ShowColumnPixelWidth { get; set; }
     public bool ShowColumnLayer { get; set; }
 
+    /// <summary>
+    /// The forced-narrative column (#14322). Off by default - only dubbing/localization
+    /// workflows that have to deliver a separate forced file need it.
+    /// </summary>
+    public bool ShowColumnForced { get; set; }
+
     // Subtitle grid column widths (pixels) keyed by column key (DataGridColumn.Tag),
     // snapshotted on exit and restored on startup. The stretchy Text/OriginalText
     // columns are intentionally not stored so they keep filling the window (#11415).
     public Dictionary<string, double> SubtitleGridColumnWidths { get; set; } = new();
 
+    // Subtitle grid column order as column keys (DataGridColumn.Tag), set from the
+    // "Columns..." dialog (#14369). Empty = the built-in default order. Keys missing
+    // from the list (columns added in a later version) keep their default position.
+    public List<string> SubtitleGridColumnOrder { get; set; } = new();
+
     public bool SelectCurrentSubtitleWhilePlaying { get; set; }
     public bool WriteAn2Tag { get; set; }
     public bool AutoTrimWhiteSpace { get; set; }
 
+    /// <summary>
+    /// SE 4 parity (#13588): drop lines with no text when a subtitle file is opened or inserted.
+    /// Off by default, like SE 4.
+    /// </summary>
+    public bool RemoveBlankLinesWhenOpening { get; set; }
+
     public long CurrentVideoOffsetInMs = 0;
     public bool CurrentVideoIsSmpte = false;
+
+    /// <summary>
+    /// Video offsets the user has applied, most recently used first, so the "Set video offset"
+    /// dialog can offer them for one-click reuse instead of retyping the same time code every
+    /// time (SE 4 parity). Capped at ten entries by the dialog.
+    /// </summary>
+    public List<long> VideoOffsetHistoryInMs { get; set; } = new List<long>();
 
     public SeGeneral()
     {
@@ -205,10 +301,21 @@ public class SeGeneral
         AutoGuessAnsiEncoding = true;
         NewEmptyDefaultMs = 2000;
         TimeCodeUpDownStepMs = 100;
+        MoveSelectedLinesStepMs = 100;
+        MoveStartEndStepMs = 10;
+        MoveSelectedLinesCustom1Ms = 10;
+        MoveSelectedLinesCustom2Ms = 1000;
+        MoveSelectedLinesAndForwardCustom1Ms = 10;
+        MoveSelectedLinesAndForwardCustom2Ms = 1000;
+        MoveAllLinesCustom1Ms = 10;
+        MoveAllLinesCustom2Ms = 1000;
         PromptBeforeDelete = true;
         AutoBackupOn = true;
         AutoBackupIntervalMinutes = 5;
         AutoBackupDeleteAfterDays = 90;
+        SettingsBackupOn = true;
+        SettingsBackupIntervalDays = 1;
+        SettingsBackupMaxCount = 30;
         DefaultSaveAsFormat = new SubRip().FriendlyName;
         FavoriteSubtitleFormats = new SubRip().FriendlyName + ";" + new AdvancedSubStationAlpha().FriendlyName;
         FavoriteLanguages = string.Empty;
@@ -244,6 +351,8 @@ public class SeGeneral
         ShowColumnEndTime = true;
         ShowColumnGap = false;
         ShowColumnDuration = true;
+        ShowColumnTeletext = true;
+        TeletextAlignmentPreview = true;
     }
 
     public static void AddExtraProfiles(List<RulesProfile> profiles)
@@ -387,6 +496,23 @@ public class SeGeneral
             SubtitleMaximumDisplayMilliseconds = 5000,
             SubtitleMinimumDisplayMilliseconds = 700,
             SubtitleMaximumWordsPerMinute = 300,
+            CpsLineLengthStrategy = string.Empty,
+            MinimumMillisecondsBetweenLines = 0,
+            DialogStyle = DialogType.DashBothLinesWithSpace,
+            ContinuationStyle = Core.Enums.ContinuationStyle.None
+        });
+        profiles.Add(new RulesProfile
+        {
+            // One to three words per cue, the common Shorts/TikTok caption style (issue #15295).
+            Name = "TikTok/YouTube-shorts (1-3 words)",
+            SubtitleLineMaximumLength = 15,
+            MaxNumberOfLines = 1,
+            MergeLinesShorterThan = 16,
+            SubtitleMaximumCharactersPerSeconds = 30,
+            SubtitleOptimalCharactersPerSeconds = 20,
+            SubtitleMaximumDisplayMilliseconds = 3000,
+            SubtitleMinimumDisplayMilliseconds = 300,
+            SubtitleMaximumWordsPerMinute = 400,
             CpsLineLengthStrategy = string.Empty,
             MinimumMillisecondsBetweenLines = 0,
             DialogStyle = DialogType.DashBothLinesWithSpace,

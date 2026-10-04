@@ -222,7 +222,7 @@ public partial class AssaPropertiesViewModel : ObservableObject
 
     public void Initialize(Subtitle subtitle, SubtitleFormat format, string fileName, string videoFileName, int videoWidth = 0, int videoHeight = 0)
     {
-        Title = string.Format(Se.Language.Assa.PropertiesTitleX, fileName);
+        Title = UiUtil.FormatTitleWithFileName(Se.Language.Assa.PropertiesTitleX, fileName);
         Header = subtitle.Header;
         _videoFileName = videoFileName;
         _currentVideoWidth = videoWidth;
@@ -308,7 +308,9 @@ public partial class AssaPropertiesViewModel : ObservableObject
             else if (s.StartsWith("wrapstyle:", StringComparison.Ordinal))
             {
                 var wrapStyle = line.Trim().Remove(0, 10).Trim();
-                SelectedWrapStyle = WrapStyles.First(p => ((int)p.Style).ToString().Equals(wrapStyle, StringComparison.OrdinalIgnoreCase));
+
+                // WrapStyles only holds 0-3; First() threw on a header with an empty or
+                // out-of-range WrapStyle. The loop below already does the same lookup safely.
                 foreach (var ws in WrapStyles)
                 {
                     if (((int)ws.Style).ToString().Equals(wrapStyle, StringComparison.OrdinalIgnoreCase))

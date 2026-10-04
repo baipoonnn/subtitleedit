@@ -28,6 +28,111 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4.Boxes
         public List<Paragraph> GetParagraphs() => Paragraphs;
 
         /// <summary>
+        /// A QuickTime "c608" sample is a list of atoms: "cdat" holds the field 1 byte pairs
+        /// (CC1/CC2), "cdt2" the field 2 ones (CC3/CC4). Reading the whole sample as byte pairs
+        /// decoded the atom header too, so every caption ended in "cdat" (#15382). Only field 1 is
+        /// decoded; a sample that is not atom-wrapped is read as bare byte pairs.
+        /// The pairs of a sample go out one per video frame from the sample time, see
+        /// <see cref="AddCcPairs"/>.
+        /// </summary>
+        private void AddC608SampleCcData(byte[] sampleData, ulong time, ulong durationTicks)
+        {
+            var pos = 0;
+            var foundAtom = false;
+            while (pos + 8 <= sampleData.Length)
+            {
+                var atomSize = (int)BinaryPrimitives.ReadUInt32BigEndian(sampleData.AsSpan(pos));
+                var atomType = Encoding.ASCII.GetString(sampleData, pos + 4, 4);
+                if (atomSize < 8 || pos + atomSize > sampleData.Length || (atomType != "cdat" && atomType != "cdt2"))
+                {
+                    break;
+                }
+
+                foundAtom = true;
+                if (atomType == "cdat")
+                {
+                    AddCcPairs(sampleData, pos + 8, pos + atomSize, time, durationTicks);
+                }
+
+                pos += atomSize;
+            }
+
+            if (!foundAtom)
+            {
+                AddCcPairs(sampleData, 0, sampleData.Length, time, durationTicks);
+            }
+        }
+
+        /// <summary>
+        /// The cc_data of a QuickTime "c708" caption track (CEA-608 pairs and CEA-708 packets,
+        /// timed in this track's ticks), for <see cref="MP4Parser"/> to decode like the captions
+        /// of a video stream. Empty for other tracks.
+        /// </summary>
+        public List<CcData> C708CcData { get; } = new List<CcData>();
+
+        /// <summary>
+        /// A "c708" sample holds one frame's SMPTE 334 caption distribution packet in a "ccdp"
+        /// atom: 96 69, length, frame rate, flags, sequence counter, an optional time code
+        /// section (flags bit 7), then 0x72 and cc_count cc_data triplets. It used to be read as
+        /// tx3g text - a zero length, so the whole track came out empty.
+        /// </summary>
+        private void AddC708SampleCcData(byte[] sampleData, ulong time)
+        {
+            var pos = 0;
+            while (pos + 8 <= sampleData.Length)
+            {
+                var atomSize = (int)BinaryPrimitives.ReadUInt32BigEndian(sampleData.AsSpan(pos));
+                if (atomSize < 8 || pos + atomSize > sampleData.Length)
+                {
+                    return;
+                }
+
+                var p = pos + 8;
+                var end = pos + atomSize;
+                if (Encoding.ASCII.GetString(sampleData, pos + 4, 4) == "ccdp" && p + 7 <= end &&
+                    sampleData[p] == 0x96 && sampleData[p + 1] == 0x69)
+                {
+                    var q = p + 7 + ((sampleData[p + 4] & 0x80) != 0 ? 5 : 0);
+                    if (q + 2 <= end && sampleData[q] == 0x72)
+                    {
+                        var frame = new List<CcData>();
+                        GetCcDataHelper.AddCcTriplets(sampleData.AsSpan(0, end), q + 2, sampleData[q + 1] & 0x1F, frame);
+                        foreach (var cc in frame)
+                        {
+                            cc.Time = time;
+                        }
+
+                        C708CcData.AddRange(frame);
+                    }
+                }
+
+                pos = end;
+            }
+        }
+
+        /// <summary>
+        /// A sample holds the byte pairs of many frames - one pair per NTSC frame, starting at the
+        /// sample time. Giving them all the sample time made a caption that is shown and replaced
+        /// within one sample a zero-length cue. The pairs are spaced a frame apart, closer when
+        /// they would not fit in the sample, so they never run into the next one.
+        /// </summary>
+        private void AddCcPairs(byte[] data, int start, int end, ulong time, ulong durationTicks)
+        {
+            var pairCount = (end - start) / 2;
+            var frameTicks = TimeScale * 1001.0 / 30000.0;
+            var step = pairCount > 0 ? Math.Min(frameTicks, durationTicks / (double)pairCount) : 0;
+            for (var k = 0; k < pairCount; k++)
+            {
+                var d1 = data[start + k * 2];
+                var d2 = data[start + k * 2 + 1];
+                if (d1 != 0 || d2 != 0)
+                {
+                    _cea608CcData.Add(new CcData(0, d1, d2) { Time = time + (ulong)(k * step) });
+                }
+            }
+        }
+
+        /// <summary>
         /// Color lookup table for <see cref="SubPictures"/>, when the VobSub sample entry
         /// carries one - null means the four default colors are used.
         /// </summary>
@@ -75,7 +180,10 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4.Boxes
                         int version = Buffer[0];
                         var totalEntries = GetUInt(4);
 
-                        var entries = ClampEntries(totalEntries, 8, 4);
+                        // Entry 0 is GetUInt(8), i.e. bytes 8..11 - the helper wants the LAST byte
+                        // of the first entry (the other call sites pass it correctly). With 8 the
+                        // clamp allowed one entry too many and a short/truncated stco threw.
+                        var entries = ClampEntries(totalEntries, 11, 4);
                         ChunkOffsets.Capacity = ChunkOffsets.Count + entries;
                         for (var i = 0; i < entries; i++)
                         {
@@ -93,7 +201,8 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4.Boxes
                         int version = Buffer[0];
                         var totalEntries = GetUInt(4);
 
-                        var entries = ClampEntries(totalEntries, 8, 8);
+                        // Entry 0 is GetUInt64(8), i.e. bytes 8..15 - see the stco note above.
+                        var entries = ClampEntries(totalEntries, 15, 8);
                         ChunkOffsets.Capacity = ChunkOffsets.Count + entries;
                         for (var i = 0; i < entries; i++)
                         {
@@ -131,6 +240,42 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4.Boxes
                         for (var i = 0; i < entries; i++)
                         {
                             SampleSizes.Add(GetUInt(12 + i * 4));
+                        }
+                    }
+                }
+                else if (Name == "stz2") // compact sample sizes
+                {
+                    // ISO/IEC 14496-12 8.7.3.3: same information as "stsz", with the entries
+                    // packed into 4, 8 or 16 bits each instead of a full word. Bento4's
+                    // mp4compact rewrites a file this way, and without this the track came out
+                    // with no sample sizes at all, i.e. no subtitles.
+                    Buffer = new byte[Size - 4];
+                    fs.ReadFully(Buffer, 0, Buffer.Length);
+                    var fieldSize = Buffer[7]; // 3 bytes reserved, then the field size
+                    var sampleCount = GetUInt(8);
+                    StszSampleCount = sampleCount;
+
+                    if (fieldSize == 4 || fieldSize == 8 || fieldSize == 16)
+                    {
+                        var available = Buffer.Length - 12;
+                        var maxEntries = fieldSize == 4 ? available * 2 : available / (fieldSize / 8);
+                        var entries = (int)Math.Min(Math.Min(sampleCount, (uint)maxEntries), MaxRunLengthEntries);
+                        SampleSizes.Capacity = entries;
+                        for (var i = 0; i < entries; i++)
+                        {
+                            switch (fieldSize)
+                            {
+                                case 4:
+                                    var b = Buffer[12 + i / 2];
+                                    SampleSizes.Add((uint)(i % 2 == 0 ? b >> 4 : b & 0x0F));
+                                    break;
+                                case 8:
+                                    SampleSizes.Add(Buffer[12 + i]);
+                                    break;
+                                default:
+                                    SampleSizes.Add((uint)GetWord(12 + i * 2));
+                                    break;
+                            }
                         }
                     }
                 }
@@ -280,7 +425,6 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4.Boxes
             uint samplesPerChunk = 1;
             var max = ChunkOffsets.Count;
             var index = 0;
-            double totalTime = 0;
             ulong totalTicks = 0;
             var stscLookup = GetStscLookup();
             for (var chunkIndex = 0; chunkIndex < max; chunkIndex++)
@@ -301,10 +445,14 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4.Boxes
 
                     var sampleSize = SampleSizes[index];
                     var sampleTime = Ssts[index];
-                    var before = totalTime;
                     var beforeTicks = totalTicks;
-                    totalTime += sampleTime / (double)TimeScale;
                     totalTicks += sampleTime;
+
+                    // From the integer tick count, multiplying before dividing: summing
+                    // per-sample seconds as doubles drifted just below whole milliseconds
+                    // (19.53 s became 19529.99 ms), which displays as 19,529.
+                    var startMs = beforeTicks * 1000.0 / TimeScale;
+                    var endMs = totalTicks * 1000.0 / TimeScale;
 
                     if (sampleSize > 2)
                     {
@@ -318,15 +466,16 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4.Boxes
                             fs.Seek((long)sampleOffset, SeekOrigin.Begin);
                             if (fs.Read(sampleData, 0, sampleData.Length) == sampleData.Length)
                             {
-                                for (var j = 0; j + 1 < sampleData.Length; j += 2)
-                                {
-                                    var d1 = sampleData[j];
-                                    var d2 = sampleData[j + 1];
-                                    if (d1 != 0 || d2 != 0)
-                                    {
-                                        _cea608CcData.Add(new CcData(0, d1, d2) { Time = beforeTicks });
-                                    }
-                                }
+                                AddC608SampleCcData(sampleData, beforeTicks, sampleTime);
+                            }
+                        }
+                        else if (handlerType == "clcp" && stsdCodec == "c708")
+                        {
+                            var sampleData = new byte[sampleSize];
+                            fs.Seek((long)sampleOffset, SeekOrigin.Begin);
+                            if (fs.Read(sampleData, 0, sampleData.Length) == sampleData.Length)
+                            {
+                                AddC708SampleCcData(sampleData, beforeTicks);
                             }
                         }
                         else if (stsdCodec == "wvtt") // WebVTT in MP4 (ISO 14496-30)
@@ -369,7 +518,7 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4.Boxes
 
                             if (wvttText.Length > 0)
                             {
-                                paragraphs.Add(new Paragraph(wvttText.ToString(), before * 1000.0, totalTime * 1000.0));
+                                paragraphs.Add(new Paragraph(wvttText.ToString(), startMs, endMs));
                             }
                         }
                         else if (stsdCodec == "stpp") // TTML/IMSC1 in MP4 (ISO 14496-30)
@@ -380,7 +529,7 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4.Boxes
                                 fs.Seek((long)sampleOffset, SeekOrigin.Begin);
                                 if (fs.Read(sampleData, 0, sampleData.Length) == sampleData.Length)
                                 {
-                                    AddTtmlSample(sampleData, before * 1000.0, (totalTime - before) * 1000.0, paragraphs);
+                                    AddTtmlSample(sampleData, startMs, endMs - startMs, paragraphs);
                                 }
                             }
                         }
@@ -395,7 +544,7 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4.Boxes
                                     var text = Mp4TextSampleHelper.ReadSimpleTextSample(sampleData);
                                     if (!string.IsNullOrEmpty(text))
                                     {
-                                        paragraphs.Add(new Paragraph(text, before * 1000.0, totalTime * 1000.0));
+                                        paragraphs.Add(new Paragraph(text, startMs, endMs));
                                     }
                                 }
                             }
@@ -410,8 +559,8 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4.Boxes
                             if (textSize > 0)
                             {
                                 var p = new Paragraph();
-                                p.StartTime.TotalSeconds = before;
-                                p.EndTime.TotalSeconds = totalTime;
+                                p.StartTime.TotalMilliseconds = startMs;
+                                p.EndTime.TotalMilliseconds = endMs;
 
                                 if (handlerType == "subp") // VobSub created with Mp4Box
                                 {
@@ -463,13 +612,9 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4.Boxes
                 var cea608Parser = new CcDataC608Parser();
                 cea608Parser.DisplayScreen += data =>
                 {
-                    var startMs = data.Start / (double)TimeScale * 1000.0;
-                    var endMs = data.End / (double)TimeScale * 1000.0;
-                    var text = GetC608Text(data.Screen);
-                    if (!string.IsNullOrEmpty(text))
-                    {
-                        paragraphs.Add(new Paragraph(text, startMs, endMs));
-                    }
+                    var startMs = data.Start * 1000.0 / TimeScale;
+                    var endMs = data.End * 1000.0 / TimeScale;
+                    Cea608CueBuilder.Add(paragraphs, SerializedScreenText.GetText(data.Screen), startMs, endMs);
                 };
                 foreach (var cc in _cea608CcData)
                 {
@@ -516,20 +661,6 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4.Boxes
                     }
                 }
             }
-        }
-
-        private static string GetC608Text(SerializedRow[] screen)
-        {
-            var sb = new StringBuilder();
-            foreach (var row in screen)
-            {
-                foreach (var column in row.Columns)
-                {
-                    sb.Append(column.Character);
-                }
-                sb.AppendLine();
-            }
-            return sb.ToString().Trim();
         }
 
         private static string MakeScenaristText(byte[] buffer)

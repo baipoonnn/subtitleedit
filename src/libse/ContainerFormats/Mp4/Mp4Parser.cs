@@ -1,5 +1,6 @@
 ﻿using Nikse.SubtitleEdit.Core.Cea608;
 using Nikse.SubtitleEdit.Core.Common;
+using Nikse.SubtitleEdit.Core.ContainerFormats.Chapters;
 using Nikse.SubtitleEdit.Core.ContainerFormats.Mp4.Boxes;
 using Nikse.SubtitleEdit.Core.SubtitleFormats;
 using System;
@@ -33,9 +34,16 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4
         /// </summary>
         public List<Mp4FragmentedSubtitleTrack> FragmentedSubtitleTracks { get; } = new List<Mp4FragmentedSubtitleTrack>();
 
+        /// <summary>
+        /// CEA-608/708 closed captions from the video track: paragraphs per track key
+        /// (1-4 = CC1-CC4, 100 + n = CEA-708 service n, see <see cref="ClosedCaptionDecoder"/>).
+        /// Empty for a progressive file that has a subtitle track - its video is not scanned.
+        /// </summary>
+        public SortedDictionary<int, List<Paragraph>> ClosedCaptionTracks { get; private set; } = new SortedDictionary<int, List<Paragraph>>();
+
         public Subtitle TrunCea608Subtitle { get; private set; }
         public Subtitle TrunCea708Subtitle { get; private set; }
-        private List<Cea608.CcData> _trunCea608CcData = new List<Cea608.CcData>();
+        private List<Cea608.CcData> _trunCcData = new List<Cea608.CcData>();
         public string DebugInfo { get; private set; }
 
         public List<Trak> GetSubtitleTracks()
@@ -46,8 +54,17 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4
                 return list;
             }
 
+            // A QuickTime chapter track is a plain text track, so without this it would be offered
+            // as a subtitle track - the chapter titles, listed as if they were dialogue.
+            var chapterTrackIds = GetChapterTrackIds();
+
             foreach (var trak in Moov.Tracks)
             {
+                if (trak.Tkhd != null && chapterTrackIds.Contains(trak.Tkhd.TrackId))
+                {
+                    continue;
+                }
+
                 if (trak.Mdia != null && (trak.Mdia.IsTextSubtitle || trak.Mdia.IsVobSubSubtitle || trak.Mdia.IsClosedCaption) &&
                     trak.Mdia.Minf?.Stbl != null && trak.Mdia.Minf.Stbl.GetParagraphs().Count > 0)
                 {
@@ -94,6 +111,89 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4
             }
 
             return list;
+        }
+
+        /// <summary>
+        /// Chapters from the two ways MP4 stores them: the Nero "chpl" box, and a QuickTime chapter
+        /// track that a video track points at with a "chap" track reference. Files written by ffmpeg
+        /// usually contain both, so "chpl" is preferred and the chapter track is only a fallback.
+        /// </summary>
+        public List<Chapter> GetChapters()
+        {
+            if (Moov?.Chpl != null && Moov.Chpl.Chapters.Count > 0)
+            {
+                return Moov.Chpl.Chapters.OrderBy(p => p.StartMilliseconds).ToList();
+            }
+
+            return GetChapterTrackChapters();
+        }
+
+        private List<Chapter> GetChapterTrackChapters()
+        {
+            var chapters = new List<Chapter>();
+            if (Moov?.Tracks == null)
+            {
+                return chapters;
+            }
+
+            var chapterTrackIds = Moov.Tracks
+                .Where(t => t.Tref != null)
+                .SelectMany(t => t.Tref.ChapterTrackIds)
+                .ToList();
+
+            if (chapterTrackIds.Count == 0)
+            {
+                return chapters;
+            }
+
+            foreach (var trak in Moov.Tracks)
+            {
+                if (trak.Tkhd == null || !chapterTrackIds.Contains(trak.Tkhd.TrackId))
+                {
+                    continue;
+                }
+
+                var paragraphs = trak.Mdia?.Minf?.Stbl?.GetParagraphs();
+                if (paragraphs == null)
+                {
+                    continue;
+                }
+
+                foreach (var p in paragraphs)
+                {
+                    chapters.Add(new Chapter(p.StartTime.TotalMilliseconds, p.Text));
+                }
+            }
+
+            return chapters.OrderBy(p => p.StartMilliseconds).ToList();
+        }
+
+        /// <summary>
+        /// Track ids a "chap" reference points at. Those tracks carry chapter titles, not subtitles,
+        /// so callers listing subtitle tracks can leave them out.
+        /// </summary>
+        public HashSet<uint> GetChapterTrackIds()
+        {
+            var ids = new HashSet<uint>();
+            if (Moov?.Tracks == null)
+            {
+                return ids;
+            }
+
+            foreach (var trak in Moov.Tracks)
+            {
+                if (trak.Tref == null)
+                {
+                    continue;
+                }
+
+                foreach (var id in trak.Tref.ChapterTrackIds)
+                {
+                    ids.Add(id);
+                }
+            }
+
+            return ids;
         }
 
         public TimeSpan Duration
@@ -218,6 +318,8 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4
 
             fs.Close();
 
+            ApplyEditListsToMoovSubtitleTracks();
+
             // Surface the fragmented text tracks (DASH/CMAF subtitle representations, or
             // the subtitle tracks of a muxed fMP4); VttcSubtitle is the first of them.
             foreach (var fragmentedTrack in _fragmentedTextTracks)
@@ -233,6 +335,10 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4
 
                 var merged = MergeLinesSameTextUtils.MergeLinesWithSameTextInSubtitle(fragmentedTrack.Subtitle, false, 250);
                 merged.Header = fragmentedTrack.Subtitle.Header;
+                merged.Renumber();
+
+                // The moov track header still carries the edit list for a fragmented track
+                ShiftParagraphs(merged.Paragraphs, GetEditListOffsetMs(FindTrack(fragmentedTrack.TrackId)));
                 merged.Renumber();
 
                 FragmentedSubtitleTracks.Add(new Mp4FragmentedSubtitleTrack
@@ -253,14 +359,135 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4
             }
 
             CheckForTrunCea608();
-            CheckForMoovVideoCea608();
+            CheckForClcpCea708();
+
+            // Finding CEA-608/708 in a progressive file reads every video sample - seconds on a
+            // multi-GB movie - and callers only offer the captions when there is no subtitle
+            // track, so skip the scan when there is one.
+            if (GetSubtitleTracks().Count == 0)
+            {
+                CheckForMoovVideoCea608();
+            }
+        }
+
+        private void ApplyEditListsToMoovSubtitleTracks()
+        {
+            if (Moov?.Tracks == null)
+            {
+                return;
+            }
+
+            foreach (var trak in Moov.Tracks)
+            {
+                var mdia = trak?.Mdia;
+                if (mdia == null || !(mdia.IsTextSubtitle || mdia.IsVobSubSubtitle || mdia.IsClosedCaption))
+                {
+                    continue;
+                }
+
+                var paragraphs = mdia.Minf?.Stbl?.Paragraphs;
+                if (paragraphs == null || paragraphs.Count == 0)
+                {
+                    continue;
+                }
+
+                // A VobSub track's paragraphs are index-paired with its sub pictures, so
+                // dropping one there would misalign every bitmap after it.
+                ShiftParagraphs(paragraphs, GetEditListOffsetMs(trak), dropBeforeZero: !mdia.IsVobSubSubtitle);
+            }
+        }
+
+        /// <summary>
+        /// Offset in milliseconds that the track's edit list (elst) puts between the media
+        /// timeline the samples are timed on and the presentation timeline the player shows.
+        /// Leading empty edits (media time -1) delay the track; a media start time on the
+        /// first real edit moves it earlier. Anything more elaborate than that cannot be
+        /// expressed as a single offset, so only the leading edits are honoured.
+        /// </summary>
+        private double GetEditListOffsetMs(Trak trak)
+        {
+            var entries = trak?.Edts?.Elst?.Entries;
+            if (entries == null || entries.Count == 0)
+            {
+                return 0;
+            }
+
+            var movieTimeScale = Moov?.Mvhd?.TimeScale > 0 ? Moov.Mvhd.TimeScale : 1000UL;
+            var mediaTimeScale = trak.Mdia?.Mdhd?.TimeScale > 0 ? trak.Mdia.Mdhd.TimeScale : movieTimeScale;
+
+            var offsetMs = 0.0;
+            var index = 0;
+            while (index < entries.Count && entries[index].MediaTime < 0)
+            {
+                offsetMs += entries[index].SegmentDuration / (double)movieTimeScale * 1000.0;
+                index++;
+            }
+
+            if (index < entries.Count)
+            {
+                offsetMs -= entries[index].MediaTime / (double)mediaTimeScale * 1000.0;
+            }
+
+            return offsetMs;
+        }
+
+        /// <summary>
+        /// Moves paragraphs onto the presentation timeline. Anything the edit list pushes
+        /// before zero is not presented, so such cues are dropped (or clipped when they
+        /// straddle zero).
+        /// </summary>
+        private static void ShiftParagraphs(List<Paragraph> paragraphs, double offsetMs, bool dropBeforeZero = true)
+        {
+            if (paragraphs == null || Math.Abs(offsetMs) < 0.001)
+            {
+                return;
+            }
+
+            for (var i = paragraphs.Count - 1; i >= 0; i--)
+            {
+                var p = paragraphs[i];
+                var start = p.StartTime.TotalMilliseconds + offsetMs;
+                var end = p.EndTime.TotalMilliseconds + offsetMs;
+                if (end <= 0 && dropBeforeZero)
+                {
+                    paragraphs.RemoveAt(i);
+                    continue;
+                }
+
+                p.StartTime.TotalMilliseconds = start < 0 ? 0 : start;
+                p.EndTime.TotalMilliseconds = end < 0 ? 0 : end;
+            }
+        }
+
+        /// <summary>
+        /// A QuickTime "c708" closed caption track carries both CEA-608 channels and CEA-708
+        /// services; they are decoded into <see cref="ClosedCaptionTracks"/> like the captions
+        /// of a video stream (the video scan then has nothing to add).
+        /// </summary>
+        private void CheckForClcpCea708()
+        {
+            if (Moov?.Tracks == null || TrunCea608Subtitle?.Paragraphs.Count > 0 || TrunCea708Subtitle?.Paragraphs.Count > 0)
+            {
+                return;
+            }
+
+            foreach (var trak in Moov.Tracks)
+            {
+                var stbl = trak?.Mdia?.Minf?.Stbl;
+                if (trak?.Mdia?.IsClosedCaption == true && stbl?.C708CcData.Count > 0)
+                {
+                    var timeScale = stbl.TimeScale > 0 ? stbl.TimeScale : (Moov.Mvhd?.TimeScale ?? 1000UL);
+                    DecodeCcData(stbl.C708CcData, timeScale, trak);
+                    return;
+                }
+            }
         }
 
         private void CheckForMoovVideoCea608()
         {
             try
             {
-                if (TrunCea608Subtitle?.Paragraphs.Count > 0)
+                if (TrunCea608Subtitle?.Paragraphs.Count > 0 || TrunCea708Subtitle?.Paragraphs.Count > 0)
                 {
                     //debugInfo.AppendLine("CheckForMoovVideoCea608: skipped (fragmented path already found data)");
                     return;
@@ -284,6 +511,8 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4
                 //debugInfo.AppendLine($"CheckForMoovVideoCea608: chunks={stbl.ChunkOffsets.Count}, sizes={stbl.SampleSizes.Count}, ssts={stbl.Ssts.Count}, stsc={stbl.Stsc.Count}");
 
                 var timeScale = stbl.TimeScale > 0 ? stbl.TimeScale : (Moov?.Mvhd?.TimeScale ?? 1000UL);
+                var isHevc = stbl.Stsd?.IsHevc == true;
+                var nalLengthSize = stbl.Stsd?.GetNalLengthSize() ?? 4;
                 var ccDataList = new List<CcData>();
                 var samplesScanned = 0;
 
@@ -326,7 +555,7 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4
                                 // old cap). Cap at the actual sample size — GetCcData stops
                                 // at NAL boundaries so the cost is just a few extra reads.
                                 var scanSize = (ulong)sampleSize;
-                                var ccData = GetCcDataHelper.GetCcData(fs, chunkOffset, scanSize);
+                                var ccData = GetCcDataHelper.GetCcData(fs, chunkOffset, scanSize, isHevc, nalLengthSize);
                                 // Use presentation timestamp (DTS + ctts offset) so cc_data from B-frames lands in display order.
                                 var cttsOffset = index < stbl.Ctts.Count ? stbl.Ctts[index] : 0;
                                 var pts = (ulong)((long)totalTicks + cttsOffset);
@@ -347,42 +576,7 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4
 
                 //debugInfo.AppendLine($"CheckForMoovVideoCea608: scanned={samplesScanned}, cea608entries={ccDataList.Count}");
 
-                if (ccDataList.Count == 0)
-                {
-                    return;
-                }
-
-                var sortedCcData = ccDataList.OrderBy(p => p.Time).ToList();
-
-                // CEA-608 (NTSC fields 1 + 2). Isolated in its own try so a
-                // failure in the 608 decoder doesn't suppress the 708 path.
-                var cea608Entries = sortedCcData.Where(c => c.Type == 0 || c.Type == 1).ToList();
-                if (cea608Entries.Count > 0)
-                {
-                    try
-                    {
-                        TrunCea608Subtitle = new Subtitle();
-                        var cea608Parser = new CcDataC608Parser();
-                        cea608Parser.DisplayScreen += data =>
-                        {
-                            var startMs = data.Start / (double)timeScale * 1000.0;
-                            var endMs = data.End / (double)timeScale * 1000.0;
-                            TrunCea608Subtitle.Paragraphs.Add(new Paragraph(GetText(data.Screen), startMs, endMs));
-                        };
-                        foreach (var cc in cea608Entries)
-                        {
-                            cea608Parser.AddData((int)cc.Time, new[] { cc.Data1, cc.Data2 });
-                        }
-                    }
-                    catch (Exception e)
-                    {
-                        SeLogger.Error(e, "Error while parsing MP4 moov video track CEA-608");
-                    }
-                }
-
-                // CEA-708 (DTVCC). Run regardless of 608's success/failure —
-                // many real broadcast MP4s carry only one or the other.
-                DecodeMoovVideoCea708(sortedCcData, timeScale);
+                DecodeCcData(ccDataList, timeScale, videoTracks[0]);
 
                 //debugInfo.AppendLine($"CheckForMoovVideoCea608: paragraphs={TrunCea608Subtitle?.Paragraphs.Count ?? 0}, cea708 paragraphs={TrunCea708Subtitle?.Paragraphs.Count ?? 0}");
             }
@@ -392,217 +586,87 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4
             }
         }
 
-        private void DecodeMoovVideoCea708(List<Cea608.CcData> sortedCcData, ulong timeScale)
+        /// <summary>
+        /// Decodes cc_data (timestamped in video track ticks) into ClosedCaptionTracks,
+        /// TrunCea608Subtitle and TrunCea708Subtitle - shifted by the video track's edit list, like
+        /// the samples of the video they are embedded in.
+        /// </summary>
+        private void DecodeCcData(List<CcData> ccDataList, double timeScale, Trak videoTrak)
         {
-            try
-            {
-                // Step 1: assemble DTVCC packets from the cc_type 3 (PACKET_START)
-                // and cc_type 2 (PACKET_DATA) triplet stream. Each PACKET_START
-                // triplet carries: data1 = packet header (sequence<<6 | size_code),
-                // data2 = first byte of packet content. Subsequent PACKET_DATA
-                // triplets contribute 2 more content bytes each.
-                var packets = new List<DtvccPacket>();
-                DtvccPacket current = null;
-                foreach (var cc in sortedCcData)
-                {
-                    if (cc.Type == 3)
-                    {
-                        if (current != null)
-                        {
-                            packets.Add(current);
-                        }
-                        current = new DtvccPacket { Time = cc.Time, Header = (byte)cc.Data1 };
-                        current.Content.Add((byte)cc.Data2);
-                    }
-                    else if (cc.Type == 2 && current != null)
-                    {
-                        current.Content.Add((byte)cc.Data1);
-                        current.Content.Add((byte)cc.Data2);
-                    }
-                }
-                if (current != null)
-                {
-                    packets.Add(current);
-                }
-
-                if (packets.Count == 0)
-                {
-                    return;
-                }
-
-                // Step 2: for each packet, parse out service blocks. Service 1 is
-                // the primary caption service; we collect its bytes per-packet
-                // (timestamped at the packet's PTS) and feed them to Cea708.Decode.
-                TrunCea708Subtitle = new Subtitle();
-                var state = new Cea708.CommandState();
-                var packetTimesMs = new List<double>();
-
-                foreach (var packet in packets)
-                {
-                    var service1Bytes = ExtractService1(packet);
-                    if (service1Bytes.Length == 0)
-                    {
-                        continue;
-                    }
-
-                    var packetMs = packet.Time / (double)timeScale * 1000.0;
-                    packetTimesMs.Add(packetMs);
-                    var lineIndex = packetTimesMs.Count - 1;
-
-                    var text = Cea708.Cea708.Decode(lineIndex, service1Bytes, state, flush: false);
-                    EmitCea708Paragraph(text, state, packetTimesMs, endMs: packetMs);
-                }
-
-                // Final flush so any text still buffered (no terminating display
-                // command in the stream) still gets surfaced.
-                if (packetTimesMs.Count > 0)
-                {
-                    var tailText = Cea708.Cea708.Decode(packetTimesMs.Count, Array.Empty<byte>(), state, flush: true);
-                    EmitCea708Paragraph(tailText, state, packetTimesMs, endMs: packetTimesMs[packetTimesMs.Count - 1]);
-                }
-
-                if (TrunCea708Subtitle.Paragraphs.Count == 0)
-                {
-                    TrunCea708Subtitle = null;
-                }
-            }
-            catch (Exception e)
-            {
-                SeLogger.Error(e, "Error while parsing MP4 moov video track CEA-708");
-            }
-        }
-
-        // Walk a DTVCC packet's service blocks and return the concatenated bytes
-        // belonging to service 1 (the primary caption service — by far the most
-        // common; extended services 2..63 would carry alternate languages).
-        // Service block header byte: bits 7-5 = service_number, bits 4-0 = block_size.
-        // If service_number == 7, an extended_service_number byte follows.
-        // service_number == 0 with block_size == 0 marks the end of the packet
-        // (NULL service block / padding).
-        private static byte[] ExtractService1(DtvccPacket packet)
-        {
-            var result = new List<byte>();
-            var content = packet.Content;
-            // packet_size_code in the low 6 bits of the header: 0 → 128 bytes,
-            // n → n*2 bytes (TOTAL packet length including the header). Clamp
-            // to what we actually have so a malformed truncated packet doesn't
-            // walk past the buffer.
-            var sizeCode = packet.Header & 0x3F;
-            var declaredPacketBytes = sizeCode == 0 ? 128 : sizeCode * 2;
-            var contentBytesFromHeader = declaredPacketBytes - 1; // minus 1-byte packet header
-            var limit = Math.Min(content.Count, contentBytesFromHeader);
-
-            var i = 0;
-            while (i < limit)
-            {
-                var header = content[i++];
-                var serviceNum = (header >> 5) & 0x07;
-                var blockSize = header & 0x1F;
-
-                if (serviceNum == 0 && blockSize == 0)
-                {
-                    break; // NULL service block — rest of packet is padding
-                }
-
-                if (serviceNum == 7)
-                {
-                    if (i >= limit) break;
-                    serviceNum = content[i++] & 0x3F;
-                }
-
-                if (i + blockSize > limit)
-                {
-                    break; // malformed: declared block runs past packet
-                }
-
-                if (serviceNum == 1 && blockSize > 0)
-                {
-                    for (var j = 0; j < blockSize; j++)
-                    {
-                        result.Add(content[i + j]);
-                    }
-                }
-                i += blockSize;
-            }
-
-            return result.ToArray();
-        }
-
-        private class DtvccPacket
-        {
-            public ulong Time;
-            public byte Header;
-            public List<byte> Content { get; } = new List<byte>();
-        }
-
-        private void EmitCea708Paragraph(string text, Cea708.CommandState state, List<double> frameTimesMs, double endMs)
-        {
-            if (string.IsNullOrEmpty(text))
+            if (ccDataList.Count == 0)
             {
                 return;
             }
 
-            // state.StartLineIndex is set by Cea708.FlushText to the lineIndex of
-            // the first SetText command that contributed to the just-emitted
-            // caption — i.e., when the text "started". Clamp defensively in case
-            // the index isn't valid (e.g., flush with empty state).
-            var startIndex = state.StartLineIndex >= 0 && state.StartLineIndex < frameTimesMs.Count
-                ? state.StartLineIndex
-                : frameTimesMs.Count - 1;
-            var startMs = frameTimesMs[startIndex];
-            TrunCea708Subtitle.Paragraphs.Add(new Paragraph(text.Trim(), startMs, endMs));
+            try
+            {
+                // one frame per timestamp; the decoder puts frames in presentation order itself
+                var decoder = new ClosedCaptionDecoder();
+                var frame = new List<CcData>();
+                var frameTime = ccDataList[0].Time;
+                foreach (var cc in ccDataList)
+                {
+                    if (cc.Time != frameTime)
+                    {
+                        decoder.AddFrame((long)Math.Round(frameTime / timeScale * 1000.0), frame.ToArray());
+                        frame.Clear();
+                        frameTime = cc.Time;
+                    }
+
+                    frame.Add(cc);
+                }
+
+                decoder.AddFrame((long)Math.Round(frameTime / timeScale * 1000.0), frame.ToArray());
+                ClosedCaptionTracks = decoder.Finish(0);
+                var editListOffsetMs = GetEditListOffsetMs(videoTrak);
+                if (editListOffsetMs != 0)
+                {
+                    foreach (var key in ClosedCaptionTracks.Keys.ToList())
+                    {
+                        ShiftParagraphs(ClosedCaptionTracks[key], editListOffsetMs);
+                        if (ClosedCaptionTracks[key].Count == 0)
+                        {
+                            ClosedCaptionTracks.Remove(key);
+                        }
+                    }
+                }
+
+                // CC1 (else the first CEA-608 channel) and CEA-708 service 1 (else the first service)
+                var cea608 = ClosedCaptionTracks.Where(p => p.Key < ClosedCaptionDecoder.Cea708TrackKeyOffset).Select(p => p.Value).FirstOrDefault();
+                var cea708 = ClosedCaptionTracks.Where(p => p.Key > ClosedCaptionDecoder.Cea708TrackKeyOffset).Select(p => p.Value).FirstOrDefault();
+                TrunCea608Subtitle = cea608 != null ? new Subtitle(cea608) : null;
+                TrunCea708Subtitle = cea708 != null ? new Subtitle(cea708) : null;
+            }
+            catch (Exception e)
+            {
+                SeLogger.Error(e, "Error while parsing MP4 video track closed captions");
+            }
         }
+
+        private const double MissingMoovVideoTimeScale = 90000.0;
 
         private void CheckForTrunCea608()
         {
             try
             {
-                TrunCea608Subtitle = new Subtitle();
-                var sortedData = _trunCea608CcData.OrderBy(p => p.Time).ToList();
-                var parser = new CcDataC608Parser();
-                parser.DisplayScreen += DisplayScreen;
-                foreach (var cc in sortedData)
+                // Fragment ticks are media-track times, so prefer the video track's mdhd
+                // timescale; the movie (mvhd) timescale is only a fallback. A bare media
+                // segment without its init segment (no moov) has neither, so assume the
+                // 90 kHz MPEG clock that DASH/HLS video uses - 1000 made every time ~90x too large.
+                double timeScale = Moov == null ? MissingMoovVideoTimeScale : Moov.Mvhd?.TimeScale ?? 1000.0;
+                var videoTrack = GetVideoTracks().FirstOrDefault();
+                if (videoTrack?.Mdia?.Mdhd?.TimeScale > 0)
                 {
-                    parser.AddData((int)cc.Time, new[] { cc.Data1, cc.Data2 });
+                    timeScale = videoTrack.Mdia.Mdhd.TimeScale;
                 }
+
+                DecodeCcData(_trunCcData, timeScale, videoTrack);
+                _trunCcData.Clear();
             }
             catch (Exception e)
             {
                 SeLogger.Error(e, "Error while parsing MP4 TRUN CEA 608");
             }
-        }
-
-        private void DisplayScreen(DataOutput data)
-        {
-            // Fragment ticks are media-track times, so prefer the video track's mdhd
-            // timescale; the movie (mvhd) timescale is only a fallback.
-            var timeScale = Moov?.Mvhd?.TimeScale ?? 1000.0;
-            var videoTrack = GetVideoTracks().FirstOrDefault();
-            if (videoTrack?.Mdia?.Mdhd?.TimeScale > 0)
-            {
-                timeScale = videoTrack.Mdia.Mdhd.TimeScale;
-            }
-
-            var startMs = data.Start / timeScale * 1000.0;
-            var endMs = data.End / timeScale * 1000.0;
-            var p = new Paragraph(GetText(data.Screen), startMs, endMs);
-            TrunCea608Subtitle.Paragraphs.Add(p);
-        }
-
-        private static string GetText(SerializedRow[] dataScreen)
-        {
-            var sb = new StringBuilder();
-
-            foreach (var row in dataScreen)
-            {
-                foreach (var column in row.Columns)
-                {
-                    sb.Append(column.Character);
-                }
-                sb.AppendLine();
-            }
-
-            return sb.ToString().Trim();
         }
 
         private sealed class FragmentedTextTrack
@@ -729,6 +793,9 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4
                     continue;
                 }
 
+                var stsd = trak?.Mdia?.Minf?.Stbl?.Stsd;
+                var isHevc = stsd?.IsHevc == true;
+                var nalLengthSize = stsd?.GetNalLengthSize() ?? 4;
                 var dts = traf.Tfdt.BaseMediaDecodeTime;
                 // trun data offsets are relative to tfhd's base-data-offset when present
                 // (PIFF/Smooth Streaming sets it), and to the moof start otherwise.
@@ -753,15 +820,15 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4
                         var sample = trun.Samples[index];
                         if (sample.Size.HasValue)
                         {
-                            var ccData = GetCcDataHelper.GetCcData(fs, startPosition, sample.Size.Value);
-                            if (ccData.Count > 0)
+                            // A frame carries several cc_data triplets - the CEA-608 pairs of both
+                            // fields and up to ~30 CEA-708 packet bytes - all at the frame's
+                            // presentation time (decode time + composition offset).
+                            var ccData = GetCcDataHelper.GetCcData(fs, startPosition, sample.Size.Value, isHevc, nalLengthSize);
+                            var pts = (long)dts + (sample.TimeOffset ?? 0);
+                            foreach (var cc in ccData)
                             {
-                                if (sample.TimeOffset.HasValue)
-                                {
-                                    ccData[0].Time = (ulong)((long)dts + sample.TimeOffset.Value);
-                                }
-
-                                _trunCea608CcData.Add(ccData[0]); //TODO: can there be more than one?
+                                cc.Time = (ulong)Math.Max(0, pts);
+                                _trunCcData.Add(cc);
                             }
 
                             startPosition += sample.Size.Value;
@@ -885,8 +952,8 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.Mp4
                         ticks += sample.Duration.Value;
                     }
 
-                    var startMs = startTicks / timeScale * 1000.0;
-                    var durationMs = durationTicks / timeScale * 1000.0;
+                    var startMs = startTicks * 1000.0 / timeScale;
+                    var durationMs = durationTicks * 1000.0 / timeScale;
 
                     if (size > 2 && size <= maxSampleSize && samplePosition + size <= (ulong)fs.Length)
                     {

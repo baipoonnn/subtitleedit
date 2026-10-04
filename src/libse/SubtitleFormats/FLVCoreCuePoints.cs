@@ -26,7 +26,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 XmlNode paragraph = xml.CreateElement("CuePoint");
 
                 XmlNode startTime = xml.CreateElement("Time");
-                startTime.InnerText = p.StartTime.TotalMilliseconds.ToString();
+                startTime.InnerText = ((long)Math.Round(p.StartTime.TotalMilliseconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
                 paragraph.AppendChild(startTime);
 
                 XmlNode paragraphType = xml.CreateElement("Type");
@@ -52,7 +52,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 name = xml.CreateElement("Name");
                 name.InnerText = "duration";
                 value = xml.CreateElement("Value");
-                value.InnerText = p.DurationTotalMilliseconds.ToString();
+                value.InnerText = ((long)Math.Round(p.DurationTotalMilliseconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
                 parameter.AppendChild(name);
                 parameter.AppendChild(value);
                 parameters.AppendChild(parameter);
@@ -78,10 +78,8 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
         {
             _errorCount = 0;
 
-            var sb = new StringBuilder();
-            lines.ForEach(line => sb.AppendLine(line));
 
-            string allText = sb.ToString();
+            string allText = JoinLines(lines);
             if (!allText.Contains("<FLVCoreCuePoints") || !allText.Contains("<CuePoint"))
             {
                 return;
@@ -125,7 +123,15 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             for (int i = 0; i < subtitle.Paragraphs.Count; i++)
             {
                 Paragraph p = subtitle.Paragraphs[i];
-                p.EndTime.TotalMilliseconds = p.StartTime.TotalMilliseconds + Utilities.GetOptimalDisplayMilliseconds(p.Text);
+
+                // Only estimate a duration when the cue point carried none: this used to
+                // overwrite unconditionally, throwing away every "duration" parameter the loop
+                // above had just read (and that ToText writes).
+                if (p.DurationTotalMilliseconds < 1)
+                {
+                    p.EndTime.TotalMilliseconds = p.StartTime.TotalMilliseconds + Utilities.GetOptimalDisplayMilliseconds(p.Text);
+                }
+
                 if (i < subtitle.Paragraphs.Count - 1)
                 {
                     Paragraph next = subtitle.Paragraphs[i + 1];

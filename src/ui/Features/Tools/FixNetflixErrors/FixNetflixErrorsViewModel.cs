@@ -23,7 +23,7 @@ using Nikse.SubtitleEdit.UiLogic.Media;
 
 namespace Nikse.SubtitleEdit.Features.Tools.FixNetflixErrors;
 
-public partial class FixNetflixErrorsViewModel : ObservableObject
+public partial class FixNetflixErrorsViewModel : ObservableObject, IClosingCleanup
 {
     public class LanguageItem
     {
@@ -72,6 +72,7 @@ public partial class FixNetflixErrorsViewModel : ObservableObject
     private Subtitle _subtitle;
     private string _videoFileName;
     private readonly Timer _timer;
+    private volatile bool _isClosing;
     private bool _dirty;
     private readonly List<Paragraph> _edited;
 
@@ -97,7 +98,12 @@ public partial class FixNetflixErrorsViewModel : ObservableObject
 
     public void Initialize(Subtitle subtitle, string videoFileName)
     {
-        _subtitle = subtitle;
+        // Snapshot with the ids kept: the caller hands over the live working subtitle, which the
+        // auto-backup timer rebuilds (fresh paragraph ids) on any tick while this dialog is open.
+        // Reading it again at OK time would then hand back ids the caller's row map has never
+        // seen, and the id-based apply (#14053) degrades to a full row rebuild that empties the
+        // original column. Fix common errors snapshots the same way.
+        _subtitle = new Subtitle(subtitle, false);
         _videoFileName = videoFileName;
 
         _ = Task.Run(() =>
@@ -170,7 +176,7 @@ public partial class FixNetflixErrorsViewModel : ObservableObject
             return;
         }
 
-        System.IO.File.WriteAllText(fileName, csvBuilder.ToString());
+        await System.IO.File.WriteAllTextAsync(fileName, csvBuilder.ToString());
 
         _ = await _windowService.ShowDialogAsync<PromptFileSavedWindow, PromptFileSavedViewModel>(Window, vm =>
         {
@@ -191,7 +197,19 @@ public partial class FixNetflixErrorsViewModel : ObservableObject
             var fixedParagraph = Fixes.FirstOrDefault(ri => ri.Index == index);
             if (fixedParagraph != null && fixedParagraph.Apply)
             {
-                p.Text = fixedParagraph.After;
+                // Apply the whole fixed paragraph, not just its text: writing only Text left
+                // every timing fix (minimum duration, gaps, shot changes) with no effect at all.
+                var fixedFrom = fixedParagraph.Record?.FixedParagraph;
+                if (fixedFrom != null)
+                {
+                    p.Text = fixedFrom.Text;
+                    p.StartTime.TotalMilliseconds = fixedFrom.StartTime.TotalMilliseconds;
+                    p.EndTime.TotalMilliseconds = fixedFrom.EndTime.TotalMilliseconds;
+                }
+                else
+                {
+                    p.Text = fixedParagraph.After;
+                }
             }
 
             FixedSubtitle.Paragraphs.Add(p);
@@ -230,6 +248,11 @@ public partial class FixNetflixErrorsViewModel : ObservableObject
 
     private void TimerElapsed(object? sender, ElapsedEventArgs e)
     {
+        if (_isClosing)
+        {
+            return;
+        }
+
         _timer.Stop();
 
         try
@@ -245,7 +268,24 @@ public partial class FixNetflixErrorsViewModel : ObservableObject
             return;
         }
 
-        _timer.Start();
+        // Guard the restart: OnClosingCleanup may have disposed the timer while this handler ran,
+        // and Start() on a disposed timer throws ObjectDisposedException (no longer swallowed on
+        // modern .NET), crashing the app from a thread-pool thread. (#12739)
+        if (!_isClosing)
+        {
+            _timer.Start();
+        }
+    }
+
+    /// <summary>
+    /// Runs on every close path via the central hook in <see cref="UiUtil.InitializeWindow"/>.
+    /// Without it the preview timer kept ticking - and the view model, its subtitle and the closed
+    /// window's fix list stayed alive with it - for the rest of the session, once per dialog open.
+    /// </summary>
+    public void OnClosingCleanup()
+    {
+        _isClosing = true;
+        _timer.StopAndDispose(TimerElapsed);
     }
 
     private void GeneratePreview()
@@ -273,6 +313,14 @@ public partial class FixNetflixErrorsViewModel : ObservableObject
 
         // Map paragraph to proposed text changes (ignore pure timing-only changes for now)
         var fixMap = new Dictionary<int, (string Before, string After, Paragraph P, NetflixQualityController.Record)>();
+
+        // A check can flag most lines, so a Paragraphs.IndexOf per record is quadratic.
+        var paragraphIndexes = new Dictionary<Paragraph, int>(_subtitle.Paragraphs.Count);
+        for (var i = 0; i < _subtitle.Paragraphs.Count; i++)
+        {
+            paragraphIndexes.TryAdd(_subtitle.Paragraphs[i], i);
+        }
+
         foreach (var r in controller.Records)
         {
             if (r.OriginalParagraph == null)
@@ -280,19 +328,42 @@ public partial class FixNetflixErrorsViewModel : ObservableObject
                 continue;
             }
 
-            var idx = _subtitle.Paragraphs.IndexOf(r.OriginalParagraph);
-            if (idx < 0)
+            if (!paragraphIndexes.TryGetValue(r.OriginalParagraph, out var idx))
+            {
+                continue;
+            }
+
+            if (r.FixedParagraph == null)
             {
                 continue;
             }
 
             var before = r.OriginalParagraph.Text;
-            var after = r.FixedParagraph?.Text;
-            if (!string.IsNullOrEmpty(after) && !string.Equals(before, after, StringComparison.Ordinal))
+            var after = r.FixedParagraph.Text;
+            var textChanged = !string.IsNullOrEmpty(after) && !string.Equals(before, after, StringComparison.Ordinal);
+
+            // Several checks (minimum duration, two-frames gap, maximum duration, bridge gaps,
+            // shot changes) produce a fix that only moves the times - comparing text alone meant
+            // those never became a fixable row at all, so the tool could report them but never
+            // correct them.
+            var timesChanged =
+                Math.Abs(r.OriginalParagraph.StartTime.TotalMilliseconds - r.FixedParagraph.StartTime.TotalMilliseconds) > 0.5 ||
+                Math.Abs(r.OriginalParagraph.EndTime.TotalMilliseconds - r.FixedParagraph.EndTime.TotalMilliseconds) > 0.5;
+
+            if (!textChanged && !timesChanged)
             {
-                // If multiple fixes affect the same paragraph, keep last suggestion
-                fixMap[idx] = (before, after, r.OriginalParagraph, r);
+                continue;
             }
+
+            if (!textChanged)
+            {
+                // Nothing to show in a text diff - show the timing change instead.
+                before = r.OriginalParagraph.StartTime.ToDisplayString() + " --> " + r.OriginalParagraph.EndTime.ToDisplayString();
+                after = r.FixedParagraph.StartTime.ToDisplayString() + " --> " + r.FixedParagraph.EndTime.ToDisplayString();
+            }
+
+            // If multiple fixes affect the same paragraph, keep last suggestion
+            fixMap[idx] = (before, after, r.OriginalParagraph, r);
         }
 
         if (fixMap.Count == 0)

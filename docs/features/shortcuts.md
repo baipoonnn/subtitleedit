@@ -47,11 +47,26 @@ Independent of the thematic category, each command has a scope shown in the **Ac
 Some commands have additional configuration beyond the shortcut key:
 
 - **Set color 1–8** — Choose a color for each color shortcut
-- **Surround with 1–3** — Define the left/right text to surround selected text with
-- **Video move custom 1–2 back/forward** — Set the number of milliseconds to skip
+- **Surround with 1–8** — Define the left/right text to surround selected text with (this replaces the *Shortcut toggle custom start/end* setting from Subtitle Edit 4), and its **Behavior**: *Toggle* adds the text, or removes it when it is already there; *Add* adds it every time, so pressing the shortcut twice adds it twice; *Remove (all)* only removes it, all at once; *Remove (one each time)* removes one pair per press, so it undoes *Add* step by step. **Works on** picks *Selection, else whole text* (the selected part of the text box, otherwise the whole text of each selected subtitle) or *Each line* (every line of a subtitle gets its own pair, e.g. `[Hello]` / `[Bye]`)
+- **Video move custom 1–4 back/forward** — Set the number of milliseconds to skip
 - **Set actor 1–10** — Define the actor name assigned by each actor shortcut
+- **Custom search 1–5** — Set the name and URL for each search slot
+- **Custom shortcut 1–8** — Build your own shortcut from steps (see below)
+- **Go to first line** / **Go to last line** — Whether the video position follows
 
-Select a configurable command and click **Configure** to adjust its settings.
+Select a configurable command and click the **gear icon** to adjust its settings. The gear sits in the shortcut assignment row below the list, between the key detection button and **Reset** — it is only shown while a configurable command is selected, so if you cannot see it, the selected command has no extra settings.
+
+## Custom Shortcuts
+
+**Custom shortcut 1–8** (group **Custom**) are slots you build yourself. Select one, click the **gear icon**, give it an optional name and add steps that run from top to bottom:
+
+- **Run command** — Runs any command from the shortcuts list (search by name). A command that opens a window waits for it to close before the next step runs.
+- **Insert text** — Inserts text *at cursor* in the text box, or *at start of text* / *at end of text* of every selected line. Line breaks typed in the text box are inserted as line breaks.
+- **Find and replace** — Replaces text in the selected lines, optionally as a **regular expression** (`$1` etc. in the replacement) and **case sensitive**.
+
+Examples: *Insert text* `\N` at end of text to lift a subtitle one line per key press; *Find and replace* regex `(?m)^- ` with `– ` followed by *Run command* **Go to next line**.
+
+**Active in** sets where the key works: *Everywhere*, *Subtitle list view*, *Text box*, *Subtitle list view & text box* or *Waveform* — so the same key can do something else elsewhere. For text box areas use a key with Ctrl/Alt, as a plain key would no longer type. Handy commands for steps: **Focus subtitle list view**, **Focus text box**, **Focus original text box**, **Focus waveform**, **Text box, go to start** and **Text box, go to end** — each step waits for focus to move before the next one runs. Assign a key like for any other command. The text changes of one run are undone in a single step. A custom shortcut cannot run another custom shortcut; a slot without steps does nothing.
 
 ## Resetting Shortcuts
 

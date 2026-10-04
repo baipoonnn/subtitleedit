@@ -1,4 +1,6 @@
-﻿namespace Nikse.SubtitleEdit.Logic.Config.Language;
+﻿using System;
+
+namespace Nikse.SubtitleEdit.Logic.Config.Language;
 
 public class LanguageImageBasedEdit
 {
@@ -23,6 +25,7 @@ public class LanguageImageBasedEdit
     public string ResizeImages { get; set; }
     public string Percentage { get; set; }
     public string ResizeImagesInfo { get; set; }
+    public string OriginalSizeXNewSizeY { get; set; }
     public string AdjustColorDotDotDot { get; set; }
     public string AdjustColor { get; set; }
     public string ColorAdjustmentInfo { get; set; }
@@ -38,11 +41,29 @@ public class LanguageImageBasedEdit
     public string LetterboxCustom { get; set; }
     public string BarHeightPx { get; set; }
     public string TitleSafePercent { get; set; }
+    public string MoveCaptions { get; set; }
+    public string MoveCaptionsDotDotDot { get; set; }
+    public string MoveCaptionsTo { get; set; }
+    public string MoveCaptionsIntoBars { get; set; }
+    public string MoveCaptionsIntoPicture { get; set; }
+    public string MoveCaptionsOffset { get; set; }
+    public string LetterboxBarHeightXPxYOfZCaptionsWillMove { get; set; }
+    public string RemoveFadeInOut { get; set; }
+    public string RemoveFadeInOutXLinesRemoved { get; set; }
+    public string RemoveFadeInOutNothingFound { get; set; }
     public string PositionSummary { get; set; }
     public string XInActivePicture { get; set; }
     public string XInTopBar { get; set; }
     public string XInBottomBar { get; set; }
     public string NoImageSubtitlesLoaded { get; set; }
+    public string ImageBasedFormatNotSupported { get; set; }
+    public string FrameRateDeclaredInFile { get; set; }
+    public string FrameRateDetectedFromTimeCodesX { get; set; }
+    public string FrameRateFromVideo { get; set; }
+    public string FrameRateCurrent { get; set; }
+    public string FrameRateSetManually { get; set; }
+    public string FrameRateUsageInfo { get; set; }
+    public string UseVideoFrameRateXInsteadOfY { get; set; }
 
     public LanguageImageBasedEdit()
     {
@@ -67,6 +88,7 @@ public class LanguageImageBasedEdit
         ResizeImages = "Resize images";
         Percentage = "Percentage";
         ResizeImagesInfo = "Enter the percentage to resize images.\nPreview updates automatically.";
+        OriginalSizeXNewSizeY = "Original: {0} \u00d7 {1} px\nNew: {2} \u00d7 {3} px";
         AdjustColorDotDotDot = "Adjust color...";
         AdjustColor = "Adjust color";
         ColorAdjustmentInfo = "Click the color swatch to pick a color. Bright subtitle pixels shift toward the chosen hue; dark outlines and shadows are preserved.\nPreview shows the first selected subtitle.";
@@ -82,10 +104,28 @@ public class LanguageImageBasedEdit
         LetterboxCustom = "Custom bar height";
         BarHeightPx = "Bar height (px)";
         TitleSafePercent = "Title-safe (%)";
+        MoveCaptions = "Move captions";
+        MoveCaptionsDotDotDot = "Move captions...";
+        MoveCaptionsTo = "Move captions";
+        MoveCaptionsIntoBars = "Into the letterbox bars (outside the picture)";
+        MoveCaptionsIntoPicture = "Inside the picture (out of the bars)";
+        MoveCaptionsOffset = "Offset from edge (px)";
+        LetterboxBarHeightXPxYOfZCaptionsWillMove = "Bar height: {0} px - {1} of {2} captions will move";
+        RemoveFadeInOut = "Remove fade in/out";
+        RemoveFadeInOutXLinesRemoved = "{0} fade lines merged into the lines they belong to";
+        RemoveFadeInOutNothingFound = "No fade in/out lines found";
         PositionSummary = "{0}×{1} - {2} subtitles - bar height: {3} px";
         XInActivePicture = "{0} in picture";
         XInTopBar = "{0} in top bar";
         XInBottomBar = "{0} in bottom bar";
         NoImageSubtitlesLoaded = "No image subtitles loaded";
+        ImageBasedFormatNotSupported = "Image based subtitle format not found/supported.";
+        FrameRateDeclaredInFile = "Frame rate declared in the Blu-ray sup file";
+        FrameRateDetectedFromTimeCodesX = "Frame rate detected from the Blu-ray sup time codes (the file declares {0})";
+        FrameRateFromVideo = "Frame rate of the video";
+        FrameRateCurrent = "Current frame rate";
+        FrameRateSetManually = "Frame rate set manually";
+        FrameRateUsageInfo = "Blu-ray sup, BDN XML, DOST and FCP exports are written at this frame rate. It does not change any times - use \"Change frame rate\" for that.";
+        UseVideoFrameRateXInsteadOfY = "The video's frame rate is {0}, but the subtitle is set to {1}." + Environment.NewLine + Environment.NewLine + "Use the video's frame rate ({0})?";
     }
 }

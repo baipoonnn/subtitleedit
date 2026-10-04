@@ -1,4 +1,4 @@
-using Nikse.SubtitleEdit.Features.Main;
+﻿using Nikse.SubtitleEdit.Features.Main;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -118,6 +118,9 @@ public class SpellCheckManager : SpellChecker, ISpellCheckManager
         if (!ChangeAllDictionary.ContainsKey(fromWord))
         {
             ChangeAllDictionary.Add(fromWord, toWord);
+            // Mirror of RemoveChangeAllWord's UseAlwaysListRemove - without this the pair
+            // lived for the session only and the on-disk list could never grow.
+            WordLists?.UseAlwaysListAdd(fromWord, toWord);
         }
 
         ChangeWord(fromWord, toWord, spellCheckWord, p);
@@ -182,6 +185,8 @@ public class SpellCheckManager : SpellChecker, ISpellCheckManager
                 isCorrect = true;
             }
         }
+
+        isCorrect = isCorrect || IsLowercaseOnlyWordAtSentenceStart(spellCheckWord, text);
 
         if (ChangeAllDictionary.ContainsKey(word) && NotSameSpecialEnding(words[wordIndex], ChangeAllDictionary[word], text))
         {

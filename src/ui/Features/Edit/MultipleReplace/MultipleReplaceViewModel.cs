@@ -1,8 +1,7 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
-using Avalonia.LogicalTree;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -59,7 +58,18 @@ public partial class MultipleReplaceViewModel : ObservableObject
     // checked so a broken one is marked even in an unticked category, so this must not be the
     // compiled cache: see GetRegexError.
     private readonly ConcurrentDictionary<string, string?> _regExErrors;
+    private readonly ConcurrentDictionary<(string FindWhat, bool IgnoreCase), Regex> _wholeWordRegexes = new();
     private readonly Timer _timerReplace;
+
+    /// <summary>
+    /// The preview debounce (250 ms). Internal so the headless tests, which can only observe the
+    /// preview by waiting for this timer, can shorten it instead of sleeping through it.
+    /// </summary>
+    internal double PreviewIntervalMs
+    {
+        get => _timerReplace.Interval;
+        set => _timerReplace.Interval = value;
+    }
     private readonly object _previewLock = new();
     private volatile bool _dirty;
     private volatile bool _closed;
@@ -185,17 +195,9 @@ public partial class MultipleReplaceViewModel : ObservableObject
         _subtitle = subtitle;
         _dirty = true;
 
-        Dispatcher.UIThread.Post(() =>
-        {
-            var allTreeViewItems = FindAllTreeViewItems(RulesTreeView);
-            foreach (var item in allTreeViewItems)
-            {
-                if (item.DataContext is RuleTreeNode node && node.IsCategory)
-                {
-                    item.IsExpanded = node.IsExpanded;
-                }
-            }
-        });
+        // Expanded/collapsed is restored by the tree item container theme binding to
+        // RuleTreeNode.IsExpanded - pushing it onto the containers from here could not work, as
+        // the view model is configured before the window is even constructed (#13526).
     }
 
     private static List<RuleTreeNode> GetNodes()
@@ -226,15 +228,6 @@ public partial class MultipleReplaceViewModel : ObservableObject
 
     private void SaveSettings()
     {
-        var expandedCategories = new List<RuleTreeNode>();
-        foreach (var item in FindAllTreeViewItems(RulesTreeView))
-        {
-            if (item.DataContext is RuleTreeNode node && node.IsCategory && item.IsExpanded)
-            {
-                expandedCategories.Add(node);
-            }
-        }
-
         Se.Settings.Edit.MultipleReplace.Categories.Clear();
         foreach (var category in Nodes)
         {
@@ -242,7 +235,7 @@ public partial class MultipleReplaceViewModel : ObservableObject
             {
                 Name = category.CategoryName,
                 IsActive = category.IsActive,
-                IsExpanded = expandedCategories.Contains(category),
+                IsExpanded = category.IsExpanded,
             };
             Se.Settings.Edit.MultipleReplace.Categories.Add(c);
 
@@ -255,6 +248,7 @@ public partial class MultipleReplaceViewModel : ObservableObject
                     Find = rule.Find,
                     ReplaceWith = rule.ReplaceWith,
                     Type = rule.Type,
+                    WholeWord = rule.WholeWord,
                 });
             }
         }
@@ -305,8 +299,10 @@ public partial class MultipleReplaceViewModel : ObservableObject
         // Apply the currently checked replacements to the document, then make the result the new
         // working subtitle so the next round operates on the already-fixed text - without closing
         // the window (Subtitle Edit 4 had this re-usable "Apply" button - #12029).
-        OnApply?.Invoke(new Subtitle(FixedSubtitle), Fixes.Count(f => f.Apply));
-        _subtitle = new Subtitle(FixedSubtitle);
+        // generateNewId: false - the paragraph ids are how the main window finds the grid row each
+        // line came from, so they must survive every Apply round (#14053).
+        OnApply?.Invoke(new Subtitle(FixedSubtitle, false), Fixes.Count(f => f.Apply));
+        _subtitle = new Subtitle(FixedSubtitle, false);
         _dirty = true;
         GeneratePreview();
     }
@@ -320,6 +316,69 @@ public partial class MultipleReplaceViewModel : ObservableObject
                 FixedSubtitle.Paragraphs[fix.Number - 1].Text = _subtitle.Paragraphs[fix.Number - 1].Text;
             }
         }
+    }
+
+    [RelayCommand]
+    private void SelectAllFixes()
+    {
+        foreach (var fix in Fixes)
+        {
+            fix.Apply = true;
+        }
+    }
+
+    [RelayCommand]
+    private void SelectNoFixes()
+    {
+        foreach (var fix in Fixes)
+        {
+            fix.Apply = false;
+        }
+    }
+
+    [RelayCommand]
+    private void InvertFixesSelection()
+    {
+        foreach (var fix in Fixes)
+        {
+            fix.Apply = !fix.Apply;
+        }
+    }
+
+    /// <summary>
+    /// The gestures advertised by the fixes grid context menu (#13502): tick all, untick all and
+    /// invert the "Apply" column, the same set Remove text for hearing impaired and the rule
+    /// category picker use. Called from a tunneling handler on the grid, which has to run before
+    /// the TableView turns Ctrl+A into "select all rows" - and before the window's own key
+    /// handler, where Ctrl+D means "duplicate rule".
+    /// </summary>
+    internal bool HandleFixesSelectionKey(KeyEventArgs e)
+    {
+        var isCommand = e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta);
+        if (!isCommand || e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+        {
+            return false;
+        }
+
+        var isShift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+        if (e.Key == Key.A && !isShift)
+        {
+            SelectAllFixes();
+        }
+        else if (e.Key == Key.D && !isShift)
+        {
+            SelectNoFixes();
+        }
+        else if (e.Key == Key.I && isShift)
+        {
+            InvertFixesSelection();
+        }
+        else
+        {
+            return false;
+        }
+
+        return true;
     }
 
     [RelayCommand]
@@ -471,7 +530,10 @@ public partial class MultipleReplaceViewModel : ObservableObject
     [RelayCommand]
     private async Task CategoryAddCategory(RuleTreeNode? node)
     {
-        var category = new RuleTreeNode(node, string.Empty, new ObservableCollection<RuleTreeNode>(), true);
+        // Categories are always top-level (they are added to, removed from and reordered inside
+        // Nodes), so the new one has no parent - passing the node whose context menu was used
+        // left a root category claiming another category as its Parent.
+        var category = new RuleTreeNode(null, string.Empty, new ObservableCollection<RuleTreeNode>(), true);
         var result = await _windowService.ShowDialogAsync<EditCategoryWindow, EditCategoryViewModel>(Window!,
             vm =>
             {
@@ -511,21 +573,10 @@ public partial class MultipleReplaceViewModel : ObservableObject
                 Type = result.IsRegularExpression ? MultipleReplaceType.RegularExpression :
                     result.IsCaseSensitive ? MultipleReplaceType.CaseSensitive :
                     MultipleReplaceType.CaseInsensitive,
+                WholeWord = result.IsWholeWord,
             });
             node.SubNodes?.Add(rule);
-
-            Dispatcher.UIThread.Post(() =>
-            {
-                var allTreeViewItems = FindAllTreeViewItems(RulesTreeView);
-                foreach (var item in allTreeViewItems)
-                {
-                    if (item.DataContext == node)
-                    {
-                        item.IsExpanded = true;
-                        break;
-                    }
-                }
-            }, DispatcherPriority.Background);
+            node.IsExpanded = true;
 
             SelectedNode = rule;
             _dirty = true;
@@ -577,7 +628,7 @@ public partial class MultipleReplaceViewModel : ObservableObject
         List<RuleTreeNode>? imported = null;
         try
         {
-            var content = System.IO.File.ReadAllText(fileName);
+            var content = await System.IO.File.ReadAllTextAsync(fileName);
 
             CategoryImportExportItem? temp;
 
@@ -708,12 +759,12 @@ public partial class MultipleReplaceViewModel : ObservableObject
         if (fileName.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
         {
             // UTF-8 with BOM so Excel opens non-ASCII rules correctly.
-            System.IO.File.WriteAllText(fileName, CsvExporter.Export(export), new System.Text.UTF8Encoding(true));
+            await System.IO.File.WriteAllTextAsync(fileName, CsvExporter.Export(export), new System.Text.UTF8Encoding(true));
         }
         else
         {
             var json = JsonSerializer.Serialize(export, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
-            System.IO.File.WriteAllText(fileName, json);
+            await System.IO.File.WriteAllTextAsync(fileName, json);
         }
 
         _ = await _windowService.ShowDialogAsync<PromptFileSavedWindow, PromptFileSavedViewModel>(Window,
@@ -812,6 +863,7 @@ public partial class MultipleReplaceViewModel : ObservableObject
                     CommandParameter = node,
                     InputGesture = MoveToBottomGesture,
                 },
+                MakeMoveToCategoryMenuItem(node),
                 new Separator(),
                 new MenuItem
                 {
@@ -859,6 +911,7 @@ public partial class MultipleReplaceViewModel : ObservableObject
                 node.Type = MultipleReplaceType.CaseInsensitive;
             }
 
+            node.WholeWord = result.IsWholeWord;
             _dirty = true;
         }
     }
@@ -882,6 +935,7 @@ public partial class MultipleReplaceViewModel : ObservableObject
                 Find = node.Find,
                 ReplaceWith = node.ReplaceWith,
                 Type = node.Type,
+                WholeWord = node.WholeWord,
             }));
             _dirty = true;
         }
@@ -984,6 +1038,45 @@ public partial class MultipleReplaceViewModel : ObservableObject
     }
 
     /// <summary>
+    /// "Move to category" submenu with every category except the rule's own - before this a rule
+    /// could only change category by recreating it there and deleting the original (#15374).
+    /// </summary>
+    private MenuItem MakeMoveToCategoryMenuItem(RuleTreeNode node)
+    {
+        var menuItem = new MenuItem { Header = Se.Language.Edit.MultipleReplace.MoveToCategory };
+        foreach (var category in Nodes.Where(p => p.IsCategory && p != node.Parent))
+        {
+            menuItem.Items.Add(new MenuItem
+            {
+                Header = category.CategoryName,
+                Command = new RelayCommand(() => MoveRuleToCategory(node, category)),
+            });
+        }
+
+        menuItem.IsEnabled = menuItem.Items.Count > 0;
+        return menuItem;
+    }
+
+    /// <summary>
+    /// Moves a rule to the end of another category, then expands that category and keeps the
+    /// rule selected so it can be walked into place with Ctrl+Up/Down.
+    /// </summary>
+    internal void MoveRuleToCategory(RuleTreeNode? node, RuleTreeNode? category)
+    {
+        if (node == null || node.IsCategory || node.Parent?.SubNodes == null ||
+            category?.SubNodes == null || !category.IsCategory || category == node.Parent)
+        {
+            return;
+        }
+
+        node.Parent.SubNodes.Remove(node);
+        node.Parent = category;
+        category.SubNodes.Add(node);
+        _dirty = true;
+        NavigateToRule(node);
+    }
+
+    /// <summary>
     /// Reorders a single node inside the collection it lives in and keeps it selected and
     /// focused afterwards - <see cref="ObservableCollection{T}.Move"/> rebuilds the tree
     /// container, which otherwise drops both.
@@ -1005,15 +1098,24 @@ public partial class MultipleReplaceViewModel : ObservableObject
 
         _dirty = true;
         SelectedNode = node;
-        Dispatcher.UIThread.Post(() =>
+        Dispatcher.UIThread.Post(() => FocusNode(node), DispatcherPriority.Input);
+    }
+
+    /// <summary>
+    /// Selects a node and puts keyboard focus back on its row, so the next Ctrl+Up/Down keeps
+    /// walking the same node. <see cref="ItemsControl.ContainerFromItem"/> only ever sees the
+    /// top-level categories, so a rule - which lives one level down - never got its container
+    /// back: focus was left nowhere, the tree handed it to the category above on the next key
+    /// press, and that stole the selection (#14136).
+    /// </summary>
+    private void FocusNode(RuleTreeNode node)
+    {
+        SelectedNode = node;
+        if (RulesTreeView.TreeContainerFromItem(node) is TreeViewItem container)
         {
-            SelectedNode = node;
-            if (RulesTreeView.ContainerFromItem(node) is TreeViewItem container)
-            {
-                container.BringIntoView();
-                container.Focus(NavigationMethod.Directional);
-            }
-        }, DispatcherPriority.Input);
+            container.BringIntoView();
+            container.Focus(NavigationMethod.Directional);
+        }
     }
 
     internal void OnKeyDown(object? sender, KeyEventArgs e)
@@ -1022,6 +1124,15 @@ public partial class MultipleReplaceViewModel : ObservableObject
         {
             e.Handled = true;
             Window?.Close();
+        }
+        else if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.None)
+        {
+            // Initial focus is on the rules tree, not the OK button (a focused button clicks on bare
+            // Space), so Enter has to reach OK from the window - the rules tree and preview grid do
+            // not use Enter themselves. A focused Cancel/Apply button consumes Enter before it bubbles
+            // here, so those keep their own meaning (#14586).
+            e.Handled = true;
+            Ok();
         }
         else if (e.Key == Key.N && e.KeyModifiers == KeyModifiers.Control)
         {
@@ -1095,31 +1206,14 @@ public partial class MultipleReplaceViewModel : ObservableObject
             return;
         }
 
-        var parent = rule.Parent;
-
-        Dispatcher.UIThread.Post(() =>
+        if (rule.Parent != null)
         {
-            var allTreeViewItems = FindAllTreeViewItems(RulesTreeView);
-            foreach (var item in allTreeViewItems)
-            {
-                if (item.DataContext == parent)
-                {
-                    item.IsExpanded = true;
-                    break;
-                }
-            }
+            rule.Parent.IsExpanded = true;
+        }
 
-            Dispatcher.UIThread.Post(() =>
-            {
-                SelectedNode = rule;
-                var container = RulesTreeView.ContainerFromItem(rule) as TreeViewItem;
-                if (container != null)
-                {
-                    container.BringIntoView();
-                    container.Focus(NavigationMethod.Directional);
-                }
-            }, DispatcherPriority.Input);
-        }, DispatcherPriority.Background);
+        // The rule's own container only exists once the category above it has expanded, so
+        // selecting and scrolling to it has to wait for that layout pass.
+        Dispatcher.UIThread.Post(() => FocusNode(rule), DispatcherPriority.Input);
     }
 
     /// <summary>
@@ -1194,19 +1288,10 @@ public partial class MultipleReplaceViewModel : ObservableObject
                         selectedNode = parent.SubNodes[parent.SubNodes.Count - 1];
                     }
 
-                    Dispatcher.UIThread.Post(() =>
+                    if (selectedNode != null)
                     {
-                        if (selectedNode != null)
-                        {
-                            SelectedNode = selectedNode;
-                            var container = RulesTreeView.ContainerFromItem(selectedNode) as TreeViewItem;
-                            if (container != null)
-                            {
-                                container.BringIntoView();
-                                container.Focus(NavigationMethod.Directional);
-                            }
-                        }
-                    }, DispatcherPriority.Input);
+                        Dispatcher.UIThread.Post(() => FocusNode(selectedNode), DispatcherPriority.Input);
+                    }
                 }
             }
         }
@@ -1225,59 +1310,39 @@ public partial class MultipleReplaceViewModel : ObservableObject
     [RelayCommand]
     public void ExpandAll()
     {
-        Dispatcher.UIThread.Post(() =>
-        {
-            var allTreeViewItems = FindAllTreeViewItems(RulesTreeView);
-            foreach (var item in allTreeViewItems)
-            {
-                item.IsExpanded = true;
-            }
-        }, DispatcherPriority.Background);
+        SetAllExpanded(true);
     }
 
     [RelayCommand]
     public void CollapseAll()
     {
-        Dispatcher.UIThread.Post(() =>
-        {
-            var allTreeViewItems = FindAllTreeViewItems(RulesTreeView);
-            foreach (var item in allTreeViewItems)
-            {
-                item.IsExpanded = false;
-            }
-        }, DispatcherPriority.Background);
+        SetAllExpanded(false);
     }
 
-    private static IEnumerable<TreeViewItem> FindAllTreeViewItems(Control parent)
+    private void SetAllExpanded(bool isExpanded)
     {
-        var result = new List<TreeViewItem>();
-        if (parent is TreeViewItem tvi)
+        foreach (var node in Nodes.Where(p => p.IsCategory))
         {
-            result.Add(tvi);
+            node.IsExpanded = isExpanded;
         }
-
-        foreach (var child in parent.GetLogicalDescendants())
-        {
-            if (child is TreeViewItem treeViewItem)
-            {
-                result.Add(treeViewItem);
-            }
-        }
-
-        return result;
     }
 
     private static RuleTreeNode MakeRuleTreeNode(RuleTreeNode node, EditRuleViewModel result)
     {
         return new RuleTreeNode(node.Parent, new MultipleReplaceRule
         {
-            Active = node.IsActive,
+            // "node" is only the neighbour used to find the insert position - a rule the user just
+            // typed must start active, as CategoryAddRule does. Inheriting the neighbour's state
+            // meant inserting next to an unticked rule silently created an unticked one that never
+            // ran, with nothing in the dialog to explain why.
+            Active = true,
             Description = result.Description,
             Find = result.FindWhat,
             ReplaceWith = result.ReplaceWith,
             Type = result.IsRegularExpression ? MultipleReplaceType.RegularExpression :
                 result.IsCaseSensitive ? MultipleReplaceType.CaseSensitive :
                 MultipleReplaceType.CaseInsensitive,
+            WholeWord = result.IsWholeWord,
         });
     }
 
@@ -1313,7 +1378,19 @@ public partial class MultipleReplaceViewModel : ObservableObject
             var ruleHits = new List<ReplaceExpression>();
             foreach (var item in replaceExpressions)
             {
-                if (item.SearchType == ReplaceExpression.SearchCaseSensitive)
+                if (item.WholeWordRegex != null)
+                {
+                    if (item.WholeWordRegex.IsMatch(newText))
+                    {
+                        hit = true;
+                        ruleInfo = string.IsNullOrEmpty(ruleInfo) ? item.RuleInfo : $"{ruleInfo} + {item.RuleInfo}";
+                        ruleHits.Add(item);
+
+                        // An evaluator so the replacement is literal text - a "$" in it is not a group reference.
+                        newText = item.WholeWordRegex.Replace(newText, _ => item.ReplaceWith);
+                    }
+                }
+                else if (item.SearchType == ReplaceExpression.SearchCaseSensitive)
                 {
                     if (newText.Contains(item.FindWhat))
                     {
@@ -1339,7 +1416,12 @@ public partial class MultipleReplaceViewModel : ObservableObject
                     {
                         // Match against line-feed-normalized text so a pattern's \n line break matches even
                         // when the paragraph text uses \r\n (the pattern is FixNewLine'd to \n) (#11956).
-                        if (r.IsMatch(string.Join("\n", newText.SplitToLines())))
+                        // Text without a \r or \u2028 is already in that form - and this runs per
+                        // regex rule, per line, so skip the split and join for it.
+                        var lineFeedText = newText.AsSpan().IndexOfAny('\r', '\u2028') < 0
+                            ? newText
+                            : string.Join("\n", newText.SplitToLines());
+                        if (r.IsMatch(lineFeedText))
                         {
                             var replaced = RegexUtils.ReplaceNewLineSafe(r, newText, item.ReplaceWith);
                             hit = true;
@@ -1433,6 +1515,11 @@ public partial class MultipleReplaceViewModel : ObservableObject
                     : $"Group name: {group.CategoryName} - Rule number: {ruleNumber}. {rule.Description}";
                 var mpi = new ReplaceExpression(findWhat, replaceWith, rule.SearchType, ruleInfo);
                 mpi.RuleTreeNode = rule;
+                if (rule.IsWholeWordActive)
+                {
+                    mpi.WholeWordRegex = GetWholeWordRegex(findWhat, mpi.SearchType != ReplaceExpression.SearchCaseSensitive);
+                }
+
                 replaceExpressions.Add(mpi);
             }
         }
@@ -1489,6 +1576,16 @@ public partial class MultipleReplaceViewModel : ObservableObject
             regex = null!;
             return false;
         }
+    }
+
+    /// <summary>
+    /// The regex a "Whole word" rule runs with: the escaped find text between word boundaries, so
+    /// "Zeyn" no longer matches inside "Zeynep" (#15510). Cached per find text and case setting.
+    /// </summary>
+    private Regex GetWholeWordRegex(string findWhat, bool ignoreCase)
+    {
+        return _wholeWordRegexes.GetOrAdd((findWhat, ignoreCase), static key =>
+            ReplaceExpression.CreateWholeWordRegex(key.FindWhat, key.IgnoreCase));
     }
 
     /// <summary>

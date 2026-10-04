@@ -22,6 +22,11 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
         public override bool IsMine(List<string> lines, string fileName)
         {
+            if (!HasSyncTag(lines))
+            {
+                return false; // LoadSubtitle finds nothing without one
+            }
+
             var sb = new StringBuilder();
             foreach (string l in lines)
             {
@@ -119,21 +124,24 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                     bool tagOn = false;
                     for (int i = 0; i < text.Length; i++)
                     {
-                        string t = text.Substring(i);
-                        if (t.StartsWith('<') &&
-                            (t.StartsWith("<font", StringComparison.Ordinal) ||
-                             t.StartsWith("<div", StringComparison.Ordinal) ||
-                             t.StartsWith("<i", StringComparison.Ordinal) ||
-                             t.StartsWith("<b", StringComparison.Ordinal) ||
-                             t.StartsWith("<s", StringComparison.Ordinal) ||
-                             t.StartsWith("</", StringComparison.Ordinal)))
+                        // text.Substring(i) allocated the whole remaining line on every single
+                        // character just to test a handful of prefixes - quadratic on any line
+                        // carrying a tag. A span slice costs nothing.
+                        var t = text.AsSpan(i);
+                        if (t[0] == '<' &&
+                            (t.StartsWith("<font".AsSpan(), StringComparison.Ordinal) ||
+                             t.StartsWith("<div".AsSpan(), StringComparison.Ordinal) ||
+                             t.StartsWith("<i".AsSpan(), StringComparison.Ordinal) ||
+                             t.StartsWith("<b".AsSpan(), StringComparison.Ordinal) ||
+                             t.StartsWith("<s".AsSpan(), StringComparison.Ordinal) ||
+                             t.StartsWith("</".AsSpan(), StringComparison.Ordinal)))
                         {
                             totalLine.Append(EncodeText(partialLine.ToString()));
                             partialLine.Clear();
                             tagOn = true;
                             totalLine.Append('<');
                         }
-                        else if (t.StartsWith('>') && tagOn)
+                        else if (t[0] == '>' && tagOn)
                         {
                             tagOn = false;
                             totalLine.Append('>');
@@ -236,9 +244,33 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             return new List<string> { languageTag };
         }
 
+        /// <summary>
+        /// Whether a line holds "&lt;sync " in any casing - LoadSubtitle returns without a
+        /// paragraph otherwise. Checking the lines first skips rebuilding, patching and
+        /// lower-casing the whole file, which every SAMI variant did for every file reaching
+        /// it during auto-detect.
+        /// </summary>
+        internal static bool HasSyncTag(List<string> lines)
+        {
+            foreach (var line in lines)
+            {
+                if (line.IndexOf("<sync ", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         public override void LoadSubtitle(Subtitle subtitle, List<string> lines, string fileName)
         {
             _errorCount = 0;
+            if (!HasSyncTag(lines))
+            {
+                return;
+            }
+
             var sb = new StringBuilder();
             foreach (string l in lines)
             {
@@ -280,6 +312,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             }
 
             var p = new Paragraph();
+            var syncs = new List<(long Milliseconds, bool ClearsScreen)>();
             const string expectedChars = @"""'0123456789";
             var className = new StringBuilder();
             var total = new StringBuilder();
@@ -330,6 +363,11 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 }
 
                 string textToLower = text.ToLowerInvariant();
+                if (long.TryParse(millisecondsAsString, out var syncMilliseconds))
+                {
+                    syncs.Add((syncMilliseconds, textToLower.Contains("&nbsp;")));
+                }
+
                 if (textToLower.Contains(" class="))
                 {
                     className.Clear();
@@ -426,21 +464,22 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                     bool tagOn = false;
                     for (int i = 0; i < text.Length && i < 999; i++)
                     {
-                        string tmp = text.Substring(i);
-                        if (tmp.StartsWith('<') &&
-                            (tmp.StartsWith("<font", StringComparison.Ordinal) ||
-                             tmp.StartsWith("<div", StringComparison.Ordinal) ||
-                             tmp.StartsWith("<i", StringComparison.Ordinal) ||
-                             tmp.StartsWith("<b", StringComparison.Ordinal) ||
-                             tmp.StartsWith("<s", StringComparison.Ordinal) ||
-                             tmp.StartsWith("</", StringComparison.Ordinal)))
+                        // Same quadratic Substring(i) scan as the writer above; slice instead.
+                        var tmp = text.AsSpan(i);
+                        if (tmp[0] == '<' &&
+                            (tmp.StartsWith("<font".AsSpan(), StringComparison.Ordinal) ||
+                             tmp.StartsWith("<div".AsSpan(), StringComparison.Ordinal) ||
+                             tmp.StartsWith("<i".AsSpan(), StringComparison.Ordinal) ||
+                             tmp.StartsWith("<b".AsSpan(), StringComparison.Ordinal) ||
+                             tmp.StartsWith("<s".AsSpan(), StringComparison.Ordinal) ||
+                             tmp.StartsWith("</".AsSpan(), StringComparison.Ordinal)))
                         {
                             total.Append(WebUtility.HtmlDecode(partial.ToString()));
                             partial.Clear();
                             tagOn = true;
                             total.Append('<');
                         }
-                        else if (text.Substring(i).StartsWith('>') && tagOn)
+                        else if (tmp[0] == '>' && tagOn)
                         {
                             tagOn = false;
                             total.Append('>');
@@ -517,6 +556,32 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             {
                 p2.Text = p2.Text.Replace('\u00A0', ' '); // non-breaking space to normal space
             }
+
+            if (subtitle.Paragraphs.Count == 0)
+            {
+                AddTimingOnlyParagraphs(subtitle, syncs);
+            }
+        }
+
+        /// <summary>
+        /// A SAMI file can be a timing template: every SYNC is empty, with "&amp;nbsp;" SYNCs
+        /// clearing the screen. Load each empty SYNC as an empty subtitle up to the next SYNC,
+        /// so the timing is not lost (the file used to be rejected as having no subtitles).
+        /// </summary>
+        private static void AddTimingOnlyParagraphs(Subtitle subtitle, List<(long Milliseconds, bool ClearsScreen)> syncs)
+        {
+            syncs.Sort((a, b) => a.Milliseconds.CompareTo(b.Milliseconds));
+            for (var i = 0; i < syncs.Count - 1; i++)
+            {
+                var (start, clearsScreen) = syncs[i];
+                var end = syncs[i + 1].Milliseconds;
+                if (!clearsScreen && end > start)
+                {
+                    subtitle.Paragraphs.Add(new Paragraph(string.Empty, start, end));
+                }
+            }
+
+            subtitle.Renumber();
         }
 
         private string RemoveDiv(string text)

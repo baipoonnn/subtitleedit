@@ -76,6 +76,7 @@ public class ReviewSpeechWindow : Window
         grid.Add(waveform, 1, 0, 1, 2);
         grid.Add(panelButtons, 2, 0, 1, 2);
         grid.Add(checkBoxAutoContinue, 2, 0);
+        grid.Add(MakePositionLabel(vm), 2, 0, 1, 2);
 
         Content = grid;
 
@@ -83,7 +84,7 @@ public class ReviewSpeechWindow : Window
         // focused element) without arming any button: a focused button fires OnClick on bare
         // Space/Enter, and OK used to be focused here - so the first Space a user pressed
         // published the whole session instead of playing the selected line (#12093).
-        Activated += delegate { TableViewExtras.FocusRow(vm.LineGrid); };
+        UiUtil.FocusOnFirstActivation(this, () => { TableViewExtras.FocusRow(vm.LineGrid); });
 
         // Tunnel-stage handlers: see Space/R before the focused control does. KeyDown alone is
         // not enough - Avalonia's Button fires OnClick from OnKeyUp on Space (unconditionally
@@ -151,7 +152,7 @@ public class ReviewSpeechWindow : Window
                 buttonHistory.Bind(Button.OpacityProperty, new Binding(nameof(ReviewRow.HistoryButtonOpacity)));
 
                 var buttonPlay = UiUtil.MakeButton(vm.PlayRowCommand,"fa-solid fa-play")
-                .WithBindIsVisible(nameof(item.IsPlaying), new InverseBooleanConverter())
+                .WithBindIsVisible(nameof(item.IsPlaying), InverseBooleanConverter.Instance)
                 .WithBindEnabled(nameof(item.IsPlayingEnabled));
                 buttonPlay.CommandParameter = item;
 
@@ -233,8 +234,9 @@ public class ReviewSpeechWindow : Window
         };
         if (!string.IsNullOrEmpty(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName))
         {
-            textBox.FontFamily = new FontFamily(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName);
+            textBox.FontFamily = FontFamilyHelper.Make(Se.Settings.Appearance.SubtitleTextBoxAndGridFontName);
         }
+        textBox.WithAccessibleName(Se.Language.General.Text); // edits the selected row's text; no visible label (#12087)
 
         var grid = new Grid
         {
@@ -264,6 +266,14 @@ public class ReviewSpeechWindow : Window
 
         var comboBoxEngines = UiUtil.MakeComboBox(vm.Engines, vm, nameof(vm.SelectedEngine)).WithMinWidth(controlMinWidth);
         comboBoxEngines.SelectionChanged += vm.SelectedEngineChanged;
+        var buttonEngineSettings = UiUtil.MakeButton(string.Empty, vm.ShowEngineSettingsCommand)
+            .WithIconLeft(IconNames.Settings)
+            .WithBindIsVisible(nameof(vm.IsEngineSettingsVisible));
+        if (Se.Settings.Appearance.ShowHints)
+        {
+            ToolTip.SetTip(buttonEngineSettings, Se.Language.General.Settings);
+        }
+
         var buttonElevenLabsRest = UiUtil.MakeButton(Se.Language.General.Reset, vm.ElevenLabsResetCommand)
             .WithIconLeft(IconNames.Repeat)
             .WithBindIsVisible(nameof(vm.IsElevenLabsControlsVisible));
@@ -284,6 +294,7 @@ public class ReviewSpeechWindow : Window
                     MinWidth = labelMinWidth,
                 },
                 comboBoxEngines,
+                buttonEngineSettings,
                 buttonElevenLabsRest,
             }
         };
@@ -332,8 +343,8 @@ public class ReviewSpeechWindow : Window
             {
                 new Label
                 {
-                    Content = Se.Language.General.Region,
                     MinWidth = labelMinWidth,
+                    [!ContentProperty] = new Binding(nameof(vm.RegionLabel)) { Mode = BindingMode.OneWay },
                 },
                 UiUtil.MakeComboBox(vm.Regions, vm, nameof(vm.SelectedRegion)).WithWidth(controlMinWidth),
             },
@@ -624,6 +635,35 @@ public class ReviewSpeechWindow : Window
         return grid;
     }
 
+    private static TextBlock MakePositionLabel(ReviewSpeechViewModel vm)
+    {
+        var label = new TextBlock
+        {
+            [!TextBlock.TextProperty] = new Binding(nameof(vm.PositionText)),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            FontSize = 16,
+            FontFeatures = new FontFeatureCollection { FontFeature.Parse("tnum") },
+            Background = Brushes.Transparent, // hit-testable between the digits
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        if (Se.Settings.Appearance.ShowHints)
+        {
+            ToolTip.SetTip(label, Se.Language.Video.GoToVideoPositionDotDotDot);
+        }
+
+        label.PointerPressed += (_, e) =>
+        {
+            if (e.GetCurrentPoint(label).Properties.IsLeftButtonPressed)
+            {
+                e.Handled = true;
+                vm.ShowGoToPositionCommand.Execute(null);
+            }
+        };
+
+        return label;
+    }
+
     private static Border MakeWaveform(ReviewSpeechViewModel vm)
     {
         // Mirror the main window's waveform theme so the review waveform looks the same as the
@@ -637,6 +677,7 @@ public class ReviewSpeechWindow : Window
             WaveformSelectedColor = settings.WaveformSelectedColor.FromHexToColor(),
             WaveformCursorColor = settings.WaveformCursorColor.FromHexToColor(),
             WaveformShotChangeColor = settings.WaveformShotChangeColor.FromHexToColor(),
+            WaveformGridColor = settings.WaveformGridColor.FromHexToColor(),
             WaveformParagraphLeftColor = settings.WaveformParagraphLeftColor.FromHexToColor(),
             WaveformParagraphRightColor = settings.WaveformParagraphRightColor.FromHexToColor(),
             WaveformFancyHighColor = settings.WaveformFancyHighColor.FromHexToColor(),
@@ -665,6 +706,70 @@ public class ReviewSpeechWindow : Window
             {
                 vm.RefreshWaveformPosition();
             }
+            else if (e.Property == AudioVisualizer.CurrentVideoPositionSecondsProperty)
+            {
+                vm.UpdatePositionText(audioVisualizer.CurrentVideoPositionSeconds);
+            }
+            else if (e.Property == AudioVisualizer.StartPositionSecondsProperty ||
+                     e.Property == AudioVisualizer.ZoomFactorProperty ||
+                     e.Property == BoundsProperty)
+            {
+                // The control only draws the blocks around the view it was last handed, and
+                // nothing here feeds it on a timer like the main window does - so scrolling,
+                // zooming out or widening the window ran past them into empty waveform (#15102).
+                vm.ReloadWaveformParagraphs();
+            }
+        };
+
+        // Clicking or grabbing a block selects its row (#14000). The control only raises
+        // OnPrimarySingleClicked when something listens to OnVideoPositionChanged, hence the
+        // empty playhead handler. OnDragStarted fires on press so the row is selected before a
+        // move/resize mutates it; OnSelectRequested covers right-click-selects.
+        audioVisualizer.OnVideoPositionChanged += (_, _) => { };
+        audioVisualizer.OnPrimarySingleClicked += (_, e) =>
+        {
+            vm.SelectFromWaveform(e.Paragraph);
+            vm.OnWaveformPositionClicked(e.Seconds);
+        };
+        audioVisualizer.OnDragStarted += (_, e) => vm.SelectFromWaveform(e.Paragraph);
+        audioVisualizer.OnSelectRequested += (_, e) => vm.SelectFromWaveform(e.Paragraph);
+
+        // Generated-clip length bar under each block (green fits / red overrun).
+        audioVisualizer.ParagraphAudioLengthProvider = vm.GetWaveformParagraphAudioLength;
+
+        // Context menu: the row actions from the grid plus the two timing fixes that only make
+        // sense here. The target is the row under the pointer (selected on open), so the items
+        // take it as CommandParameter rather than relying on SelectedLine.
+        var menuPlay = new MenuItem { Header = Se.Language.Video.TextToSpeech.PlayLine, Command = vm.PlayRowCommand };
+        var menuRegenerate = new MenuItem { Header = Se.Language.Video.TextToSpeech.RegenerateAudio, Command = vm.RegenerateAudioCommand };
+        var menuHistory = new MenuItem { Header = Se.Language.General.ShowHistory, Command = vm.ShowHistoryCommand };
+        var menuFit = new MenuItem { Header = Se.Language.Video.TextToSpeech.FitDurationToGeneratedAudio, Command = vm.FitDurationToAudioCommand };
+        var menuReset = new MenuItem { Header = Se.Language.Video.TextToSpeech.ResetTiming, Command = vm.ResetTimingCommand };
+        var flyout = new MenuFlyout();
+        flyout.Items.Add(menuPlay);
+        flyout.Items.Add(menuRegenerate);
+        flyout.Items.Add(menuHistory);
+        flyout.Items.Add(new Separator());
+        flyout.Items.Add(menuFit);
+        flyout.Items.Add(menuReset);
+        audioVisualizer.MenuFlyout = flyout;
+        audioVisualizer.FlyoutMenuOpening += (_, e) =>
+        {
+            var row = vm.SelectRowAtWaveformPosition(e.PositionInSeconds);
+            foreach (var item in new[] { menuPlay, menuRegenerate, menuHistory, menuFit, menuReset })
+            {
+                item.CommandParameter = row;
+                item.IsEnabled = row != null;
+            }
+
+            if (row != null)
+            {
+                menuPlay.IsEnabled = row.IsPlayingEnabled && !row.IsPlaying;
+                menuRegenerate.IsEnabled = vm.IsRegenerateEnabled && row.IsPlayingEnabled;
+                menuHistory.IsEnabled = row.HasHistory;
+                menuFit.IsEnabled = vm.GetGeneratedAudioLengthSeconds(row) > 0 && !audioVisualizer.IsReadOnly;
+                menuReset.IsEnabled = !audioVisualizer.IsReadOnly;
+            }
         };
 
         return new Border
@@ -678,6 +783,12 @@ public class ReviewSpeechWindow : Window
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
+        if (!e.Handled && FocusManager?.GetFocusedElement() is AudioVisualizer && _vm.OnWaveformKeyDown(e))
+        {
+            e.Handled = true;
+            return;
+        }
+
         _vm.OnKeyDown(e);
     }
 

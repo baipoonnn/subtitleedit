@@ -1,10 +1,10 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Input;
-using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Nikse.SubtitleEdit.Features.Shared;
 using Nikse.SubtitleEdit.Logic.Config;
+using Nikse.SubtitleEdit.Logic;
 using System;
 using System.Collections.ObjectModel;
 using System.Linq;
@@ -21,14 +21,13 @@ public partial class ImageBasedProfileViewModel : ObservableObject
 
     public Window? Window { get; set; }
     public bool OkPressed { get; private set; }
-    public TextBox ProfileNameTextBox { get; internal set; }
+    public Action? FocusProfileName { get; set; }
 
     public ImageBasedProfileViewModel()
     {
         Profiles = new ObservableCollection<ProfileDisplayItem>();
         SelectedProfile = null;
         IsProfileSelected = true;
-        ProfileNameTextBox = new TextBox();
     }
 
     public void Initialize(ObservableCollection<SeExportImagesProfile> profiles, SeExportImagesProfile? selectedProfile)
@@ -52,8 +51,8 @@ public partial class ImageBasedProfileViewModel : ObservableObject
         Profiles.Add(newProfile);
         SelectedProfile = newProfile;
 
-        Dispatcher.UIThread.Invoke(() => { ProfileNameTextBox.Focus(); });
         IsProfileDeleteEnabled = Profiles.Count > 1;
+        FocusProfileName?.Invoke();
     }
 
     [RelayCommand]
@@ -135,6 +134,11 @@ public partial class ImageBasedProfileViewModel : ObservableObject
         {
             e.Handled = true;
             Window?.Close();
+        }
+        else if (UiUtil.IsHelp(e))
+        {
+            e.Handled = true;
+            UiUtil.ShowHelp("features/file", "export-image-based");
         }
     }
 

@@ -19,6 +19,19 @@ public class TextWithSubtitleSyntaxHighlightingConverter : IValueConverter
 {
     private ISpellCheckManager? _spellCheckManager;
 
+    /// <summary>Characters of a line's own text a grid cell ever shows - the rest is an ellipsis.</summary>
+    private const int MaxVisibleLength = 200;
+
+    /// <summary>
+    /// How much of a line is parsed at all in "show formatting" mode. Tags cost nothing on screen
+    /// but still have to be walked, so this only bounds the pathological case; a line of a few
+    /// hundred characters of override tags is ordinary in karaoke and effect files.
+    /// </summary>
+    private const int MaxRawLength = 5000;
+
+    /// <summary>Longest override-tag block whose contents are still parsed into formatting state.</summary>
+    private const int MaxParsedTagLength = 2000;
+
     // Pre-compiled <font> attribute patterns (reused across every grid-row render)
     private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(100);
     private static readonly Regex FontColorRegex = new(@"color\s*=\s*[""']?([^""'\s>]+)[""']?", RegexOptions.IgnoreCase | RegexOptions.Compiled, RegexTimeout);
@@ -28,25 +41,25 @@ public class TextWithSubtitleSyntaxHighlightingConverter : IValueConverter
     // Reuse brushes instead of creating new ones each time. The scheme colors from
     // SubtitleSyntaxTokenizer are theme-dependent, so the brushes are resolved per render and
     // cached per color (the cache stays tiny: both palettes together are 12 colors).
-    private static readonly Dictionary<Color, SolidColorBrush> BrushCache = new();
+    private static readonly Dictionary<Color, ImmutableSolidColorBrush> BrushCache = new();
 
-    private static SolidColorBrush GetBrush(Color color)
+    private static ImmutableSolidColorBrush GetBrush(Color color)
     {
         if (!BrushCache.TryGetValue(color, out var brush))
         {
-            brush = new SolidColorBrush(color);
+            brush = new ImmutableSolidColorBrush(color);
             BrushCache[color] = brush;
         }
 
         return brush;
     }
 
-    private static SolidColorBrush ElementBrush => GetBrush(SubtitleSyntaxTokenizer.ElementColor);
-    private static SolidColorBrush AttributeBrush => GetBrush(SubtitleSyntaxTokenizer.AttributeColor);
-    private static SolidColorBrush CommentBrush => GetBrush(SubtitleSyntaxTokenizer.CommentColor);
-    private static SolidColorBrush CharsBrush => GetBrush(SubtitleSyntaxTokenizer.CharsColor);
-    private static SolidColorBrush ValuesBrush => GetBrush(SubtitleSyntaxTokenizer.ValuesColor);
-    private static SolidColorBrush StyleBrush => GetBrush(SubtitleSyntaxTokenizer.StyleColor);
+    private static ImmutableSolidColorBrush ElementBrush => GetBrush(SubtitleSyntaxTokenizer.ElementColor);
+    private static ImmutableSolidColorBrush AttributeBrush => GetBrush(SubtitleSyntaxTokenizer.AttributeColor);
+    private static ImmutableSolidColorBrush CommentBrush => GetBrush(SubtitleSyntaxTokenizer.CommentColor);
+    private static ImmutableSolidColorBrush CharsBrush => GetBrush(SubtitleSyntaxTokenizer.CharsColor);
+    private static ImmutableSolidColorBrush ValuesBrush => GetBrush(SubtitleSyntaxTokenizer.ValuesColor);
+    private static ImmutableSolidColorBrush StyleBrush => GetBrush(SubtitleSyntaxTokenizer.StyleColor);
 
     // One shared wavy-red underline for all misspelled words - a brush + decoration +
     // collection used to be allocated per misspelled word on every cell repaint.
@@ -97,7 +110,7 @@ public class TextWithSubtitleSyntaxHighlightingConverter : IValueConverter
             return fontFamily;
         }
 
-        fontFamily = new FontFamily(name);
+        fontFamily = FontFamilyHelper.Make(name);
         if (FontFamilyCache.Count < FontFamilyCacheLimit)
         {
             FontFamilyCache[name] = fontFamily;
@@ -116,23 +129,71 @@ public class TextWithSubtitleSyntaxHighlightingConverter : IValueConverter
             return new InlineCollection();
         }
 
-        // Truncate long strings for performance
-        if (str.Length > 200)
-        {
-            str = str.Substring(0, 197).TrimEnd() + "...";
-        }
-
         var formattingType = Se.Settings.Appearance.SubtitleGridFormattingType;
+
+        // "Show formatting" hides the ASSA/HTML tags and renders what they mean, so the length that
+        // matters is the dialogue, not the markup around it. Truncating the raw string first threw
+        // away the text of exactly the lines this mode is for: a karaoke or effect line carrying a
+        // few hundred characters of {\t(...)} became 197 characters of tag and no words at all
+        // (issue #13824). Only pathological lines are cut here, and the visible text is capped
+        // inside MakeShowFormatting instead.
         if (formattingType == (int)SubtitleGridFormattingTypes.ShowFormatting)
         {
-            var lines = MakeShowFormatting(str);
+            if (str.Length > MaxRawLength)
+            {
+                str = str.Substring(0, MaxRawLength);
+            }
+
+            var lines = MakeShowFormatting(str, keepNonVisualTags: false);
             return SpellCheckLines(lines);
+        }
+
+        // "Show formatting, keep non-visual tags" renders the styling like "show formatting" but
+        // leaves the tags the grid cannot render - \pos, \an, \move, \t, \fad, <box>... - as
+        // text, so a positioned or animated line still looks different from a plain one. The
+        // echoed tags carry their own foreground, and skipColouredRuns keeps them out of the
+        // spell check (colored dialogue runs are skipped too, same trade-off as "show tags").
+        if (formattingType == (int)SubtitleGridFormattingTypes.ShowFormattingKeepTags)
+        {
+            if (str.Length > MaxRawLength)
+            {
+                str = str.Substring(0, MaxRawLength);
+            }
+
+            var lines = MakeShowFormatting(str, keepNonVisualTags: true);
+            return SpellCheckLines(lines, skipColouredRuns: true);
+        }
+
+        // "Hide tags" strips the markup and renders what is left as plain themed text - no
+        // colors, fonts or sizes - for translation workflows where the styling only distracts
+        // (issue #13824). Stripping happens before the visible-length truncation for the same
+        // reason ShowFormatting parses first: the cap must spend its characters on dialogue,
+        // not markup. removeDrawingTags because a line that is only a {\p1} vector mask has no
+        // dialogue at all - showing its coordinates would be the clutter this mode exists to hide.
+        if (formattingType == (int)SubtitleGridFormattingTypes.HideTags)
+        {
+            if (str.Length > MaxRawLength)
+            {
+                str = str.Substring(0, MaxRawLength);
+            }
+
+            str = HtmlUtil.RemoveHtmlTags(Utilities.RemoveSsaTags(str, removeDrawingTags: true));
+            if (string.IsNullOrEmpty(str))
+            {
+                return new InlineCollection();
+            }
+        }
+
+        // Truncate long strings for performance
+        if (str.Length > MaxVisibleLength)
+        {
+            str = str.Substring(0, MaxVisibleLength - 3).TrimEnd() + "...";
         }
 
         if (formattingType == (int)SubtitleGridFormattingTypes.ShowTags)
         {
             var lines = MakeShowTags(str);
-            return SpellCheckLines(lines);
+            return SpellCheckLines(lines, skipColouredRuns: true);
         }
 
         // No formatting (default) - walk the line breaks directly instead of SplitToLines(),
@@ -167,7 +228,13 @@ public class TextWithSubtitleSyntaxHighlightingConverter : IValueConverter
         return SpellCheckLines(inlines);
     }
 
-    private InlineCollection SpellCheckLines(InlineCollection lines)
+    /// <param name="skipColouredRuns">
+    /// Set for the "show tags" layout, where markup is split into its own coloured runs and only
+    /// the subtitle's own text is left with no brush. IsBetweenAssaTags/IsInsideHtmlTag look for
+    /// braces and brackets in the run they are given, and a tag-name run is bare ("pos"), so both
+    /// guards returned false and every tag name and attribute value got a red squiggle.
+    /// </param>
+    private InlineCollection SpellCheckLines(InlineCollection lines, bool skipColouredRuns = false)
     {
         if (_spellCheckManager == null || !Se.Settings.Appearance.SubtitleGridLiveSpellCheck)
         {
@@ -183,6 +250,12 @@ public class TextWithSubtitleSyntaxHighlightingConverter : IValueConverter
                 if (inline is not Run run || string.IsNullOrWhiteSpace(run.Text))
                 {
                     newInlines.Add(inline);
+                    continue;
+                }
+
+                if (skipColouredRuns && run.Foreground != null)
+                {
+                    newInlines.Add(run);
                     continue;
                 }
 
@@ -627,11 +700,33 @@ public class TextWithSubtitleSyntaxHighlightingConverter : IValueConverter
         return builder.Build();
     }
 
-    private static InlineCollection MakeShowFormatting(string str)
+    private static InlineCollection MakeShowFormatting(string str, bool keepNonVisualTags)
     {
         // Track current formatting state
         var state = new FormattingState();
         var inlines = new InlineCollection();
+        var visibleLength = 0;
+
+        // Echoed tags (keepNonVisualTags) count as visible characters like any other text, and
+        // are cut by the same cap. Returns false when the cap is hit and parsing must stop.
+        bool AppendTagText(string tagText)
+        {
+            if (tagText.Length == 0)
+            {
+                return true;
+            }
+
+            if (visibleLength + tagText.Length > MaxVisibleLength)
+            {
+                var keep = Math.Max(0, MaxVisibleLength - visibleLength - 3);
+                inlines.Add(CreateTagRun(tagText.Substring(0, keep).TrimEnd() + "..."));
+                return false;
+            }
+
+            visibleLength += tagText.Length;
+            inlines.Add(CreateTagRun(tagText));
+            return true;
+        }
 
         // Limit iterations to prevent infinite loops (should never exceed string length)
         var maxIterations = str.Length * 2; // Safety margin
@@ -648,9 +743,27 @@ public class TextWithSubtitleSyntaxHighlightingConverter : IValueConverter
             if (c == '{' && c2 == '\\')
             {
                 var tagEnd = str.IndexOf('}', i + 2);
-                if (tagEnd != -1 && tagEnd - i < 500) // Limit tag length to prevent malicious input
+                if (tagEnd != -1)
                 {
-                    ParseAssaTags(str, i + 1, tagEnd, state); // Content between { and }
+                    // A single block of override tags can be long - the animated karaoke lines in
+                    // issue #13824 run past 300 characters - so length decides how much of it is
+                    // interpreted, never whether it counts as a tag. Printing the braces as text
+                    // is the one outcome nobody wants from a mode whose job is hiding them.
+                    if (tagEnd - i < MaxParsedTagLength)
+                    {
+                        ParseAssaTags(str, i + 1, tagEnd, state); // Content between { and }
+                        if (keepNonVisualTags && !AppendTagText(GetNonVisualAssaTags(str, i + 1, tagEnd)))
+                        {
+                            break;
+                        }
+                    }
+                    else if (keepNonVisualTags && !AppendTagText(str.Substring(i, tagEnd + 1 - i)))
+                    {
+                        // Too long to interpret at all - nothing of it was rendered, so all of
+                        // it is shown.
+                        break;
+                    }
+
                     i = tagEnd + 1;
                     continue;
                 }
@@ -710,6 +823,7 @@ public class TextWithSubtitleSyntaxHighlightingConverter : IValueConverter
                         contentStart,
                         (tagNameEnd > contentStart ? tagNameEnd : contentEnd) - contentStart);
 
+                    var isRenderedTag = true;
                     if (isClosingTag)
                     {
                         // Handle closing tags
@@ -731,6 +845,10 @@ public class TextWithSubtitleSyntaxHighlightingConverter : IValueConverter
                             state.FontName = null;
                             state.FontSize = null;
                         }
+                        else
+                        {
+                            isRenderedTag = false;
+                        }
                     }
                     else
                     {
@@ -751,7 +869,19 @@ public class TextWithSubtitleSyntaxHighlightingConverter : IValueConverter
                         {
                             ParseFontTag(str.AsSpan(contentStart, contentEnd - contentStart), state);
                         }
+                        else
+                        {
+                            isRenderedTag = false;
+                        }
                     }
+
+                    // An HTML tag the grid has no rendering for (<box>, <ruby>, <span>...) is
+                    // echoed as text in the keep-tags mode.
+                    if (keepNonVisualTags && !isRenderedTag && !AppendTagText(str.Substring(i, tagEnd + 1 - i)))
+                    {
+                        break;
+                    }
+
                     i = tagEnd + 1;
                     continue;
                 }
@@ -803,13 +933,120 @@ public class TextWithSubtitleSyntaxHighlightingConverter : IValueConverter
 
             if (textLength > 0)
             {
+                // The cap is on what is shown, not on what was read: hidden tags do not eat into
+                // the line's visible characters (issue #13824).
                 var text = str.Substring(textStart, textLength);
-                var run = CreateFormattedRun(text, state);
-                inlines.Add(run);
+                if (visibleLength + text.Length > MaxVisibleLength)
+                {
+                    var keep = Math.Max(0, MaxVisibleLength - visibleLength - 3);
+                    inlines.Add(CreateFormattedRun(text.Substring(0, keep).TrimEnd() + "...", state));
+                    break;
+                }
+
+                visibleLength += text.Length;
+                inlines.Add(CreateFormattedRun(text, state));
             }
         }
 
         return inlines;
+    }
+
+    /// <summary>
+    /// A run for a tag echoed as text in the keep-tags mode: no dialogue styling, the "show tags"
+    /// element color so it reads as markup rather than as part of the line.
+    /// </summary>
+    private static Run CreateTagRun(string text)
+    {
+        return new Run(text) { Foreground = ElementBrush };
+    }
+
+    /// <summary>
+    /// The override tags in source[start..end) that <see cref="ParseAssaTags"/> does not render
+    /// - everything but reset, italic, bold, underline, font name, font size and primary color -
+    /// re-wrapped in braces, or an empty string when the block was fully rendered. Splits on a
+    /// backslash outside parentheses so a \t(...) transition stays one tag, colors inside it
+    /// included: the transition as a whole is what the grid cannot show.
+    /// </summary>
+    private static string GetNonVisualAssaTags(string source, int start, int end)
+    {
+        var content = source.AsSpan(start, end - start);
+        StringBuilder? sb = null;
+        var pos = 0;
+        while (pos < content.Length)
+        {
+            if (content[pos] != '\\')
+            {
+                pos++;
+                continue;
+            }
+
+            var tagStart = pos;
+            var depth = 0;
+            pos++;
+            while (pos < content.Length)
+            {
+                var ch = content[pos];
+                if (ch == '(')
+                {
+                    depth++;
+                }
+                else if (ch == ')' && depth > 0)
+                {
+                    depth--;
+                }
+                else if (ch == '\\' && depth == 0)
+                {
+                    break;
+                }
+
+                pos++;
+            }
+
+            var tag = content.Slice(tagStart + 1, pos - tagStart - 1).Trim();
+            if (tag.Length == 0 || IsRenderedAssaTag(tag))
+            {
+                continue;
+            }
+
+            sb ??= new StringBuilder(end - start + 2).Append('{');
+            sb.Append('\\').Append(tag);
+        }
+
+        if (sb == null)
+        {
+            return string.Empty;
+        }
+
+        return sb.Append('}').ToString();
+    }
+
+    /// <summary>Mirrors the tags <see cref="ParseAssaTags"/> turns into run formatting.</summary>
+    private static bool IsRenderedAssaTag(ReadOnlySpan<char> tag)
+    {
+        var c0 = tag[0];
+        var c1 = tag.Length > 1 ? tag[1] : '\0';
+        if (c0 == 'r' && tag.Length == 1)
+        {
+            return true;
+        }
+
+        if ((c0 == 'i' || c0 == 'b' || c0 == 'u') && char.IsDigit(c1))
+        {
+            return true;
+        }
+
+        if (c0 == 'f' && (c1 == 'n' || c1 == 's') && tag.Length > 2)
+        {
+            // \fs20 is rendered; \fsp, \fscx and \fscy are not.
+            return c1 == 'n' || char.IsDigit(tag[2]) || tag[2] == '.' || tag[2] == '-';
+        }
+
+        if (c0 == 'c' && (tag.Length == 1 || !char.IsLetterOrDigit(c1)))
+        {
+            return true;
+        }
+
+        return c0 == '1' && c1 == 'c';
     }
 
     /// <summary>
@@ -911,7 +1148,9 @@ public class TextWithSubtitleSyntaxHighlightingConverter : IValueConverter
         // wrote to the state only inside each attribute's success branch.
         if (values.Color.HasValue)
         {
-            state.Color = values.Color;
+            // Same readability guard as the ASSA path (#13824): a <font> color that vanishes
+            // into the grid background falls back to the default foreground.
+            state.Color = IsColorVisible(values.Color.Value) ? values.Color : null;
         }
 
         if (values.FontName != null)
@@ -1119,7 +1358,12 @@ public class TextWithSubtitleSyntaxHighlightingConverter : IValueConverter
             }
 
             // Primary color: \c&HBBGGRR& or \1c&HBBGGRR& or \c (reset color)
-            if (firstChar == 'c' && (tagLen == 1 || !char.IsDigit(trimmedTag[1])))
+            // Exclude a LETTER after the "c" as well as a digit: "\clip" passed the digit-only
+            // test, so a block like "{\clip(0,0,100,100)}" was treated as a colour tag with no
+            // parseable colour and the fall-through then cleared state.Color - the rest of the
+            // line lost its colour in the grid while libass and SE's own preview kept it.
+            // SubtitleSyntaxTokenizer.IsAssColorTag does the exact-name comparison.
+            if (firstChar == 'c' && (tagLen == 1 || !char.IsLetterOrDigit(trimmedTag[1])))
             {
                 if (tagLen == 1)
                 {
@@ -1166,10 +1410,12 @@ public class TextWithSubtitleSyntaxHighlightingConverter : IValueConverter
         else if (colorCandidateCount > 0)
         {
             // No transition involved, so ASSA's last-wins rule applies: consecutive static
-            // color tags resolve to the last one, matching libass and the video preview. The
-            // visibility guard deliberately does not apply here - a single explicit color is
-            // shown as authored even when it has little contrast.
-            state.Color = colorCandidates[colorCandidateCount - 1];
+            // color tags resolve to the last one, matching libass and the video preview. But an
+            // authored color with next to no contrast against the grid background makes the
+            // line unreadable (#13824), so the winner is only shown when it is visible at all -
+            // never replaced by an earlier candidate, which would misrepresent the file.
+            var lastColor = colorCandidates[colorCandidateCount - 1];
+            state.Color = IsColorVisible(lastColor) ? lastColor : null;
         }
         else if (sawColorTag)
         {
@@ -1183,7 +1429,13 @@ public class TextWithSubtitleSyntaxHighlightingConverter : IValueConverter
 
     // Below this WCAG contrast ratio a color is treated as unusable against the grid
     // background (pure white on white is 1.0; white on the default dark background is ~17).
-    private const double MinimumVisibleContrast = 1.3;
+    //
+    // 1.3 caught colors that were perfectly legible: on the mid-grey theme in #13929 a speaker's
+    // #5C1FF4 sits at 1.268 and lost its color, while the three other speakers in the same file
+    // kept theirs. The cases this guard exists for are far lower - a color matching the
+    // background exactly is 1.0, and the #232323-on-dark case from #13824 is 1.06-1.15 - so the
+    // threshold can come down without letting any of them back in.
+    private const double MinimumVisibleContrast = 1.2;
 
     /// <summary>
     /// Test hook: the grid background normally follows the active theme, which headless unit
@@ -1204,6 +1456,36 @@ public class TextWithSubtitleSyntaxHighlightingConverter : IValueConverter
         // background. Also swallows a malformed DarkModeBackgroundColor rather than
         // letting it throw out of IValueConverter.Convert.
         return UiTheme.GetThemeBackgroundColor();
+    }
+
+    // Visibility verdicts memoized per (color, background): the same few authored colors repeat
+    // down a whole file and this runs per tag block per cell repaint. Keyed on the background
+    // too so a theme switch cannot serve stale verdicts; capped and dropped wholesale like the
+    // brush caches above because the colors are arbitrary user data.
+    private static readonly Dictionary<(Color Foreground, Color Background), bool> ColorVisibilityCache = new();
+    private const int ColorVisibilityCacheLimit = 256;
+
+    /// <summary>
+    /// Whether an authored color is readable at all against the current grid background.
+    /// </summary>
+    private static bool IsColorVisible(Color color)
+    {
+        var background = GetGridBackgroundColor();
+        var key = (color, background);
+        if (ColorVisibilityCache.TryGetValue(key, out var visible))
+        {
+            return visible;
+        }
+
+        var luminance = RelativeLuminance(CompositeOver(color, background));
+        visible = ContrastRatio(luminance, RelativeLuminance(background)) >= MinimumVisibleContrast;
+        if (ColorVisibilityCache.Count >= ColorVisibilityCacheLimit)
+        {
+            ColorVisibilityCache.Clear();
+        }
+
+        ColorVisibilityCache[key] = visible;
+        return visible;
     }
 
     private static Color? PickMostVisibleColor(ReadOnlySpan<Color> candidates)

@@ -124,6 +124,11 @@ namespace Nikse.SubtitleEdit.Core.Cea608
             Rows[CurrentRow].InsertChar(character);
         }
 
+        public void InsertMidRowSpace()
+        {
+            Rows[CurrentRow].InsertMidRowSpace();
+        }
+
         public void SetPen(SerializedPenState styles)
         {
             Rows[CurrentRow].SetPenStyles(styles);
@@ -137,6 +142,11 @@ namespace Nikse.SubtitleEdit.Core.Cea608
         public void SetPac(PacData pacData)
         {
             var newRow = pacData.Row - 1;
+            if (NumberOfRollUpRows != null && newRow != CurrentRow)
+            {
+                MoveRollUpWindow(newRow, NumberOfRollUpRows.Value);
+            }
+
             CurrentRow = newRow;
             var row = Rows[CurrentRow];
             if (pacData.Indent != null)
@@ -147,7 +157,10 @@ namespace Nikse.SubtitleEdit.Core.Cea608
                 pacData.Color = row.Chars[prevPos].PenState.Foreground;
             }
 
-            SetPen(new SerializedPenState
+            // The pen only - SetPen also restyles the char under the cursor, and a PAC that moves
+            // the pen onto a written char (right after an italic word) turned its last letter
+            // upright ("<i>wer</i>e").
+            row.CurrentPenState.SetStyles(new SerializedPenState
             {
                 Foreground = pacData.Color ?? Constants.ColorWhite,
                 Underline = pacData.Underline,
@@ -155,6 +168,28 @@ namespace Nikse.SubtitleEdit.Core.Cea608
                 Background = Constants.ColorBlack,
                 Flash = false,
             });
+        }
+
+        /// <summary>
+        /// A preamble in roll-up mode that names another base row moves the whole roll-up window
+        /// there, rows and all (CEA-608) - moving only the cursor left the rows already on screen
+        /// behind, where no carriage return ever scrolled them away.
+        /// </summary>
+        private void MoveRollUpWindow(int newBaseRow, int rollUpRows)
+        {
+            var count = Math.Min(rollUpRows, Math.Min(CurrentRow, newBaseRow) + 1);
+            var window = new CcRow[count];
+            for (var i = 0; i < count; i++)
+            {
+                window[i] = new CcRow();
+                window[i].Copy(Rows[CurrentRow - count + 1 + i]);
+                Rows[CurrentRow - count + 1 + i].Clear();
+            }
+
+            for (var i = 0; i < count; i++)
+            {
+                Rows[newBaseRow - count + 1 + i].Copy(window[i]);
+            }
         }
 
         public void SetBkgData(SerializedPenState bkgData)
@@ -184,8 +219,19 @@ namespace Nikse.SubtitleEdit.Core.Cea608
                 return;
             }
 
+            // Reuse the row that scrolled off the top, cleared - a plain `new CcRow()` is NOT
+            // empty: its chars start with a null foreground/background pen state, so IsEmpty()
+            // (and with it CaptionScreen.IsEmpty and Serialize) reported a blank row as content
+            // for the rest of the file once a roll-up had happened.
+            var topRow = rows[removeIndex];
             rows.RemoveAt(removeIndex);
-            rows.Add(new CcRow());
+            topRow.Clear();
+
+            // It goes back at the roll-up base row, not at the bottom of the screen. Appending
+            // only happens to be right when the base row IS the bottom row - with a roll-up
+            // window placed higher up (a PAC can put it anywhere) appending scrolled every row
+            // below the window along with it.
+            rows.Insert(Math.Min(CurrentRow, rows.Count), topRow);
             Rows = rows.ToArray();
         }
     }

@@ -6,6 +6,7 @@ using Nikse.SubtitleEdit.Core.SubtitleFormats;
 using Nikse.SubtitleEdit.UiLogic.Translate;
 using Nikse.SubtitleEdit.UiLogic.AdjustDuration;
 using Nikse.SubtitleEdit.Logic.Config;
+using System.Collections.Generic;
 
 namespace Nikse.SubtitleEdit.Features.Tools.BatchConvert;
 
@@ -14,11 +15,13 @@ public class BatchConvertConfig
     public string OutputFolder { get; set; }
     public bool SaveInSourceFolder { get; set; }
     public bool Overwrite { get; set; }
+    public bool KeepSourceTimestamp { get; set; }
     public string TargetFormatName { get; set; }
     public string TargetEncoding { get; set; }
     public bool AssaUseSourceStylesIfPossible { get; set; }
     public string AssaHeader { get; set; }
     public string AssaFooter { get; set; }
+    public bool AssaKeepSourceEmbeddedFonts { get; set; }
     public string EbuHeader { get; set; } = string.Empty;
     public byte EbuJustificationCode { get; set; } = 2;
     public AddFormattingSettings AddFormatting { get; set; }
@@ -42,6 +45,7 @@ public class BatchConvertConfig
     public SplitBreakLongLinesSettings SplitBreakLongLines { get; set; }
     public AssaChangeResolutionSettings AssaChangeResolution { get; set; }
     public AssaChangeStyleSettings AssaChangeStyle { get; set; }
+    public AssaChangeStylePropertiesSettings AssaChangeStyleProperties { get; set; }
     public AssaEmbedFontsSettings AssaEmbedFonts { get; set; }
     public MergeShortLinesSettings MergeShortLines { get; set; }
     public ApplyDurationLimitsSettings ApplyDurationLimits { get; set; }
@@ -49,15 +53,19 @@ public class BatchConvertConfig
     public SortBySettings SortBy { get; set; }
     public AdjustImageColorsSettings AdjustImageColors { get; set; }
     public BeautifyTimeCodesSettings2 BeautifyTimeCodes { get; set; }
+    public SnapTimeCodesToFramesSettings SnapTimeCodesToFrames { get; set; }
+    public ConvertColorsToDialogSettings ConvertColorsToDialog { get; set; }
 
     public BatchConvertConfig()
     {
         OutputFolder = string.Empty;
         SaveInSourceFolder = true;
         Overwrite = false;
+        KeepSourceTimestamp = false;
         AssaUseSourceStylesIfPossible = false;
         AssaHeader = string.Empty;
         AssaFooter = string.Empty;
+        AssaKeepSourceEmbeddedFonts = false;
         TargetFormatName = SubRip.NameOfFormat;
         TargetEncoding = TextEncoding.Utf8WithBom;
         AddFormatting = new AddFormattingSettings();
@@ -81,6 +89,7 @@ public class BatchConvertConfig
         SplitBreakLongLines = new SplitBreakLongLinesSettings();
         AssaChangeResolution = new AssaChangeResolutionSettings();
         AssaChangeStyle = new AssaChangeStyleSettings();
+        AssaChangeStyleProperties = new AssaChangeStylePropertiesSettings();
         AssaEmbedFonts = new AssaEmbedFontsSettings();
         MergeShortLines = new MergeShortLinesSettings();
         ApplyDurationLimits = new ApplyDurationLimitsSettings();
@@ -88,6 +97,8 @@ public class BatchConvertConfig
         SortBy = new SortBySettings();
         AdjustImageColors = new AdjustImageColorsSettings();
         BeautifyTimeCodes = new BeautifyTimeCodesSettings2();
+        SnapTimeCodesToFrames = new SnapTimeCodesToFramesSettings();
+        ConvertColorsToDialog = new ConvertColorsToDialogSettings();
     }
 
     public bool IsTargetFormatImageBased =>
@@ -204,12 +215,18 @@ public class BatchConvertConfig
         public bool IsActive { get; set; }
         public TranslationPair SourceLanguage { get; internal set; }
         public TranslationPair TargetLanguage { get; internal set; }
+
+        /// <summary>More languages to translate into besides <see cref="TargetLanguage"/> - each
+        /// gives its own output file.</summary>
+        public List<TranslationPair> ExtraTargetLanguages { get; internal set; }
+
         public IAutoTranslator Translator { get; internal set; }
 
         public AutoTranslateSettings()
         {
             SourceLanguage = new TranslationPair("English", "en");
             TargetLanguage = new TranslationPair("Spanish", "es");
+            ExtraTargetLanguages = new List<TranslationPair>();
             Translator = new OllamaTranslate();
         }
     }
@@ -241,6 +258,7 @@ public class BatchConvertConfig
         public bool IsActive { get; set; }
         public int MaxMillisecondsBetweenLines { get; set; }
         public bool IncludeIncrementingLines { get; set; }
+        public bool IncludeRollUpCaptions { get; set; }
 
         public MergeLinesWithSameTextsSettings()
         {
@@ -264,9 +282,12 @@ public class BatchConvertConfig
     public class BridgeGapsSettings
     {
         public bool IsActive { get; set; }
-        public int BridgeGapsSmallerThanMs { get; set; }
-        public int MinGapMs { get; set; }
+        public int BridgeGapsSmallerThanMsOrFrames { get; set; }
+        public int MinGapMsOrFrames { get; set; }
         public int PercentForLeft { get; set; }
+
+        /// <summary>The two gap values are frames (frame mode), converted at the batch frame rate.</summary>
+        public bool UseFrames { get; set; }
     }
 
     public class ApplyMinGapSettings
@@ -282,6 +303,8 @@ public class BatchConvertConfig
         public int SingleLineMaxLength { get; set; }
         public int MaxNumberOfLines { get; set; }
         public bool RebalanceLongLines { get; set; }
+        public bool RebalanceOnlyLinesTooLong { get; set; }
+        public int UnbreakLinesShorterThan { get; set; }
     }
 
     public class AssaChangeResolutionSettings
@@ -321,9 +344,33 @@ public class BatchConvertConfig
         }
     }
 
+    /// <summary>
+    /// Sets fields on every style in the ASSA header, keeping the styles themselves. Requested for
+    /// translated Arabic subtitles, where a source style with letter spacing makes the text hard to
+    /// read and the block should sit on the right (issue #14150).
+    /// </summary>
+    public class AssaChangeStylePropertiesSettings
+    {
+        public bool IsActive { get; set; }
+        public bool SetSpacing { get; set; }
+        public decimal Spacing { get; set; }
+        public bool SetAlignment { get; set; }
+        public string Alignment { get; set; }
+
+        public AssaChangeStylePropertiesSettings()
+        {
+            SetSpacing = true;
+            Spacing = 0;
+            Alignment = "an2";
+        }
+    }
+
     public class AssaEmbedFontsSettings
     {
         public bool IsActive { get; set; }
+
+        /// <summary>Trim each embedded font to the glyphs the subtitle's text uses (see <see cref="FontTrimmer"/>).</summary>
+        public bool TrimFonts { get; set; }
     }
 
     public class MergeShortLinesSettings
@@ -387,6 +434,31 @@ public class BatchConvertConfig
         {
             SnapToShotChanges = true;
             FixedFrameRate = 23.976;
+        }
+    }
+
+    public class SnapTimeCodesToFramesSettings
+    {
+        public bool IsActive { get; set; }
+        public bool UseFixedFrameRate { get; set; }
+        public double FixedFrameRate { get; set; }
+
+        public SnapTimeCodesToFramesSettings()
+        {
+            FixedFrameRate = 23.976;
+        }
+    }
+
+    public class ConvertColorsToDialogSettings
+    {
+        public bool IsActive { get; set; }
+        public bool RemoveColorTags { get; set; }
+        public bool AddNewLines { get; set; }
+        public bool ReBreakLines { get; set; }
+
+        public ConvertColorsToDialogSettings()
+        {
+            RemoveColorTags = true;
         }
     }
 

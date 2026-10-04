@@ -152,7 +152,7 @@ namespace Nikse.SubtitleEdit.Core.Common
             var fileName = string.Empty;
             var ext = $".{fileExtension.ToLowerInvariant().TrimStart('.')}";
 
-            foreach (var subtitleFormat in SubtitleFormat.AllSubtitleFormats.Where(p => p.Extension == ext))
+            foreach (var subtitleFormat in SubtitleFormat.AllSubtitleFormats.Where(p => p.Extension.Equals(ext, StringComparison.OrdinalIgnoreCase)))
             {
                 if (subtitleFormat.IsMine(lines, string.Empty))
                 {
@@ -162,7 +162,7 @@ namespace Nikse.SubtitleEdit.Core.Common
                 }
             }
 
-            foreach (var subtitleFormat in SubtitleFormat.AllSubtitleFormats.Where(p => p.Extension != ext))
+            foreach (var subtitleFormat in SubtitleFormat.AllSubtitleFormats.Where(p => !p.Extension.Equals(ext, StringComparison.OrdinalIgnoreCase)))
             {
                 if (subtitleFormat.IsMine(lines, string.Empty))
                 {
@@ -246,7 +246,7 @@ namespace Nikse.SubtitleEdit.Core.Common
             }
 
             var ext = Path.GetExtension(fileName).ToLowerInvariant();
-            foreach (var subtitleFormat in formatsToLookFor.Where(p => p.Extension == ext && !p.Name.StartsWith("Unknown", StringComparison.Ordinal)))
+            foreach (var subtitleFormat in formatsToLookFor.Where(p => p.Extension.Equals(ext, StringComparison.OrdinalIgnoreCase) && !p.Name.StartsWith("Unknown", StringComparison.Ordinal)))
             {
                 if (subtitleFormat.IsMine(lines, fileName))
                 {
@@ -255,7 +255,7 @@ namespace Nikse.SubtitleEdit.Core.Common
                 }
             }
 
-            foreach (var subtitleFormat in formatsToLookFor.Where(p => p.Extension != ext || p.Name.StartsWith("Unknown", StringComparison.Ordinal)))
+            foreach (var subtitleFormat in formatsToLookFor.Where(p => !p.Extension.Equals(ext, StringComparison.OrdinalIgnoreCase) || p.Name.StartsWith("Unknown", StringComparison.Ordinal)))
             {
                 if (subtitleFormat.IsMine(lines, fileName))
                 {
@@ -289,17 +289,17 @@ namespace Nikse.SubtitleEdit.Core.Common
             }
 
             var ext = Path.GetExtension(fileName).ToLowerInvariant();
-            foreach (var subtitleFormat in SubtitleFormat.AllSubtitleFormats.Where(p => p.Extension == ext && !p.Name.StartsWith("Unknown", StringComparison.Ordinal)))
+            foreach (var subtitleFormat in SubtitleFormat.AllSubtitleFormats.Where(p => p.Extension.Equals(ext, StringComparison.OrdinalIgnoreCase) && !p.Name.StartsWith("Unknown", StringComparison.Ordinal)))
             {
-                if (subtitleFormat.IsMine(lines, fileName))
+                if (IsFormatMine(subtitleFormat, lines, fileName))
                 {
                     return FinalizeFormat(fileName, batchMode, sourceFrameRate, lines, subtitleFormat, loadSubtitle);
                 }
             }
 
-            foreach (var subtitleFormat in SubtitleFormat.AllSubtitleFormats.Where(p => p.Extension != ext || p.Name.StartsWith("Unknown", StringComparison.Ordinal)))
+            foreach (var subtitleFormat in SubtitleFormat.AllSubtitleFormats.Where(p => !p.Extension.Equals(ext, StringComparison.OrdinalIgnoreCase) || p.Name.StartsWith("Unknown", StringComparison.Ordinal)))
             {
-                if (subtitleFormat.IsMine(lines, fileName))
+                if (IsFormatMine(subtitleFormat, lines, fileName))
                 {
                     return FinalizeFormat(fileName, batchMode, sourceFrameRate, lines, subtitleFormat, loadSubtitle);
                 }
@@ -311,6 +311,25 @@ namespace Nikse.SubtitleEdit.Core.Common
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// Asks one format whether the lines are its own. A damaged or truncated file can make a
+        /// reader throw (an unclosed xml element, a json string with no end quote, ...), and this
+        /// runs for EVERY format when a file is opened - so a throw here used to take down the
+        /// whole open instead of moving on to the next format.
+        /// </summary>
+        private static bool IsFormatMine(SubtitleFormat subtitleFormat, List<string> lines, string fileName)
+        {
+            try
+            {
+                return subtitleFormat.IsMine(lines, fileName);
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine($"{subtitleFormat.Name}.IsMine failed: {exception.Message}");
+                return false;
+            }
         }
 
         private static List<string> ReadLinesFromFile(string fileName, Encoding useThisEncoding, out Encoding encoding)
@@ -383,6 +402,43 @@ namespace Nikse.SubtitleEdit.Core.Common
             }
         }
 
+        /// <summary>
+        /// Frame-rate conversion that lands on whole milliseconds. Scales the start and the
+        /// duration rather than the start and the end independently, so two cues of equal length
+        /// keep equal lengths afterwards - scaling both ends separately rounds them apart (#14056).
+        /// <see cref="ChangeFrameRate(double,double)"/> keeps the fractional result for callers
+        /// that want it.
+        /// </summary>
+        public void ChangeFrameRateWholeMilliseconds(double oldFrameRate, double newFrameRate)
+        {
+            var factor = SubtitleFormat.GetFrameForCalculation(oldFrameRate) / SubtitleFormat.GetFrameForCalculation(newFrameRate);
+            Paragraph previous = null;
+            var previousOriginalEndMs = 0d;
+            foreach (var p in Paragraphs)
+            {
+                var originalStartMs = p.StartTime.TotalMilliseconds;
+                var originalEndMs = p.EndTime.TotalMilliseconds;
+
+                var newStartMs = Math.Round(originalStartMs * factor, MidpointRounding.AwayFromZero);
+                var newDurationMs = Math.Round((originalEndMs - originalStartMs) * factor, MidpointRounding.AwayFromZero);
+                p.StartTime.TotalMilliseconds = newStartMs;
+                p.EndTime.TotalMilliseconds = newStartMs + newDurationMs;
+
+                // The two roundings can push the previous end one millisecond past this start,
+                // turning a clean join into an overlap the source never had. Overlaps that were
+                // already in the source are left as they were.
+                if (previous != null &&
+                    previousOriginalEndMs <= originalStartMs &&
+                    previous.EndTime.TotalMilliseconds > p.StartTime.TotalMilliseconds)
+                {
+                    previous.EndTime.TotalMilliseconds = p.StartTime.TotalMilliseconds;
+                }
+
+                previous = p;
+                previousOriginalEndMs = originalEndMs;
+            }
+        }
+
         public void AdjustDisplayTimeUsingPercent(double percent, List<int> selectedIndexes, List<double> shotChanges = null, bool enforceDurationLimits = true)
         {
             // List.Contains per paragraph made this O(paragraphs * selection) - quadratic with
@@ -412,8 +468,10 @@ namespace Nikse.SubtitleEdit.Core.Common
                         }
                     }
 
-                    // handle overlap with next
-                    if (newEndMilliseconds > nextStartMilliseconds)
+                    // handle overlap with next - measured against the minimum gap, the way
+                    // AdjustDisplayTimeUsingMilliseconds does. Testing only for a hard overlap
+                    // let a new end land inside the gap (or exactly on the next start).
+                    if (newEndMilliseconds > nextStartMilliseconds - Configuration.Settings.General.MinimumMillisecondsBetweenLines)
                     {
                         newEndMilliseconds = nextStartMilliseconds - Configuration.Settings.General.MinimumMillisecondsBetweenLines;
                     }
@@ -554,7 +612,16 @@ namespace Nikse.SubtitleEdit.Core.Common
             if (p.GetCharactersPerSecond() > maxCharactersPerSecond)
             {
                 var numberOfCharacters = (double)p.Text.CountCharacters(true);
-                var maxDurationMilliseconds = (numberOfCharacters / maxCharactersPerSecond) * 1000.0;
+                // Whole milliseconds, rounded up: the fractional value truncates on save to one ms
+                // short, which is just over the maximum this branch exists to enforce (#14418).
+                // Verified with the same division GetCharactersPerSecond performs rather than a
+                // plain Math.Ceiling, so binary-fraction noise does not add a needless millisecond.
+                var maxDurationMilliseconds = Math.Floor(numberOfCharacters / maxCharactersPerSecond * 1000.0);
+                if (numberOfCharacters / (maxDurationMilliseconds / 1000.0) > maxCharactersPerSecond)
+                {
+                    maxDurationMilliseconds += 1;
+                }
+
                 p.EndTime.TotalMilliseconds = p.StartTime.TotalMilliseconds + maxDurationMilliseconds;
             }
 
@@ -646,38 +713,54 @@ namespace Nikse.SubtitleEdit.Core.Common
                 return -1;
             }
 
-            var index = Paragraphs.IndexOf(p);
+            var paragraphs = Paragraphs;
+            var index = paragraphs.IndexOf(p);
             if (index >= 0)
             {
                 return index;
             }
 
-            for (var i = 0; i < Paragraphs.Count; i++)
+            // The fallback scan below re-read p.Id / p.Number / p.Text and walked into
+            // p.StartTime / p.EndTime (both reference-typed TimeCode properties) several times
+            // per element. Read them once - only the list side varies inside the loop.
+            var id = p.Id;
+            var number = p.Number;
+            var text = p.Text;
+            var startMs = p.StartTime.TotalMilliseconds;
+            var endMs = p.EndTime.TotalMilliseconds;
+            var count = paragraphs.Count;
+            for (var i = 0; i < count; i++)
             {
-                if (p.Id == Paragraphs[i].Id)
+                var current = paragraphs[i];
+                if (id == current.Id)
                 {
                     return i;
                 }
 
-                if (i < Paragraphs.Count - 1 && p.Id == Paragraphs[i + 1].Id)
+                if (i < count - 1 && id == paragraphs[i + 1].Id)
                 {
                     return i + 1;
                 }
 
-                if (Math.Abs(p.StartTime.TotalMilliseconds - Paragraphs[i].StartTime.TotalMilliseconds) < 0.1 &&
-                    Math.Abs(p.EndTime.TotalMilliseconds - Paragraphs[i].EndTime.TotalMilliseconds) < 0.1)
+                var startMatches = Math.Abs(startMs - current.StartTime.TotalMilliseconds) < 0.1;
+                var endMatches = Math.Abs(endMs - current.EndTime.TotalMilliseconds) < 0.1;
+                if (startMatches && endMatches)
                 {
                     return i;
                 }
 
-                if (p.Number == Paragraphs[i].Number && (Math.Abs(p.StartTime.TotalMilliseconds - Paragraphs[i].StartTime.TotalMilliseconds) < 0.1 ||
-                    Math.Abs(p.EndTime.TotalMilliseconds - Paragraphs[i].EndTime.TotalMilliseconds) < 0.1))
+                if (!startMatches && !endMatches)
+                {
+                    // Neither of the two remaining checks can pass without a time match.
+                    continue;
+                }
+
+                if (number == current.Number)
                 {
                     return i;
                 }
 
-                if (p.Text == Paragraphs[i].Text && (Math.Abs(p.StartTime.TotalMilliseconds - Paragraphs[i].StartTime.TotalMilliseconds) < 0.1 ||
-                    Math.Abs(p.EndTime.TotalMilliseconds - Paragraphs[i].EndTime.TotalMilliseconds) < 0.1))
+                if (text == current.Text)
                 {
                     return i;
                 }
@@ -772,17 +855,30 @@ namespace Nikse.SubtitleEdit.Core.Common
         /// <returns>Number of lines deleted</returns>
         public int RemoveParagraphsByIndices(IEnumerable<int> indices)
         {
-            var count = 0;
-            foreach (var index in indices.OrderByDescending(p => p))
+            var indexList = indices as IList<int> ?? indices.ToList();
+            var indexSet = new HashSet<int>(indexList);
+            if (indexSet.Count != indexList.Count)
             {
-                if (index >= 0 && index < Paragraphs.Count)
+                // A repeated index removed a second, shifted line in the original loop; keep
+                // that (odd) behaviour for such callers rather than guess.
+                var removed = 0;
+                foreach (var index in indexList.OrderByDescending(p => p))
                 {
-                    Paragraphs.RemoveAt(index);
-                    count++;
+                    if (index >= 0 && index < Paragraphs.Count)
+                    {
+                        Paragraphs.RemoveAt(index);
+                        removed++;
+                    }
                 }
+
+                return removed;
             }
 
-            return count;
+            // Single compaction pass instead of RemoveAt per index (O(paragraphs * k)).
+            var count = Paragraphs.Count;
+            var i = 0;
+            Paragraphs.RemoveAll(p => indexSet.Contains(i++));
+            return count - Paragraphs.Count;
         }
 
         /// <summary>
@@ -930,6 +1026,12 @@ namespace Nikse.SubtitleEdit.Core.Common
                 hash.Add(p.Extra, StringComparer.Ordinal);
                 hash.Add(p.Actor, StringComparer.Ordinal);
                 hash.Add(p.Layer);
+
+                // The margins move the line on the video (SubtitlePositionToAssa turns a teletext row
+                // or a TTML region into them), so a changed margin has to invalidate the preview too.
+                hash.Add(p.MarginL, StringComparer.Ordinal);
+                hash.Add(p.MarginR, StringComparer.Ordinal);
+                hash.Add(p.MarginV, StringComparer.Ordinal);
             }
 
             return hash.ToHashCode();

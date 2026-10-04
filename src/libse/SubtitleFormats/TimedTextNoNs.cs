@@ -19,9 +19,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
         public override bool IsMine(List<string> lines, string fileName)
         {
-            var sb = new StringBuilder();
-            lines.ForEach(line => sb.AppendLine(line));
-            var xmlAsString = sb.ToString().Trim();
+            var xmlAsString = JoinLinesTrimmed(lines);
 
             if (xmlAsString.Contains("xmlns="))
             {
@@ -30,6 +28,11 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
             xmlAsString = xmlAsString.RemoveControlCharactersButWhiteSpace();
 
+            if (xmlAsString.Contains("<timedtext", StringComparison.OrdinalIgnoreCase))
+            {
+                return false; // YouTube timed text (srv3/.ytt) - see YouTubeTimedText
+            }
+
             if (xmlAsString.Contains("profile/imsc1"))
             {
                 var f = new TimedTextImsc11();
@@ -37,6 +40,14 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 {
                     return false;
                 }
+            }
+
+            // Only <p> elements under a <body> are read, and FixBadXml below just escapes '&' and
+            // drops text before the first '<' - without both start tags neither parse can find
+            // one, so skip parsing (twice) any other XML reaching this format.
+            if (!xmlAsString.Contains("<body") || !xmlAsString.Contains("<p"))
+            {
+                return false;
             }
 
             var xml = new XmlDocument { XmlResolver = null };
@@ -218,10 +229,19 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 paragraphContent.LoadXml($"<root>{text.Replace("&", "&amp;")}</root>");
                 ConvertParagraphNodeToTtmlNode(paragraphContent.DocumentElement, xml, paragraph);
             }
-            catch  // Wrong markup, clear it
+            catch  // Wrong markup (e.g. a literal "5 < 6"): keep the words and line breaks, drop the tags
             {
-                text = Regex.Replace(text, "[<>]", "");
-                paragraph.AppendChild(xml.CreateTextNode(text));
+                // Stripping every < and > turned the tags into text and lost the line break (see TimedText10).
+                var fallbackLines = text.Split(new[] { "<br/>" }, StringSplitOptions.None);
+                for (var i = 0; i < fallbackLines.Length; i++)
+                {
+                    if (i > 0)
+                    {
+                        paragraph.AppendChild(xml.CreateElement("br"));
+                    }
+
+                    paragraph.AppendChild(xml.CreateTextNode(HtmlUtil.RemoveHtmlTags(fallbackLines[i], true)));
+                }
             }
 
             XmlAttribute start = xml.CreateAttribute("begin");
@@ -290,16 +310,14 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
         {
             _errorCount = 0;
 
-            var sb = new StringBuilder();
-            lines.ForEach(line => sb.AppendLine(line));
             var xml = new XmlDocument { XmlResolver = null, PreserveWhitespace = true };
             try
             {
-                xml.LoadXml(sb.ToString().RemoveControlCharactersButWhiteSpace().Trim());
+                xml.LoadXml(JoinLines(lines).RemoveControlCharactersButWhiteSpace().Trim());
             }
             catch
             {
-                xml.LoadXml(FixBadXml(sb.ToString()));
+                xml.LoadXml(FixBadXml(JoinLines(lines)));
             }
 
             XmlNode body = xml.DocumentElement.SelectSingleNode("body");

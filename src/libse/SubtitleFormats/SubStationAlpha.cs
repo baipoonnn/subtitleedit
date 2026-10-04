@@ -20,10 +20,39 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
         public override bool IsMine(List<string> lines, string fileName)
         {
+            if (!HasEvents(lines))
+            {
+                Errors = null;
+                return false;
+            }
+
             var subtitle = new Subtitle();
             LoadSubtitle(subtitle, lines, fileName);
             Errors = null;
             return subtitle.Paragraphs.Count > _errorCount;
+        }
+
+        /// <summary>
+        /// Events (the only source of paragraphs) are read after an "[Events]" line or once a
+        /// "Dialogue:" / "Dialog:" / "Comment:" line starts them, so a file with neither has no
+        /// paragraph - skip loading it. Shared with <see cref="AdvancedSubStationAlpha"/>.
+        /// </summary>
+        internal static bool HasEvents(List<string> lines)
+        {
+            foreach (var line in lines)
+            {
+                var trimmed = line.AsSpan().Trim();
+                if (trimmed.StartsWith("dialog".AsSpan(), StringComparison.OrdinalIgnoreCase) &&
+                    (trimmed.StartsWith("dialog:".AsSpan(), StringComparison.OrdinalIgnoreCase) ||
+                     trimmed.StartsWith("dialogue:".AsSpan(), StringComparison.OrdinalIgnoreCase)) ||
+                    trimmed.StartsWith("comment:".AsSpan(), StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.Equals("[events]".AsSpan(), StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private const string HeaderNoStyles =
@@ -98,13 +127,16 @@ Format: Marked, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     boldStyle = "-1"; // -1 = true, 0 is false
                 }
 
-                sb.AppendLine(string.Format(header,
+                // Invariant, or a comma-decimal locale would split a fractional font size/outline
+                // width into two fields and wreck the style line.
+                sb.AppendLine(string.Format(CultureInfo.InvariantCulture,
+                                            header,
                                             title,
                                             style.FontName,
                                             style.FontSize,
                                             ColorTranslator.ToWin32(style.Primary),
                                             ColorTranslator.ToWin32(style.Secondary),
-                                            ColorTranslator.ToWin32(style.Tertiary),
+                                            ColorTranslator.ToWin32(style.Outline), // SSA v4's TertiaryColour is the outline color
                                             ColorTranslator.ToWin32(style.Background),
                                             style.OutlineWidth,
                                             style.ShadowWidth,
@@ -167,11 +199,11 @@ Format: Marked, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 var text = p.Text.Replace(Environment.NewLine, "\\N");
                 if (p.IsComment)
                 {
-                    sb.AppendLine(string.Format(commentWriteFormat, start, end, AdvancedSubStationAlpha.FormatText(text), style, p.Layer, actor, marginL, marginR, marginV, effect));
+                    sb.AppendLine(string.Format(commentWriteFormat, start, end, AdvancedSubStationAlpha.FormatText(text), style, p.Layer.ToString(CultureInfo.InvariantCulture), actor, marginL, marginR, marginV, effect));
                 }
                 else
                 {
-                    sb.AppendLine(string.Format(paragraphWriteFormat, start, end, AdvancedSubStationAlpha.FormatText(text), style, p.Layer, actor, marginL, marginR, marginV, effect));
+                    sb.AppendLine(string.Format(paragraphWriteFormat, start, end, AdvancedSubStationAlpha.FormatText(text), style, p.Layer.ToString(CultureInfo.InvariantCulture), actor, marginL, marginR, marginV, effect));
                 }
             }
 
@@ -184,7 +216,7 @@ Format: Marked, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
             // Trim inside the builder instead of "sb.ToString().Trim() + newline", which
             // allocated the whole output twice more (same fix as [V4+ Styles]).
-            TrimBuilder(sb);
+            sb.Trim();
             return sb.Append(Environment.NewLine).ToString();
         }
 
@@ -251,41 +283,18 @@ Format: Marked, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         italic = "-1";
                     }
 
-                    var newAlignment = "2";
-                    switch (ssaStyle.Alignment)
-                    {
-                        case "1":
-                            newAlignment = "1";
-                            break;
-                        case "3":
-                            newAlignment = "3";
-                            break;
-                        case "4":
-                            newAlignment = "9";
-                            break;
-                        case "5":
-                            newAlignment = "10";
-                            break;
-                        case "6":
-                            newAlignment = "11";
-                            break;
-                        case "7":
-                            newAlignment = "5";
-                            break;
-                        case "8":
-                            newAlignment = "6";
-                            break;
-                        case "9":
-                            newAlignment = "7";
-                            break;
-                    }
+                    var newAlignment = AdvancedSubStationAlpha.AssAlignmentToSsaV4Alignment(ssaStyle.Alignment);
 
                     //Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, TertiaryColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, AlphaLevel, Encoding
-                    const string styleFormat = "Style: {0},{1},{2:0.#},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},0,1";
+                    const string styleFormat = "Style: {0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},0,1";
                     //                                 N   FN  FS  PC  SC  TC  BC  Bo  It  BS  O    Sh   Ali  ML   MR   MV   A Encoding
 
-                    ttStyles.AppendLine(string.Format(styleFormat, ssaStyle.Name, ssaStyle.FontName, ssaStyle.FontSize, ssaStyle.Primary.ToArgb(), ssaStyle.Secondary.ToArgb(),
-                        ssaStyle.Outline.ToArgb(), ssaStyle.Background.ToArgb(), bold, italic, ssaStyle.BorderStyle, ssaStyle.OutlineWidth.ToString(CultureInfo.InvariantCulture), ssaStyle.ShadowWidth.ToString(CultureInfo.InvariantCulture),
+                    // Sub Station Alpha v4 colors are plain "&H00BBGGRR" decimals - no alpha byte
+                    // (ToArgb() wrote e.g. 4294967040 for yellow, which players and SE itself
+                    // reject, so the color was lost on the next open). #13734
+                    ttStyles.AppendLine(string.Format(CultureInfo.InvariantCulture, styleFormat, ssaStyle.Name, ssaStyle.FontName, ssaStyle.FontSize.ToString("0.#", CultureInfo.InvariantCulture),
+                        ColorTranslator.ToWin32(ssaStyle.Primary), ColorTranslator.ToWin32(ssaStyle.Secondary),
+                        ColorTranslator.ToWin32(ssaStyle.Outline), ColorTranslator.ToWin32(ssaStyle.Background), bold, italic, ssaStyle.BorderStyle, ssaStyle.OutlineWidth.ToString(CultureInfo.InvariantCulture), ssaStyle.ShadowWidth.ToString(CultureInfo.InvariantCulture),
                         newAlignment, ssaStyle.MarginLeft, ssaStyle.MarginRight, ssaStyle.MarginVertical));
                 }
                 catch
@@ -368,7 +377,9 @@ Format: Marked, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
                         const string styleFormat = "Style: {0},{1},{2},{3},65535,65535,-2147483640,-1,0,1,3,0,2,10,10,10,0,1";
 
-                        ttStyles.AppendLine(string.Format(styleFormat, name, fontFamily, fSize, c.ToArgb()));
+                        // SSA colours are BGR words; ToArgb() wrote ARGB and swapped red and blue on every
+                        // TTML-derived style (the GetStyle path was fixed for this in #13734)
+                        ttStyles.AppendLine(string.Format(CultureInfo.InvariantCulture, styleFormat, name, fontFamily, fSize, ColorTranslator.ToWin32(c)));
                     }
                 }
 

@@ -23,6 +23,7 @@ public enum BatchConvertFunctionType
     RemoveLineBreaks,
     AssaChangeResolution,
     AssaChangeStyle,
+    AssaChangeStyleProperties,
     AssaEmbedFonts,
     MergeShortLines,
     ApplyDurationLimits,
@@ -30,4 +31,6 @@ public enum BatchConvertFunctionType
     SortBy,
     AdjustImageColors,
     BeautifyTimeCodes,
+    SnapTimeCodesToFrames,
+    ConvertColorsToDialog,
 }

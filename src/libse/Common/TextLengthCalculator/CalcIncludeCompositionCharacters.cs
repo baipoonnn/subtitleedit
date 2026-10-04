@@ -9,7 +9,24 @@ namespace Nikse.SubtitleEdit.Core.Common.TextLengthCalculator
         /// </summary>
         public decimal CountCharacters(string text, bool forCps)
         {
-            var s = HtmlUtil.RemoveHtmlTags(text, true);
+            var s = CalcFactory.RemoveTags(text);
+
+            // Fast path: the Arabic composition characters excluded below are all >= U+0300
+            // and so cannot pass the probe; "\r\n" can, and this calculator scores a
+            // multi-char element by its length, hence the two per pair.
+            if (TextElements.AreAllSingleChar(s, out var crLfCount))
+            {
+                var simpleLength = 0;
+                foreach (var c in s)
+                {
+                    if (!char.IsControl(c))
+                    {
+                        simpleLength++;
+                    }
+                }
+
+                return simpleLength + crLfCount * 2;
+            }
 
             const char zeroWidthSpace = '\u200B';
             const char zeroWidthNoBreakSpace = '\uFEFF';

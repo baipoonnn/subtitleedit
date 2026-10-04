@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Controls.Templates;
 using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Features.Shared;
 using Nikse.SubtitleEdit.Logic;
@@ -57,6 +58,44 @@ public class LlamaCppModelDisplay
 /// </summary>
 public static class LlamaCppDownloadHelper
 {
+    /// <summary>
+    /// Combo-box item template for a llama.cpp model: "[install-status dot] name (size)".
+    /// </summary>
+    public static FuncDataTemplate<LlamaCppModelDisplay> ModelItemTemplate()
+    {
+        return StatusDots.ComboItemTemplate<LlamaCppModelDisplay>(
+            model => model.Model.DisplayName,
+            GetModelSizeText,
+            GetModelDotStatus);
+    }
+
+    /// <summary>
+    /// Install-status dot for the llama.cpp engine itself: green when the pinned llama-server
+    /// build is on disk, amber when a newer one is available, grey when it is not installed.
+    /// </summary>
+    public static DownloadDotStatus GetEngineDotStatus()
+    {
+        return StatusDots.From(LlamaCppServerManager.IsEngineInstalled(), LlamaCppUpdateStatus.GetEngineUpdateStatus());
+    }
+
+    // A custom *.gguf the user dropped into the models folder has no Url - it is already on disk,
+    // so it shows a green dot and a "custom" size tag rather than a download size.
+    private static string? GetModelSizeText(LlamaCppModelDisplay model)
+    {
+        if (string.IsNullOrEmpty(model.Model.Url))
+        {
+            var custom = Se.Language.General.Custom;
+            return string.IsNullOrEmpty(model.Model.Size) ? custom : $"{custom}, {model.Model.Size}";
+        }
+
+        return string.IsNullOrEmpty(model.Model.Size) ? null : model.Model.Size;
+    }
+
+    private static DownloadDotStatus GetModelDotStatus(LlamaCppModelDisplay model)
+    {
+        return model.IsInstalled ? DownloadDotStatus.UpToDate : DownloadDotStatus.NotInstalled;
+    }
+
     /// <summary>
     /// True when the llama-server binary is installed and a model is available. When
     /// <paramref name="modelFileName"/> is given, that specific model must be installed.
@@ -199,7 +238,7 @@ public static class LlamaCppDownloadHelper
 
     /// <summary>
     /// Follow-up prompt after the user picks "CUDA" in the Windows build selector - llama.cpp ships
-    /// both a CUDA 12.4 and a CUDA 13.3 build. Returns "cuda" (CUDA 12) or "cuda13", or null when
+    /// both a CUDA 12.4 and a CUDA 13.4 build. Returns "cuda" (CUDA 12) or "cuda13", or null when
     /// the user cancels. Mirrors the CrispASR CUDA version prompt.
     /// </summary>
     private static async Task<string?> PromptCudaVersionAsync(Window owner)

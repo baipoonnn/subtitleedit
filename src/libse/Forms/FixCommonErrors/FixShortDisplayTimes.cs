@@ -1,4 +1,5 @@
-﻿using Nikse.SubtitleEdit.Core.Common;
+﻿using System;
+using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Core.Interfaces;
 
 namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
@@ -30,16 +31,15 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
                     Paragraph prev = subtitle.GetParagraphOrDefault(i - 1);
                     if (next == null || (p.StartTime.TotalMilliseconds + Configuration.Settings.General.SubtitleMinimumDisplayMilliseconds + Configuration.Settings.General.MinimumMillisecondsBetweenLines) < next.StartTime.TotalMilliseconds)
                     {
-                        var temp = new Paragraph(p) { EndTime = { TotalMilliseconds = p.StartTime.TotalMilliseconds + Configuration.Settings.General.SubtitleMinimumDisplayMilliseconds } };
-                        if (temp.GetCharactersPerSecond() <= Configuration.Settings.General.SubtitleMaximumCharactersPerSeconds)
+                        // Extending only ever lowers chars/sec, so no cps gate here - if the
+                        // line is still too fast at the minimum duration, the cps pass below
+                        // extends it further.
+                        if (callbacks.AllowFix(p, fixAction))
                         {
-                            if (callbacks.AllowFix(p, fixAction))
-                            {
-                                string oldCurrent = p.ToString();
-                                p.EndTime.TotalMilliseconds = p.StartTime.TotalMilliseconds + Configuration.Settings.General.SubtitleMinimumDisplayMilliseconds;
-                                noOfShortDisplayTimes++;
-                                callbacks.AddFixToListView(p, fixAction, oldCurrent, p.ToString());
-                            }
+                            string oldCurrent = p.ToString();
+                            p.EndTime.TotalMilliseconds = p.StartTime.TotalMilliseconds + Configuration.Settings.General.SubtitleMinimumDisplayMilliseconds;
+                            noOfShortDisplayTimes++;
+                            callbacks.AddFixToListView(p, fixAction, oldCurrent, p.ToString());
                         }
                     }
                     else if (Configuration.Settings.Tools.FixShortDisplayTimesAllowMoveStartTime && p.StartTime.TotalMilliseconds > Configuration.Settings.General.SubtitleMinimumDisplayMilliseconds &&
@@ -60,6 +60,18 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
                     }
                     else
                     {
+                        // Not enough room for the full minimum - still take what the
+                        // gap to the next line allows, a shorter shortfall is better
+                        // than none (back-to-back speech-to-text output hits this a lot).
+                        var improvedEndMs = next.StartTime.TotalMilliseconds - Configuration.Settings.General.MinimumMillisecondsBetweenLines;
+                        if (improvedEndMs > p.EndTime.TotalMilliseconds && callbacks.AllowFix(p, fixAction))
+                        {
+                            string oldCurrent = p.ToString();
+                            p.EndTime.TotalMilliseconds = improvedEndMs;
+                            noOfShortDisplayTimes++;
+                            callbacks.AddFixToListView(p, fixAction, oldCurrent, p.ToString());
+                        }
+
                         callbacks.LogStatus(Language.FixShortDisplayTimes, string.Format(Language.UnableToFixTextXY, i + 1, p));
                         callbacks.AddToTotalErrors(1);
                         skip = true;
@@ -73,7 +85,13 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
                     if (temp.GetCharactersPerSecond() > Configuration.Settings.General.SubtitleMaximumCharactersPerSeconds)
                     {
                         var numberOfCharacters = (double)p.Text.CountCharacters(true);
-                        var maxDurationMilliseconds = numberOfCharacters / Configuration.Settings.General.SubtitleMaximumCharactersPerSeconds * 1000.0;
+                        // Round up to a whole millisecond so the resulting cps ends up at or below
+                        // the maximum and the extension is a real, whole-millisecond change.
+                        // Targeting the exact limit gives a sub-millisecond extension that
+                        // ToString() renders identically to the original (a phantom "fix" that
+                        // changes nothing) and that a whole-ms save discards, so the error
+                        // reappears on the next scan (#13617).
+                        var maxDurationMilliseconds = Math.Ceiling(numberOfCharacters / Configuration.Settings.General.SubtitleMaximumCharactersPerSeconds * 1000.0);
                         temp.EndTime.TotalMilliseconds = p.StartTime.TotalMilliseconds + maxDurationMilliseconds;
                     }
                     Paragraph next = subtitle.GetParagraphOrDefault(i + 1);

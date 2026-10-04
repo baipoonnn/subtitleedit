@@ -95,21 +95,25 @@ public partial class MergeSameTimeCodesViewModel : ObservableObject, IClosingCle
         MergeItems.Clear();
         MergeSubtitles.Clear();
 
-        var mergedIndexes = new List<int>();
-        var removed = new HashSet<int>();
         var makeDialog = MergeDialog;
         var reBreak = AutoBreak;
-        var numberOfMerges = 0;
         SubtitleLineViewModel? p = null;
         MergeSubtitles.Clear();
         var singleMergeSubtitles = new List<SubtitleLineViewModel>();
         var mergedText = string.Empty;
         for (var i = 1; i < _subtitles.Count; i++)
         {
-            p = _subtitles[i - 1];
+            // Anchor on the FIRST cue of the current group. Reassigning every iteration compared
+            // each cue with its immediate predecessor, so a run of slowly drifting cues - each
+            // within tolerance of the last but far from the first - chained transitively into a
+            // single subtitle spanning the whole run.
+            if (singleMergeSubtitles.Count == 0)
+            {
+                p = _subtitles[i - 1];
+            }
 
             var next = _subtitles[i];
-            if (QualifiesForMerge(p, next, MaxMillisecondsDifference) && IsFixAllowed(p))
+            if (p != null && QualifiesForMerge(p, next, MaxMillisecondsDifference))
             {
                 if (!singleMergeSubtitles.Contains(p))
                 {
@@ -150,17 +154,6 @@ public partial class MergeSameTimeCodesViewModel : ObservableObject, IClosingCle
                     mergedText = Utilities.AutoBreakLine(mergedText, _language);
                 }
 
-                removed.Add(i);
-                numberOfMerges++;
-                if (!mergedIndexes.Contains(i))
-                {
-                    mergedIndexes.Add(i);
-                }
-
-                if (!mergedIndexes.Contains(i - 1))
-                {
-                    mergedIndexes.Add(i - 1);
-                }
             }
             else
             {
@@ -212,7 +205,11 @@ public partial class MergeSameTimeCodesViewModel : ObservableObject, IClosingCle
                 case Core.Enums.DialogType.DashSecondLineWithoutSpace:
                     return line1 + Environment.NewLine + "-" + line2;
                 default:
-                    return (line1.StartsWith("- ") ? "" : "- ") + line1 + Environment.NewLine + "- " + line2;
+                    // Test for a leading dash regardless of the space after it, as the
+                    // DashBothLinesWithoutSpace case above does. Testing "- " missed a dash
+                    // written without one, so "-Hello" came back as "- -Hello" - and this is
+                    // the shipped default dialog style.
+                    return (line1.StartsWith("-") ? "" : "- ") + line1 + Environment.NewLine + "- " + line2;
             }
         }
         else
@@ -230,22 +227,6 @@ public partial class MergeSameTimeCodesViewModel : ObservableObject, IClosingCle
 
         return Math.Abs(next.StartTime.TotalMilliseconds - p.StartTime.TotalMilliseconds) <= maxMsBetween &&
                Math.Abs(next.EndTime.TotalMilliseconds - p.EndTime.TotalMilliseconds) <= maxMsBetween;
-    }
-
-    private bool IsFixAllowed(SubtitleLineViewModel p)
-    {
-        foreach (var mi in MergeItems.Where(p => !p.Apply))
-        {
-            foreach (var line in mi.LinesToMerge)
-            {
-                if (line.Id == p.Id)
-                {
-                    return false;
-                }
-            }
-        }
-
-        return true;
     }
 
     private void LoadSettings()
@@ -269,6 +250,20 @@ public partial class MergeSameTimeCodesViewModel : ObservableObject, IClosingCle
         var result = new List<SubtitleLineViewModel>();
         var skipCount = 0;
 
+        // Line id -> the first ticked merge item that holds it (what the FirstOrDefault scan of
+        // all merge items per line found), built once.
+        var mergeItemByLineId = new Dictionary<Guid, MergeDisplayItem>();
+        foreach (var mergeItem in MergeItems)
+        {
+            if (mergeItem.Apply)
+            {
+                foreach (var line in mergeItem.LinesToMerge)
+                {
+                    mergeItemByLineId.TryAdd(line.Id, mergeItem);
+                }
+            }
+        }
+
         foreach (var s in _subtitles)
         {
             if (skipCount > 0)
@@ -277,7 +272,7 @@ public partial class MergeSameTimeCodesViewModel : ObservableObject, IClosingCle
                 continue;
             }
 
-            var match = MergeItems.FirstOrDefault(p => p.Apply && p.LinesToMerge.Any(p => p.Id == s.Id));
+            mergeItemByLineId.TryGetValue(s.Id, out var match);
             if (match != null)
             {
                 var merged = new SubtitleLineViewModel(s);

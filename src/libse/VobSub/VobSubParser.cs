@@ -26,6 +26,8 @@ namespace Nikse.SubtitleEdit.Core.VobSub
         /// </summary>
         private static readonly int s_minMpeg2SectionLength = Mpeg2Header.Length + PacketizedElementaryStream.HeaderLength + 3 + 1;
 
+        private static readonly byte[] Mpeg2PackStartCode = { 0x00, 0x00, 0x01, 0xBA };
+
         public VobSubParser(bool isPal)
         {
             IsPal = isPal;
@@ -212,13 +214,46 @@ namespace Nikse.SubtitleEdit.Core.VobSub
         {
             // If it doesn't have the pes start code? Just assume something went really wrong.
             // scan until we can fingerprint an other mpeg2 packet header.
-            while (position + s_minMpeg2SectionLength < ms.Length)
+            // IsStartOfMpeg2Pack fails unless the pack start code 00 00 01 BA is at the position,
+            // so only probe where it occurs - probing every byte seeked and re-read 14 bytes per
+            // byte of every video pack in a .vob.
+            var length = ms.Length;
+            var buffer = new byte[64 * 1024];
+            while (position + s_minMpeg2SectionLength < length)
             {
-                if (IsStartOfMpeg2Pack(ms, position))
+                ms.Seek(position, SeekOrigin.Begin);
+                var read = ms.ReadFully(buffer, 0, (int)Math.Min(buffer.Length, length - position));
+                if (read < 4)
                 {
-                    return position;
+                    break;
                 }
-                position++;
+
+                var span = new ReadOnlySpan<byte>(buffer, 0, read);
+                var offset = 0;
+                while (true)
+                {
+                    var hit = span.Slice(offset).IndexOf(new ReadOnlySpan<byte>(Mpeg2PackStartCode));
+                    if (hit < 0)
+                    {
+                        break;
+                    }
+
+                    var candidate = position + offset + hit;
+                    if (candidate + s_minMpeg2SectionLength >= length)
+                    {
+                        return -1;
+                    }
+
+                    if (IsStartOfMpeg2Pack(ms, candidate))
+                    {
+                        return candidate;
+                    }
+
+                    offset += hit + 1;
+                }
+
+                // overlap by three bytes so a start code split over two reads is still found
+                position += read - 3;
             }
 
             return -1;
@@ -386,7 +421,20 @@ namespace Nikse.SubtitleEdit.Core.VobSub
                 }
             }
 
-            // Fix subs with no duration (completely normal) or negative duration or duration > 10 seconds
+            FixPackTimes(list);
+
+            return list;
+        }
+
+        /// <summary>
+        /// Fixes packs with no duration (completely normal), a negative duration, or a duration
+        /// longer than the maximum display time. The sub picture's own stop-display delay is
+        /// preferred; failing that the pack runs up to the next one, or three seconds for the
+        /// last one. Also used for VobSub tracks read out of a Matroska file, whose container
+        /// block durations are often missing or (with ffmpeg) an "unknown" marker.
+        /// </summary>
+        public static void FixPackTimes(List<VobSubMergedPack> list)
+        {
             for (int i = 0; i < list.Count; i++)
             {
                 VobSubMergedPack pack = list[i];
@@ -411,8 +459,6 @@ namespace Nikse.SubtitleEdit.Core.VobSub
                     }
                 }
             }
-
-            return list;
         }
 
         public static bool IsMpeg2PackHeader(byte[] buffer)

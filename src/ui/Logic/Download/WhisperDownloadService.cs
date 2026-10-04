@@ -16,20 +16,28 @@ public interface IWhisperDownloadService
     Task DownloadWhisperPurfviewFasterWhisperXxl(string destinationFileName, IProgress<float>? progress, CancellationToken cancellationToken);
     Task DownloadWhisperCppVulkan(Stream stream, Progress<float> progress, CancellationToken cancellationToken);
     Task DownloadWhisperCTranslate2(Stream stream, Progress<float> progress, CancellationToken cancellationToken);
+    Task DownloadWhisperX(string destinationFileName, IProgress<float>? progress, CancellationToken cancellationToken);
     Task DownloadSileroVad(Stream stream, IProgress<float>? progress, CancellationToken cancellationToken);
 }
 
 public class WhisperDownloadService : IWhisperDownloadService
 {
     private readonly HttpClient _httpClient;
-    private const string WindowsUrl = "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.1/whisper-blas-bin-x64.zip";
-    private const string MacArmUrl = "https://github.com/SubtitleEdit/support-files/releases/download/whispercpp-191/whisper-mac.zip";
-    private const string MacX64Url = "https://github.com/SubtitleEdit/support-files/releases/download/whispercpp-191/whisper-mac.zip";
-    private const string LinuxUrl = "https://github.com/SubtitleEdit/support-files/releases/download/whispercpp-191/whisper-vulkan-linux64.zip";
+    // Upstream now tags nightly builds llama.cpp style (b5130) and only attaches binaries to
+    // those; the semantic v1.9.4 tag points at the same commit but carries no assets.
+    private const string WindowsUrl = "https://github.com/ggml-org/whisper.cpp/releases/download/b5130/whisper-blas-bin-x64.zip";
+    private const string MacArmUrl = "https://github.com/SubtitleEdit/support-files/releases/download/whispercpp-194/whisper-mac.zip";
+    private const string MacX64Url = "https://github.com/SubtitleEdit/support-files/releases/download/whispercpp-194/whisper-mac.zip";
+    // The Linux archives are SE rebuilds (upstream ships no Linux binaries). They must carry
+    // libwhisper.so.1 / libggml.so.0 next to whisper-cli, staged under their SONAMEs with
+    // $ORIGIN RPATHs - whispercpp-184 through -191 shipped without them and the engine died on
+    // startup with "error while loading shared libraries" (issue #13680). The build workflow in
+    // SubtitleEdit/support-files verifies this now, so plain whispercpp-194 is fine here.
+    private const string LinuxUrl = "https://github.com/SubtitleEdit/support-files/releases/download/whispercpp-194/whisper-vulkan-linux64.zip";
 
-    private const string WindowsUrlCuBlass = "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.1/whisper-cublas-12.4.0-bin-x64.zip";
-    private const string WindowsUrlCppVulkan = "https://github.com/SubtitleEdit/support-files/releases/download/whispercpp-191/whisper-vulkan-x64.zip";
-    private const string LinuxUrlCuBlass = "https://github.com/SubtitleEdit/support-files/releases/download/whispercpp-191/whisper-cuda-linux64.zip";
+    private const string WindowsUrlCuBlass = "https://github.com/ggml-org/whisper.cpp/releases/download/b5130/whisper-cublas-12.4.0-bin-x64.zip";
+    private const string WindowsUrlCppVulkan = "https://github.com/SubtitleEdit/support-files/releases/download/whispercpp-194/whisper-vulkan-x64.zip";
+    private const string LinuxUrlCuBlass = "https://github.com/SubtitleEdit/support-files/releases/download/whispercpp-194/whisper-cuda-linux64.zip";
     
     private const string DownloadUrlConstMe = "https://github.com/Const-me/Whisper/releases/download/1.12.0/cli.zip";
     private const string SileroVadUrl = "https://github.com/SubtitleEdit/support-files/releases/download/whispercpp-184/ggml-silero-v6.2.0.zip";
@@ -41,7 +49,18 @@ public class WhisperDownloadService : IWhisperDownloadService
     private const string MacArmCTranslate2 = "https://github.com/SubtitleEdit/support-files/releases/download/whispercpp-183/whisper-ctranslate2-mac.zip";
     private const string LinuxCTranslate2 = "https://github.com/SubtitleEdit/support-files/releases/download/whispercpp-183/whisper-ctranslate2-Linux64.zip";
     private const string WindowCTranslate2 = "https://github.com/SubtitleEdit/support-files/releases/download/whispercpp-183/whisper-ctranslate2-win64.zip";
-    
+
+    // Built by support-files' build-whisperx-standalone-release.yml from a pinned ref of
+    // https://github.com/muaz978/subtitleedit-whisperx-standalone (v1.0.1), so every install
+    // of a given SE version gets the exact same, known-good build. Release 102 is the same
+    // source plus the workflow's entry-point prelude: UTF-8 line-buffered output (live
+    // progress) and no torchcodec warning - see #15096. Release 103 adds the build-time
+    // migration of whisperx's bundled pyannote VAD checkpoint, so Lightning no longer tells
+    // every user to run an upgrade command a frozen build cannot run - see #15170.
+    private const string MacArmWhisperX = "https://github.com/SubtitleEdit/support-files/releases/download/whisperx-standalone-103/whisperx-standalone-macos-arm64.7z";
+    private const string LinuxWhisperX = "https://github.com/SubtitleEdit/support-files/releases/download/whisperx-standalone-103/whisperx-standalone-linux-x64.7z";
+    private const string WindowsWhisperX = "https://github.com/SubtitleEdit/support-files/releases/download/whisperx-standalone-103/whisperx-standalone-windows-x64.7z";
+
     public WhisperDownloadService(HttpClient httpClient)
     {
         httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
@@ -102,6 +121,14 @@ public class WhisperDownloadService : IWhisperDownloadService
         await DownloadHelper.DownloadFileAsync(_httpClient, GetUrlTranslate2(), stream, progress, cancellationToken);
     }
 
+    public async Task DownloadWhisperX(string destinationFileName, IProgress<float>? progress, CancellationToken cancellationToken)
+    {
+        // Downloads straight to a file, like Purfview Faster-Whisper-XXL, instead of the shared
+        // in-memory _downloadStream - at 216 MB-355 MB, buffering this in memory would peak far
+        // higher before unpacking even starts (MemoryStream's doubling growth).
+        await DownloadHelper.DownloadFileAsync(_httpClient, GetUrlWhisperX(), destinationFileName, progress, cancellationToken);
+    }
+
     public async Task DownloadSileroVad(Stream stream, IProgress<float>? progress, CancellationToken cancellationToken)
     {
         await DownloadHelper.DownloadFileAsync(_httpClient, SileroVadUrl, stream, progress, cancellationToken);
@@ -113,15 +140,40 @@ public class WhisperDownloadService : IWhisperDownloadService
         {
             return WindowCTranslate2;
         }
-        
+
         if (OperatingSystem.IsMacOS() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
         {
             return MacArmCTranslate2;
         }
-        
+
         if (OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.X64)
         {
             return LinuxCTranslate2;
+        }
+
+        throw new PlatformNotSupportedException();
+    }
+
+    private static string GetUrlWhisperX()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            if (RuntimeInformation.ProcessArchitecture != Architecture.X64)
+            {
+                throw new PlatformNotSupportedException("WhisperX standalone build is not available for Windows ARM64.");
+            }
+
+            return WindowsWhisperX;
+        }
+
+        if (OperatingSystem.IsMacOS() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
+        {
+            return MacArmWhisperX;
+        }
+
+        if (OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.X64)
+        {
+            return LinuxWhisperX;
         }
 
         throw new PlatformNotSupportedException();

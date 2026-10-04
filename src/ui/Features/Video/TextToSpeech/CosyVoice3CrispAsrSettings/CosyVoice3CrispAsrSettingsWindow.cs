@@ -33,7 +33,7 @@ public class CosyVoice3CrispAsrSettingsWindow : Window
         Content = BuildContent(vm);
 
         var ok = UiUtil.MakeButtonOk(vm.OkCommand);
-        Activated += delegate { ok.Focus(); };
+        UiUtil.FocusOnFirstActivation(this, ok);
     }
 
     private Border BuildContent(CosyVoice3CrispAsrSettingsViewModel vm)
@@ -67,14 +67,14 @@ public class CosyVoice3CrispAsrSettingsWindow : Window
         var title = new TextBlock
         {
             Text = "CosyVoice3 (CrispASR)",
-            FontSize = 18,
+            FontSize = UiUtil.ScaledFontSize(18),
             FontWeight = FontWeight.SemiBold,
         };
 
         var subtitle = new TextBlock
         {
             Text = new CosyVoice3CrispAsr().Description,
-            FontSize = 12,
+            FontSize = UiUtil.ScaledFontSize(12),
             Opacity = 0.75,
             Margin = new Thickness(0, 2, 0, 0),
         };
@@ -106,6 +106,8 @@ public class CosyVoice3CrispAsrSettingsWindow : Window
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
                 new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
+                new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
+                new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) },
             },
             ColumnSpacing = 12,
             RowSpacing = 10,
@@ -114,9 +116,8 @@ public class CosyVoice3CrispAsrSettingsWindow : Window
         grid.Add(MakeLabel(Se.Language.General.Engine), 0, 0);
         var enginePanel = MakeStatusPanel(nameof(vm.EngineBrush), nameof(vm.EngineLabel));
         var engineButton = UiUtil.MakeButton(string.Empty, vm.RedownloadEngineCommand)
-            .WithIconLeft(IconNames.Download)
+            .WithIconLeftBindText(IconNames.Download, nameof(vm.EngineDownloadButtonText))
             .WithMarginLeft(12);
-        engineButton.Bind(ContentControl.ContentProperty, new Binding(nameof(vm.EngineDownloadButtonText)));
         enginePanel.Children.Add(engineButton);
         grid.Add(enginePanel, 0, 1);
 
@@ -126,37 +127,45 @@ public class CosyVoice3CrispAsrSettingsWindow : Window
         grid.Add(MakeLabel(CosyVoice3CrispAsr.ModelKeyF16), 2, 0);
         grid.Add(MakeStatusPanel(nameof(vm.F16BundleBrush), nameof(vm.F16BundleLabel)), 2, 1);
 
-        grid.Add(MakeLabel(Se.Language.Video.Presets), 3, 0);
+        // The RL talker bundles (#13272) share every companion with the two above - only the LLM
+        // file differs - so an installed RL row means one extra GGUF on disk, not a second bundle.
+        grid.Add(MakeLabel(CosyVoice3CrispAsr.ModelKeyRlQ4K), 3, 0);
+        grid.Add(MakeStatusPanel(nameof(vm.RlQ4KBundleBrush), nameof(vm.RlQ4KBundleLabel)), 3, 1);
+
+        grid.Add(MakeLabel(CosyVoice3CrispAsr.ModelKeyRlF16), 4, 0);
+        grid.Add(MakeStatusPanel(nameof(vm.RlF16BundleBrush), nameof(vm.RlF16BundleLabel)), 4, 1);
+
+        grid.Add(MakeLabel(Se.Language.Video.Presets), 5, 0);
         var presetsText = new TextBlock
         {
             VerticalAlignment = VerticalAlignment.Center,
             FontWeight = FontWeight.SemiBold,
             [!TextBlock.TextProperty] = new Binding(nameof(vm.PresetsLabel)),
         };
-        grid.Add(presetsText, 3, 1);
+        grid.Add(presetsText, 5, 1);
 
-        grid.Add(MakeLabel(Se.Language.Video.Voices), 4, 0);
+        grid.Add(MakeLabel(Se.Language.Video.Voices), 6, 0);
         var voicesText = new TextBlock
         {
             VerticalAlignment = VerticalAlignment.Center,
             FontWeight = FontWeight.SemiBold,
             [!TextBlock.TextProperty] = new Binding(nameof(vm.VoicesLabel)),
         };
-        grid.Add(voicesText, 4, 1);
+        grid.Add(voicesText, 6, 1);
 
-        grid.Add(MakeLabel(Se.Language.General.Speed), 5, 0);
-        grid.Add(MakeSpeedPanel(), 5, 1);
+        grid.Add(MakeLabel(Se.Language.General.Speed), 7, 0);
+        grid.Add(MakeSpeedPanel(), 7, 1);
 
         // Language spoken in imported reference WAVs — sent as `source_lang` so cross-lingual
         // cloning engages when the target language differs (the server cannot detect the
         // reference language itself for Latin scripts). Presets carry their own bank language.
-        grid.Add(MakeLabel("Reference language"), 6, 0);
+        grid.Add(MakeLabel("Reference language"), 8, 0);
         var sourceLanguageCombo = UiUtil.MakeComboBox(vm.SourceLanguages, vm, nameof(vm.SelectedSourceLanguage));
         var sourceLanguageHint = new TextBlock
         {
             Text = "Language spoken in imported reference WAVs (for cross-lingual cloning). "
                    + "Auto detects it from each voice's transcript.",
-            FontSize = 12,
+            FontSize = UiUtil.ScaledFontSize(12),
             Opacity = 0.75,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 0, 0, 0),
@@ -165,9 +174,9 @@ public class CosyVoice3CrispAsrSettingsWindow : Window
         {
             Orientation = Orientation.Horizontal,
             Children = { sourceLanguageCombo, sourceLanguageHint },
-        }, 6, 1);
+        }, 8, 1);
 
-        grid.Add(MakeLabel(Se.Language.General.InstallFolder), 7, 0);
+        grid.Add(MakeLabel(Se.Language.General.InstallFolder), 9, 0);
         var folderText = new TextBox
         {
             IsReadOnly = true,
@@ -176,10 +185,10 @@ public class CosyVoice3CrispAsrSettingsWindow : Window
             Background = Brushes.Transparent,
             Padding = new Thickness(0),
             VerticalContentAlignment = VerticalAlignment.Center,
-            FontSize = 12,
+            FontSize = UiUtil.ScaledFontSize(12),
             [!TextBox.TextProperty] = new Binding(nameof(vm.ModelsFolder)),
         };
-        grid.Add(folderText, 7, 1);
+        grid.Add(folderText, 9, 1);
 
         return new Border
         {

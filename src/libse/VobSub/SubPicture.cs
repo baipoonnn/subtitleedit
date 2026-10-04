@@ -29,6 +29,23 @@ namespace Nikse.SubtitleEdit.Core.VobSub
         public int BufferSize => _data.Length;
         private readonly byte[] _data;
         public SKRectI ImageDisplayArea;
+
+        /// <summary>
+        /// How far the ink starts in from the top-left of <see cref="ImageDisplayArea"/>, as
+        /// found by the last <see cref="GetBitmap"/> call - the offset the cropped bitmap was
+        /// cut at. Many discs declare a display area far larger than the text (some the whole
+        /// frame), so pairing the cropped bitmap with the display area's origin puts it in the
+        /// wrong place; use <see cref="ImagePosition"/> for where the cropped bitmap sits.
+        /// </summary>
+        public SKPointI ImageCropOffset { get; private set; }
+
+        /// <summary>
+        /// Screen position of the bitmap <see cref="GetBitmap"/> returns with cropping on
+        /// (the default): the display area's origin plus <see cref="ImageCropOffset"/>.
+        /// Only meaningful after <see cref="GetBitmap"/> has run, which fills in both.
+        /// </summary>
+        public SKPointI ImagePosition => new SKPointI(ImageDisplayArea.Left + ImageCropOffset.X, ImageDisplayArea.Top + ImageCropOffset.Y);
+
         public bool Forced { get; private set; }
         private readonly int _pixelDataAddressOffset;
         private readonly int _startDisplayControlSequenceTableAddress;
@@ -76,6 +93,7 @@ namespace Nikse.SubtitleEdit.Core.VobSub
         private SKBitmap ParseDisplayControlCommands(bool createBitmap, List<SKColor> colorLookUpTable, List<SKColor> fourColors, bool useCustomColors, bool crop)
         {
             ImageDisplayArea = new SKRectI();
+            ImageCropOffset = new SKPointI();
             SKBitmap bmp = null;
             var displayControlSequenceTableAddresses = new List<int>();
             var imageTopFieldDataAddress = 0;
@@ -255,13 +273,16 @@ namespace Nikse.SubtitleEdit.Core.VobSub
             fastBmp.LockImage();
             GenerateBitmap(_data, fastBmp, 0, imageTopFieldDataAddress, fourColors, 2);
             GenerateBitmap(_data, fastBmp, 1, imageBottomFieldDataAddress, fourColors, 2);
-            var cropped = CropBitmapAndUnlock(fastBmp, fourColors[0], crop);
+            var cropped = CropBitmapAndUnlock(fastBmp, fourColors[0], crop, out var cropOffset);
+            ImageCropOffset = cropOffset;
             bmp.Dispose();
             return cropped;
         }
 
-        private static SKBitmap CropBitmapAndUnlock(FastBitmap bmp, SKColor backgroundColor, bool crop)
+        // cropOffset: where the returned bitmap's top-left sits inside bmp (zero when nothing was cropped).
+        private static SKBitmap CropBitmapAndUnlock(FastBitmap bmp, SKColor backgroundColor, bool crop, out SKPointI cropOffset)
         {
+            cropOffset = new SKPointI();
             var y = 0;
             var c = backgroundColor;
             var minX = 0;
@@ -271,116 +292,56 @@ namespace Nikse.SubtitleEdit.Core.VobSub
 
             if (crop)
             {
+                // Each scan below only ran while the palette's background color itself
+                // looked like background (the loops seeded their pixel variable with it);
+                // an opaque background color meant no cropping. The scans themselves only
+                // ever tested pixel alpha, so read just the alpha bytes instead of building
+                // an SKColor per pixel. IsBackgroundColor is alpha < 2.
+                const byte alphaLimit = 2;
+                var backgroundIsTransparent = IsBackgroundColor(backgroundColor);
+
                 // Crop top
-                int x;
-                while (y < bmp.Height && IsBackgroundColor(c))
+                if (backgroundIsTransparent)
                 {
-                    c = bmp.GetPixel(0, y);
-                    if (IsBackgroundColor(c))
-                    {
-                        for (x = 1; x < bmp.Width; x++)
-                        {
-                            c = bmp.GetPixelNext();
-                            if (c.Alpha > 1)
-                            {
-                                break;
-                            }
-                        }
-                    }
-                    if (IsBackgroundColor(c))
+                    while (y < bmp.Height && bmp.IsRowTransparent(y, alphaLimit))
                     {
                         y++;
                     }
                 }
-                minY = y;
-                if (minY > 3)
-                {
-                    minY -= 3;
-                }
-                else
-                {
-                    minY = 0;
-                }
+                minY = y > 3 ? y - 3 : 0;
 
                 // Crop left
-                x = 0;
-                c = backgroundColor;
-                while (x < bmp.Width && IsBackgroundColor(c))
+                var x = 0;
+                if (backgroundIsTransparent)
                 {
-                    for (y = minY; y < bmp.Height; y++)
-                    {
-                        c = bmp.GetPixel(x, y);
-                        if (!IsBackgroundColor(c))
-                        {
-                            break;
-                        }
-                    }
-                    if (IsBackgroundColor(c))
+                    while (x < bmp.Width && bmp.IsColumnTransparent(x, minY, alphaLimit))
                     {
                         x++;
                     }
                 }
-                minX = x;
-                if (minX > 3)
-                {
-                    minX -= 3;
-                }
-                else
-                {
-                    minX = 0;
-                }
+                minX = x > 3 ? x - 3 : 0;
 
                 // Crop bottom
                 y = bmp.Height - 1;
-                c = backgroundColor;
-                while (y > minY && IsBackgroundColor(c))
+                if (backgroundIsTransparent)
                 {
-                    c = bmp.GetPixel(0, y);
-                    if (IsBackgroundColor(c))
-                    {
-                        for (x = 1; x < bmp.Width; x++)
-                        {
-                            c = bmp.GetPixelNext();
-                            if (!IsBackgroundColor(c))
-                            {
-                                break;
-                            }
-                        }
-                    }
-                    if (IsBackgroundColor(c))
+                    while (y > minY && bmp.IsRowTransparent(y, alphaLimit))
                     {
                         y--;
                     }
                 }
-                maxY = y + 7;
-                if (maxY >= bmp.Height)
-                {
-                    maxY = bmp.Height - 1;
-                }
+                maxY = Math.Min(y + 7, bmp.Height - 1);
 
                 // Crop right
                 x = bmp.Width - 1;
-                c = backgroundColor;
-                while (x > minX && IsBackgroundColor(c))
+                if (backgroundIsTransparent)
                 {
-                    for (y = minY; y < bmp.Height; y++)
-                    {
-                        c = bmp.GetPixel(x, y);
-                        if (!IsBackgroundColor(c))
-                        {
-                            break;
-                        }
-                    }
-                    if (IsBackgroundColor(c))
+                    while (x > minX && bmp.IsColumnTransparent(x, minY, alphaLimit))
                     {
                         x--;
                     }
                 }
-                maxX = x + 7;
-                if (maxX >= bmp.Width)
-                {
-                    maxX = bmp.Width - 1;
-                }
+                maxX = Math.Min(x + 7, bmp.Width - 1);
             }
 
             bmp.UnlockImage();
@@ -388,6 +349,7 @@ namespace Nikse.SubtitleEdit.Core.VobSub
 
             if (bmpImage.Width > 1 && bmpImage.Height > 1 && maxX - minX > 0 && maxY - minY > 0)
             {
+                cropOffset = new SKPointI(minX, minY);
                 return Crop(bmpImage, minX, minY, maxX - minX, maxY - minY);
             }
 
@@ -445,13 +407,26 @@ namespace Nikse.SubtitleEdit.Core.VobSub
                 }
 
                 var c = fourColors[color]; // set color via the four colors
-                for (var i = 0; i < runLength; i++, x++)
+                if (runLength > 0)
                 {
-                    if (x >= bmp.Width - 1)
+                    // The old per-pixel loop drew columns x..Width-2 normally and, when the
+                    // run reached the last column, drew that pixel too, then wrapped to the
+                    // next line and discarded the rest of the run. Fill the run in one go.
+                    var end = x + runLength; // exclusive
+                    if (end <= bmp.Width - 1)
                     {
-                        if (y < bmp.Height && x < bmp.Width && c != fourColors[0])
+                        if (y < bmp.Height && c.ToArgb() != colorZeroValue)
                         {
-                            bmp.SetPixel(x, y, c);
+                            bmp.SetPixel(x, y, c, runLength);
+                        }
+
+                        x = end;
+                    }
+                    else
+                    {
+                        if (y < bmp.Height && c.ToArgb() != colorZeroValue)
+                        {
+                            bmp.SetPixel(x, y, c, bmp.Width - x);
                         }
 
                         if (onlyHalf)
@@ -459,14 +434,9 @@ namespace Nikse.SubtitleEdit.Core.VobSub
                             onlyHalf = false;
                             index++;
                         }
+
                         x = 0;
                         y += addY;
-                        break;
-                    }
-
-                    if (y < bmp.Height && c.ToArgb() != colorZeroValue)
-                    {
-                        bmp.SetPixel(x, y, c);
                     }
                 }
             }

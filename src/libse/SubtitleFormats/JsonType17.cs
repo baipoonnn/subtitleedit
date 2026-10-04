@@ -1,6 +1,7 @@
 ﻿using Nikse.SubtitleEdit.Core.Common;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 
 namespace Nikse.SubtitleEdit.Core.SubtitleFormats
@@ -38,8 +39,8 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
                 sb.Append(" ], ");
                 sb.Append($"\"index\":{count},");
-                sb.Append($"\"start\": {p.StartTime.TotalMilliseconds}, ");
-                sb.Append($"\"end\": {p.EndTime.TotalMilliseconds} ");
+                sb.Append($"\"start\": {(long)Math.Round(p.StartTime.TotalMilliseconds)}, ");
+                sb.Append($"\"end\": {(long)Math.Round(p.EndTime.TotalMilliseconds)} ");
                 sb.Append("}");
             }
             sb.AppendLine();
@@ -74,7 +75,8 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 {
                     if (long.TryParse(startTimeObject, out var startMs) && long.TryParse(endTimeObject, out var endMs))
                     {
-                        var p = new Paragraph(string.Join(Environment.NewLine, texts), startMs, endMs);
+                        // ToText escapes with Json.EncodeJsonText, so decode on the way in.
+                        var p = new Paragraph(string.Join(Environment.NewLine, texts.Select(Json.DecodeJsonText)), startMs, endMs);
                         subtitle.Paragraphs.Add(p);
                     }
                     else

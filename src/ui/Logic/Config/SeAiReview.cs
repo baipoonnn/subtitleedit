@@ -10,6 +10,9 @@ public class SeAiReview
     public string OpenAiCompatibleModel { get; set; }
     public string OpenAiCompatibleApiKey { get; set; }
     public string Prompt { get; set; }
+
+    /// <summary>Optional reference information (names, terms, synopsis) appended to every review prompt.</summary>
+    public string Context { get; set; }
     public int MaxLinesPerBatch { get; set; }
     public int RequestDelaySeconds { get; set; }
 
@@ -20,7 +23,7 @@ public class SeAiReview
     public static string DefaultPrompt =>
         "You are a subtitle proofreader. Fix typos, spelling, grammar and punctuation in {language}." +
         "\n\nDo not rephrase, do not change meaning, tone or style. Keep names, slang and intentional dialect as they are. " +
-        "Keep all formatting tags (like <i> or {\\an8}) and line breaks exactly as they are. Only correct actual errors.";
+        "Keep all formatting tags (like <i>) and line breaks exactly as they are. Only correct actual errors.";
 
     public SeAiReview()
     {
@@ -32,6 +35,7 @@ public class SeAiReview
         OpenAiCompatibleModel = string.Empty;
         OpenAiCompatibleApiKey = string.Empty;
         Prompt = DefaultPrompt;
+        Context = string.Empty;
         MaxLinesPerBatch = 15;
         RequestDelaySeconds = 0;
     }

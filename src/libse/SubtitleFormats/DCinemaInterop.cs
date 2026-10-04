@@ -52,9 +52,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
         public override bool IsMine(List<string> lines, string fileName)
         {
-            var sb = new StringBuilder();
-            lines.ForEach(line => sb.AppendLine(line));
-            var xmlAsString = sb.ToString().Trim();
+            var xmlAsString = JoinLinesTrimmed(lines);
             if (!xmlAsString.Contains("<DCSubtitle"))
             {
                 return false;
@@ -268,7 +266,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                         XmlNode nodeTemp = xml.CreateElement("temp");
                         while (i < line.Length)
                         {
-                            if (!isItalic && line.Substring(i).StartsWith("<i>", StringComparison.Ordinal))
+                            if (!isItalic && line.AsSpan(i).StartsWith("<i>".AsSpan(), StringComparison.Ordinal))
                             {
                                 if (txt.Length > 0)
                                 {
@@ -279,7 +277,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                                 isItalic = true;
                                 i += 2;
                             }
-                            else if (!isBold && line.Substring(i).StartsWith("<b>", StringComparison.Ordinal))
+                            else if (!isBold && line.AsSpan(i).StartsWith("<b>".AsSpan(), StringComparison.Ordinal))
                             {
                                 if (txt.Length > 0)
                                 {
@@ -290,7 +288,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                                 isBold = true;
                                 i += 2;
                             }
-                            else if (isItalic && line.Substring(i).StartsWith("</i>", StringComparison.Ordinal))
+                            else if (isItalic && line.AsSpan(i).StartsWith("</i>".AsSpan(), StringComparison.Ordinal))
                             {
                                 if (txt.Length > 0)
                                 {
@@ -323,7 +321,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                                 isItalic = false;
                                 i += 3;
                             }
-                            else if (isBold && line.Substring(i).StartsWith("</b>", StringComparison.Ordinal))
+                            else if (isBold && line.AsSpan(i).StartsWith("</b>".AsSpan(), StringComparison.Ordinal))
                             {
                                 if (txt.Length > 0)
                                 {
@@ -356,7 +354,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                                 isBold = false;
                                 i += 3;
                             }
-                            else if (line.Substring(i).StartsWith("<font color=", StringComparison.Ordinal) && line.Substring(i + 3).Contains('>'))
+                            else if (line.AsSpan(i).StartsWith("<font color=".AsSpan(), StringComparison.Ordinal) && line.AsSpan(i + 3).IndexOf('>') >= 0)
                             {
                                 var endOfFont = line.IndexOf('>', i);
                                 if (txt.Length > 0)
@@ -370,7 +368,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                                 fontNo++;
                                 i = endOfFont;
                             }
-                            else if (fontNo > 0 && line.Substring(i).StartsWith("</font>", StringComparison.Ordinal))
+                            else if (fontNo > 0 && line.AsSpan(i).StartsWith("</font>".AsSpan(), StringComparison.Ordinal))
                             {
                                 if (txt.Length > 0)
                                 {
@@ -556,6 +554,37 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             return s;
         }
 
+        /// <summary>
+        /// Looks up an attribute by name, ignoring case. The SMPTE DCST schemas spell the text
+        /// attributes "Vposition"/"Valign"/"Halign" while the Interop schema spells them
+        /// "VPosition"/"VAlign"/"HAlign" - and some exporters mix the two, which used to make the
+        /// position lookup fail and collapse multi-line subtitles into one line.
+        /// </summary>
+        internal static XmlAttribute GetAttributeIgnoreCase(XmlNode node, string name)
+        {
+            var attributes = node?.Attributes;
+            if (attributes == null)
+            {
+                return null;
+            }
+
+            var attribute = attributes[name];
+            if (attribute != null)
+            {
+                return attribute;
+            }
+
+            foreach (XmlAttribute a in attributes)
+            {
+                if (a.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase))
+                {
+                    return a;
+                }
+            }
+
+            return null;
+        }
+
         public static string GenerateId()
         {
             return Guid.NewGuid().ToString().RemoveChar('-').Insert(8, "-").Insert(13, "-").Insert(18, "-").Insert(23, "-").ToLowerInvariant();
@@ -612,10 +641,8 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
         {
             _errorCount = 0;
 
-            var sb = new StringBuilder();
-            lines.ForEach(line => sb.AppendLine(line));
             var xml = new XmlDocument { XmlResolver = null };
-            xml.LoadXml(sb.ToString().Trim());
+            xml.LoadXml(JoinLinesTrimmed(lines));
             if (xml.DocumentElement == null)
             {
                 return;
@@ -710,10 +737,11 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                         {
                             extra = innerNode.OuterXml;
 
-                            if (innerNode.Attributes["VPosition"] != null)
+                            var vPositionNode = GetAttributeIgnoreCase(innerNode, "VPosition");
+                            if (vPositionNode != null)
                             {
-                                vPosition = innerNode.Attributes["VPosition"].InnerText;
-                                var vAlignmentNode = innerNode.Attributes["VAlign"];
+                                vPosition = vPositionNode.InnerText;
+                                var vAlignmentNode = GetAttributeIgnoreCase(innerNode, "VAlign");
                                 if (vAlignmentNode != null)
                                 {
                                     vAlignment = vAlignmentNode.InnerText;
@@ -735,9 +763,10 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                             var alignRight = false;
                             var alignVTop = false;
                             var alignVCenter = false;
-                            if (innerNode.Attributes["HAlign"] != null)
+                            var hAlignNode = GetAttributeIgnoreCase(innerNode, "HAlign");
+                            if (hAlignNode != null)
                             {
-                                var hAlign = innerNode.Attributes["HAlign"].InnerText;
+                                var hAlign = hAlignNode.InnerText;
                                 if (hAlign == "left")
                                 {
                                     alignLeft = true;
@@ -748,9 +777,10 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                                 }
                             }
 
-                            if (innerNode.Attributes["VAlign"] != null)
+                            var vAlignNode = GetAttributeIgnoreCase(innerNode, "VAlign");
+                            if (vAlignNode != null)
                             {
-                                var hAlign = innerNode.Attributes["VAlign"].InnerText;
+                                var hAlign = vAlignNode.InnerText;
                                 if (hAlign == "top")
                                 {
                                     alignVTop = true;
@@ -903,9 +933,10 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
                             foreach (XmlNode innerInnerNode in innerNode)
                             {
-                                if (innerInnerNode.Attributes["VPosition"] != null)
+                                var vPositionNode = GetAttributeIgnoreCase(innerInnerNode, "VPosition");
+                                if (vPositionNode != null)
                                 {
-                                    vPosition = innerInnerNode.Attributes["VPosition"].InnerText;
+                                    vPosition = vPositionNode.InnerText;
                                     if (vPosition != lastVPosition)
                                     {
                                         if (pText.Length > 0 && lastVPosition.Length > 0)

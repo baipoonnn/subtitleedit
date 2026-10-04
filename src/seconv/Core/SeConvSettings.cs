@@ -91,6 +91,10 @@ internal sealed class SeConvSettings
             {
                 MergeShortLinesMaxGap = s.Tools.MergeShortLinesMaxGap,
                 MergeShortLinesOnlyContinuous = s.Tools.MergeShortLinesOnlyContinuous,
+                LlamaCppPrompt = s.Tools.LlamaCppPrompt,
+                OllamaPrompt = s.Tools.OllamaPrompt,
+                LmStudioPrompt = s.Tools.LmStudioPrompt,
+                OcrUseWordSplitList = s.Tools.OcrUseWordSplitList,
             },
             RemoveTextForHearingImpaired = new RemoveHiSection
             {
@@ -132,6 +136,10 @@ internal sealed class SeConvSettings
                 BoxPaddingTop = style.BoxPaddingTop,
                 BoxPaddingBottom = style.BoxPaddingBottom,
                 LineSpacingPercent = style.LineSpacingPercent,
+                IsFullFrame = style.IsFullFrame,
+                FullFrameBackgroundColor = ToHex(style.FullFrameBackgroundColor),
+                Mode3D = style.Mode3D.ToString(),
+                Depth3D = style.Depth3D,
                 Alignment = style.Alignment.ToString(),
                 ContentAlignment = style.ContentAlignment.ToString(),
                 // BottomTopMargin / LeftRightMargin left unset: their default is "5% of the
@@ -299,6 +307,18 @@ internal sealed class SeConvSettings
                 s.Tools.MergeShortLinesMaxGap = t.MergeShortLinesMaxGap.Value;
             if (t.MergeShortLinesOnlyContinuous.HasValue)
                 s.Tools.MergeShortLinesOnlyContinuous = t.MergeShortLinesOnlyContinuous.Value;
+
+            // Auto-translate prompts. --translate-prompt is applied later (AutoTranslateRunner),
+            // so the command line still wins over a settings file / profile.
+            if (!string.IsNullOrWhiteSpace(t.LlamaCppPrompt))
+                s.Tools.LlamaCppPrompt = t.LlamaCppPrompt;
+            if (!string.IsNullOrWhiteSpace(t.OllamaPrompt))
+                s.Tools.OllamaPrompt = t.OllamaPrompt;
+            if (!string.IsNullOrWhiteSpace(t.LmStudioPrompt))
+                s.Tools.LmStudioPrompt = t.LmStudioPrompt;
+
+            if (t.OcrUseWordSplitList.HasValue)
+                s.Tools.OcrUseWordSplitList = t.OcrUseWordSplitList.Value;
         }
 
         if (RemoveTextForHearingImpaired is { } r)
@@ -356,6 +376,18 @@ internal sealed class SeConvSettings
         public int? MergeShortLinesMaxGap { get; set; }
         public bool? MergeShortLinesOnlyContinuous { get; set; }
 
+        /// <summary>Auto-translate prompt for the llama.cpp engine ({0}=source, {1}=target, {2}=text).</summary>
+        public string? LlamaCppPrompt { get; set; }
+
+        /// <summary>Auto-translate prompt for the Ollama engine ({0}=source, {1}=target, {2}=text).</summary>
+        public string? OllamaPrompt { get; set; }
+
+        /// <summary>Auto-translate prompt for the LM Studio engine ({0}=source, {1}=target, {2}=text).</summary>
+        public string? LmStudioPrompt { get; set; }
+
+        /// <summary>"Fix common OCR errors": split run-together words via the word split list (default off).</summary>
+        public bool? OcrUseWordSplitList { get; set; }
+
         [JsonExtensionData]
         public Dictionary<string, JsonElement>? UnknownMembers { get; set; }
     }
@@ -385,6 +417,10 @@ internal sealed class SeConvSettings
         public int? BoxPaddingTop { get; set; }
         public int? BoxPaddingBottom { get; set; }
         public int? LineSpacingPercent { get; set; }
+        public bool? IsFullFrame { get; set; }
+        public string? FullFrameBackgroundColor { get; set; }
+        public string? Mode3D { get; set; }
+        public int? Depth3D { get; set; }
         public string? Alignment { get; set; }
         public string? ContentAlignment { get; set; }
         public int? BottomTopMargin { get; set; }
@@ -427,6 +463,14 @@ internal sealed class SeConvSettings
                 style.BoxPaddingBottom = BoxPaddingBottom.Value;
             if (LineSpacingPercent.HasValue)
                 style.LineSpacingPercent = LineSpacingPercent.Value;
+            if (IsFullFrame.HasValue)
+                style.IsFullFrame = IsFullFrame.Value;
+            if (!string.IsNullOrWhiteSpace(FullFrameBackgroundColor) && ImageExportStyle.TryParseColor(FullFrameBackgroundColor, out var fullFrameBackgroundColor))
+                style.FullFrameBackgroundColor = fullFrameBackgroundColor;
+            if (!string.IsNullOrWhiteSpace(Mode3D) && ImageExportStyle.TryParseMode3D(Mode3D, out var mode3D))
+                style.Mode3D = mode3D;
+            if (Depth3D.HasValue && ImageExportStyle.IsValidDepth3D(Depth3D.Value))
+                style.Depth3D = Depth3D.Value;
             if (!string.IsNullOrWhiteSpace(Alignment) && ImageExportStyle.TryParseAlignment(Alignment, out var alignment))
                 style.Alignment = alignment;
             if (!string.IsNullOrWhiteSpace(ContentAlignment) && ImageExportStyle.TryParseContentAlignment(ContentAlignment, out var contentAlignment))

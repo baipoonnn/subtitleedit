@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
@@ -7,10 +7,13 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Nikse.SubtitleEdit.Controls.VideoPlayer;
+using Nikse.SubtitleEdit.Core.BluRaySup;
 using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Core.SubtitleFormats;
+using Nikse.SubtitleEdit.Features.Files.ExportImageBased;
 using Nikse.SubtitleEdit.Features.Main.Layout;
 using Nikse.SubtitleEdit.Features.Shared.PromptFileSaved;
+using Nikse.SubtitleEdit.Features.Shared.PromptFilesSaved;
 using Nikse.SubtitleEdit.Features.Shared;
 using Nikse.SubtitleEdit.Features.Shared.PromptTextBox;
 using Nikse.SubtitleEdit.Logic;
@@ -21,6 +24,7 @@ using SkiaSharp;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -29,6 +33,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Timers;
+using Nikse.SubtitleEdit.UiLogic.Export;
 using Nikse.SubtitleEdit.UiLogic.Media;
 
 namespace Nikse.SubtitleEdit.Features.Video.BurnIn;
@@ -45,6 +50,7 @@ public partial class BurnInViewModel : ObservableObject
     [ObservableProperty] private decimal? _selectedFontOutline;
     [ObservableProperty] private string _fontOutlineText;
     [ObservableProperty] private decimal? _selectedFontShadowWidth;
+    [ObservableProperty] private decimal? _selectedFontSpacing;
     [ObservableProperty] private string _fontShadowText;
     [ObservableProperty] private ObservableCollection<FontBoxItem> _fontBoxTypes;
     [ObservableProperty] private FontBoxItem _selectedFontBoxType;
@@ -69,6 +75,9 @@ public partial class BurnInViewModel : ObservableObject
     [ObservableProperty] private ObservableCollection<string> _videoPresets;
     [ObservableProperty] private string? _selectedVideoPreset;
     [ObservableProperty] private string _videoPresetText;
+    [ObservableProperty] private ObservableCollection<string> _videoTunes;
+    [ObservableProperty] private string? _selectedVideoTune;
+    [ObservableProperty] private bool _isVideoTuneVisible;
     [ObservableProperty] private ObservableCollection<string> _videoCrf;
     [ObservableProperty] private string? _selectedVideoCrf;
     [ObservableProperty] private string _videoCrfText;
@@ -98,11 +107,21 @@ public partial class BurnInViewModel : ObservableObject
     [ObservableProperty] private bool _isBatchMode;
     [ObservableProperty] private Bitmap? _imagePreview;
     [ObservableProperty] private bool _useSourceResolution;
+    [ObservableProperty] private ObservableCollection<Export3DModeDisplay> _modes3D;
+    [ObservableProperty] private Export3DModeDisplay _selectedMode3D;
+    [ObservableProperty] private int? _depth3D;
+    [ObservableProperty] private bool _isDepth3DEnabled;
     [ObservableProperty] private bool _showAssaOnlyBox;
     [ObservableProperty] private string _targetVideoBitRateInfo;
     [ObservableProperty] private string _displayEffect;
     [ObservableProperty] private string _logoInfo;
     [ObservableProperty] private bool _promptForFfmpegParameters;
+
+    /// <summary>
+    /// The subtitle is a Blu-ray sup (from the image-based editor) burned in as it is: the text
+    /// settings do not apply, so the window hides them, and the preview shows the sup itself.
+    /// </summary>
+    [ObservableProperty] private bool _isImageSubtitle;
 
     public Window? Window { get; set; }
     public bool OkPressed { get; private set; }
@@ -112,16 +131,28 @@ public partial class BurnInViewModel : ObservableObject
     private Subtitle _subtitle = new();
     private bool _loading = true;
     private readonly StringBuilder _log;
+    private readonly TempSubtitleFiles _tempSubtitleFiles = new();
     private long _startTicks;
+    private long _runStartTicks;
     private long _processedFrames;
     private Process? _ffmpegProcess;
     private readonly Timer _timerAnalyze;
     private readonly Timer _timerGenerate;
     private bool _doAbort;
+    private bool _isClosing;
+    // Held while generating, so a long (batch) encode is not cut short by the machine idling into
+    // sleep (#15552). Driven by IsGenerating, which EndRun resets however a run ends.
+    private readonly SleepInhibitorScope _sleepInhibitor = new(Se.Language.Video.BurnIn.Title);
+    private bool _ffmpegWritesOutputFile; // false for the two-pass analyze pass, which writes to the null device
+    private string _passLogFilePrefix = string.Empty;
+    private readonly Dictionary<string, int> _audioSizeInMbCache = new();
     private int _jobItemIndex = -1;
     private FfmpegMediaInfo2? _mediaInfo;
     private SubtitleFormat? _subtitleFormat;
     private string _inputVideoFileName;
+    private string _imageSubtitleFileName = string.Empty;
+    private const string StatusSkipped = "Skipped";
+    internal const string StatusWaiting = "Waiting";
     private List<BurnInEffectItem> _selectedEffects;
 
     public VideoPlayerControl? VideoPlayerControl { get; set; }
@@ -129,6 +160,7 @@ public partial class BurnInViewModel : ObservableObject
     private VideoPlayerControl? _fullScreenVideoPlayerControl;
     private DispatcherTimer? _previewTimer;
     private string _oldPreviewAssa = string.Empty;
+    private bool _previewDirty = true; // true = preview ASSA must be regenerated on the next timer tick
     private readonly string _tempPreviewAssaFileName;
     private bool _isPreviewSubtitleLoaded;
 
@@ -152,6 +184,7 @@ public partial class BurnInViewModel : ObservableObject
         FontFactorText = string.Empty;
 
         VideoPresets = new ObservableCollection<string>();
+        VideoTunes = new ObservableCollection<string>();
 
         FontBoxTypes = new ObservableCollection<FontBoxItem>
         {
@@ -172,16 +205,12 @@ public partial class BurnInViewModel : ObservableObject
         VideoWidth = 1920;
         VideoHeight = 1080;
 
-        AudioEncodings = new ObservableCollection<string>
-        {
-            "copy",
-            "aac",
-            "ac3",
-            "mp3",
-            "opus",
-            "vorbis",
-        };
-        SelectedAudioEncoding = "copy";
+        Modes3D = new ObservableCollection<Export3DModeDisplay>(Export3DModeDisplay.GetItems());
+        SelectedMode3D = Modes3D[0];
+        Depth3D = 0;
+
+        AudioEncodings = new ObservableCollection<string>(OutputContainer.GetAudioEncodings(OutputContainer.DefaultExtension));
+        SelectedAudioEncoding = OutputContainer.AudioEncodingCopy;
 
         AudioSampleRates = new ObservableCollection<string>
         {
@@ -205,19 +234,14 @@ public partial class BurnInViewModel : ObservableObject
         };
         SelectedAudioBitRate = AudioBitRates[2];
 
-        VideoPixelFormats = new ObservableCollection<PixelFormatItem>(PixelFormatItem.PixelFormats);
+        VideoPixelFormats = new ObservableCollection<PixelFormatItem>(PixelFormatItem.GetPixelFormats(null));
 
         VideoEncodings = new ObservableCollection<VideoEncodingItem>(VideoEncodingItem.VideoEncodings);
         SelectedVideoEncoding = VideoEncodings[0];
 
         VideoCrf = new ObservableCollection<string>();
 
-        VideoExtensions = new ObservableCollection<string>
-        {
-            ".mkv",
-            ".mp4",
-            ".mov",
-        };
+        VideoExtensions = new ObservableCollection<string>(OutputContainer.GetExtensions(SelectedVideoEncoding.Codec));
         SelectedVideoExtension = VideoExtensions[0];
 
         JobItems = new ObservableCollection<BurnInJobItem>();
@@ -239,6 +263,7 @@ public partial class BurnInViewModel : ObservableObject
         _selectedEffects = new List<BurnInEffectItem>();
         _log = new StringBuilder();
         _loading = false;
+        _previewDirty = true;
         _inputVideoFileName = string.Empty;
 
         _timerGenerate = new();
@@ -258,10 +283,48 @@ public partial class BurnInViewModel : ObservableObject
 
     public void Initialize(string videoFileName, Subtitle subtitle, SubtitleFormat subtitleFormat)
     {
-        VideoFileName = videoFileName;
-        _inputVideoFileName = videoFileName;
         _subtitle = new Subtitle(subtitle, false);
         _subtitleFormat = subtitleFormat;
+        _previewDirty = true;
+        SetVideo(videoFileName);
+    }
+
+    /// <summary>
+    /// Burns only the given lines, with "Cut" set to the span from the first start to the last
+    /// end so a short clip comes out without typing the times (SE 4 "Generate video with
+    /// burned-in subtitles for selected lines", issue #15012).
+    /// </summary>
+    public void InitializeSelectedLines(string videoFileName, Subtitle subtitle, SubtitleFormat subtitleFormat)
+    {
+        Initialize(videoFileName, subtitle, subtitleFormat);
+        if (subtitle.Paragraphs.Count == 0)
+        {
+            return;
+        }
+
+        CutFrom = TimeSpan.FromMilliseconds(Math.Max(0, subtitle.Paragraphs.Min(p => p.StartTime.TotalMilliseconds)));
+        CutTo = TimeSpan.FromMilliseconds(subtitle.Paragraphs.Max(p => p.EndTime.TotalMilliseconds));
+        IsCutActive = CutTo > CutFrom;
+    }
+
+    /// <summary>
+    /// Burns a Blu-ray sup into the video instead of text - the bitmaps as they are, overlapping
+    /// lines included (issue #14456). Batch mode takes sup files the same way, per job.
+    /// </summary>
+    public void InitializeImageSubtitle(string videoFileName, string bluRaySupFileName)
+    {
+        IsImageSubtitle = true;
+        _imageSubtitleFileName = bluRaySupFileName;
+        _subtitle = new Subtitle();
+        _subtitleFormat = null;
+        _previewDirty = true;
+        SetVideo(videoFileName);
+    }
+
+    private void SetVideo(string videoFileName)
+    {
+        VideoFileName = videoFileName;
+        _inputVideoFileName = videoFileName;
 
         var fileExists = !string.IsNullOrWhiteSpace(videoFileName) && File.Exists(videoFileName);
         if (fileExists)
@@ -271,6 +334,7 @@ public partial class BurnInViewModel : ObservableObject
             _ = Task.Run(() =>
             {
                 _mediaInfo = FfmpegMediaInfo2.Parse(videoFileName);
+                _previewDirty = true;
                 Dispatcher.UIThread.Post(() =>
                 {
                     // Audio-only files have no video stream (0x0) - keep the configured
@@ -293,7 +357,7 @@ public partial class BurnInViewModel : ObservableObject
 
     private void TimerAnalyzeElapsed(object? sender, ElapsedEventArgs e)
     {
-        if (_ffmpegProcess == null)
+        if (_ffmpegProcess == null || _isClosing)
         {
             return;
         }
@@ -301,11 +365,7 @@ public partial class BurnInViewModel : ObservableObject
         if (_doAbort)
         {
             _timerAnalyze.Stop();
-#pragma warning disable CA1416
-            _ffmpegProcess.Kill(true);
-#pragma warning restore CA1416
-
-            IsGenerating = false;
+            AbortRun();
             return;
         }
 
@@ -336,26 +396,181 @@ public partial class BurnInViewModel : ObservableObject
 
         _timerAnalyze.Stop();
 
+        // A failed analyze pass writes no statistics file, so pass 2 could only fail too - it used
+        // to run anyway and report whatever was already at the output path.
+        if (_ffmpegProcess.ExitCode != 0)
+        {
+            DeletePassLogFiles();
+            ReportFfmpegFailure(JobItems[_jobItemIndex], "Two-pass analyze (pass 1) failed for");
+            return;
+        }
+
         Dispatcher.UIThread.Invoke(async () =>
         {
+            // The window may have been closed between pass 1 ending and this running - the
+            // timers are disposed by then, and pass 2 would encode on with nothing to stop it.
+            if (_isClosing)
+            {
+                return;
+            }
+
             var jobItem = JobItems[_jobItemIndex];
             var process = await GetFfmpegProcess(jobItem, 2);
             if (process == null)
             {
-                IsGenerating = false;
+                // Only a cancelled "ffmpeg parameters" prompt gets here: that ends the run.
+                DeletePassLogFiles();
+                jobItem.Status = _doAbort ? Se.Language.General.Cancelled : Se.Language.General.Error;
+                EndRun();
                 return;
             }
 
             _ffmpegProcess = process;
-            StartFfmpegProcess(process, "two-pass encode (pass 2)");
+            StartFfmpegProcess(process, "two-pass encode (pass 2)", true);
 
             _timerGenerate.Start();
         });
     }
 
+    /// <summary>
+    /// Ends an aborted run. Called on the timer thread: ffmpeg is killed first (it keeps the
+    /// output file open until it is gone), then the partial output is removed - left on disk it
+    /// made the next batch run name its output "_2" - and the row no longer says "Generating".
+    /// </summary>
+    private void AbortRun()
+    {
+        if (KillFfmpegProcess() && _ffmpegWritesOutputFile)
+        {
+            DeletePartialOutputFile();
+        }
+
+        DeletePassLogFiles();
+
+        if (_isClosing)
+        {
+            return;
+        }
+
+        // Not on this (timer) thread: the window's PropertyChanged handler for IsGenerating
+        // changes MinHeight, which must happen on the UI thread.
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_jobItemIndex >= 0 && _jobItemIndex < JobItems.Count)
+            {
+                JobItems[_jobItemIndex].Status = Se.Language.General.Cancelled;
+            }
+
+            ProgressText = string.Empty;
+            EndRun();
+        });
+    }
+
+    /// <summary>
+    /// Resets the "generating" state when a run is over - done, failed or aborted. UI thread only.
+    /// The one-shot "prompt for ffmpeg parameters" flag is reset here and not when Generate()
+    /// returns, which is right after the first ffmpeg process was started: pass 2 and every
+    /// batch file after the first were never prompted.
+    /// </summary>
+    partial void OnIsGeneratingChanged(bool value) => _sleepInhibitor.SetActive(value);
+
+    private void EndRun()
+    {
+        IsGenerating = false;
+        ProgressValue = 0;
+        PromptForFfmpegParameters = false;
+    }
+
+    /// <summary>
+    /// Kills a still running ffmpeg and waits briefly for it to go away (it keeps the output
+    /// file open until then). Returns true when there was a running process to kill.
+    /// </summary>
+    private bool KillFfmpegProcess()
+    {
+        try
+        {
+            if (_ffmpegProcess == null || _ffmpegProcess.HasExited)
+            {
+                return false;
+            }
+
+#pragma warning disable CA1416
+            _ffmpegProcess.Kill(true);
+#pragma warning restore CA1416
+            _ffmpegProcess.WaitForExit(3000);
+            return true;
+        }
+        catch
+        {
+            // ignore - it may have exited in between
+            return false;
+        }
+    }
+
+    private void DeletePartialOutputFile()
+    {
+        if (_jobItemIndex < 0 || _jobItemIndex >= JobItems.Count)
+        {
+            return;
+        }
+
+        var outputFileName = JobItems[_jobItemIndex].OutputVideoFileName;
+        if (string.IsNullOrWhiteSpace(outputFileName) || !File.Exists(outputFileName))
+        {
+            return;
+        }
+
+        try
+        {
+            File.Delete(outputFileName);
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
+    /// <summary>
+    /// Removes the two-pass statistics files ("prefix-0.log", ".mbtree", ".cutree" ...) of the
+    /// current job. Best effort - they are in the temp folder.
+    /// </summary>
+    private void DeletePassLogFiles()
+    {
+        var prefix = _passLogFilePrefix;
+        _passLogFilePrefix = string.Empty;
+        if (string.IsNullOrEmpty(prefix))
+        {
+            return;
+        }
+
+        try
+        {
+            var folder = Path.GetDirectoryName(prefix);
+            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
+            {
+                return;
+            }
+
+            foreach (var fileName in Directory.GetFiles(folder, Path.GetFileName(prefix) + "*"))
+            {
+                try
+                {
+                    File.Delete(fileName);
+                }
+                catch
+                {
+                    // ignore
+                }
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
     private void TimerGenerateElapsed(object? sender, ElapsedEventArgs e)
     {
-        if (_ffmpegProcess == null)
+        if (_ffmpegProcess == null || _isClosing)
         {
             return;
         }
@@ -363,11 +578,7 @@ public partial class BurnInViewModel : ObservableObject
         if (_doAbort)
         {
             _timerGenerate.Stop();
-#pragma warning disable CA1416
-            _ffmpegProcess.Kill(true);
-#pragma warning restore CA1416
-
-            IsGenerating = false;
+            AbortRun();
             return;
         }
 
@@ -400,92 +611,182 @@ public partial class BurnInViewModel : ObservableObject
         _timerGenerate.Stop();
         ProgressValue = 100;
         ProgressText = string.Empty;
+        DeletePassLogFiles(); // pass 2 has read them - failed or not, they are of no more use
 
         var jobItem = JobItems[_jobItemIndex];
         Se.WriteToolsLog($"Burn-in ffmpeg finished with exit code {_ffmpegProcess.ExitCode} for \"{jobItem.OutputVideoFileName}\"");
 
-        if (!File.Exists(jobItem.OutputVideoFileName))
+        // The output file existing is not proof that this run produced it: with an old file at the
+        // target path a refused or failed ffmpeg passed the check, and the job was reported as
+        // "Done" while the stale file was left untouched (issue #14210).
+        if (_ffmpegProcess.ExitCode != 0)
         {
-            Se.WriteToolsLog("Output video file not found: " + jobItem.OutputVideoFileName + Environment.NewLine +
-                             "ffmpeg: " + _ffmpegProcess.StartInfo.FileName + Environment.NewLine +
-                             "Parameters: " + _ffmpegProcess.StartInfo.Arguments + Environment.NewLine +
-                             "OS: " + Environment.OSVersion + Environment.NewLine +
-                             "64-bit: " + Environment.Is64BitOperatingSystem + Environment.NewLine +
-                             "ffmpeg exit code: " + _ffmpegProcess.ExitCode + Environment.NewLine +
-                             "ffmpeg log: " + _log);
-
-            Dispatcher.UIThread.Invoke(async () =>
-            {
-                await MessageBox.Show(Window!,
-                    "Unable to generate video",
-                    "Output video file not generated: " + jobItem.OutputVideoFileName + Environment.NewLine +
-                    "Parameters: " + _ffmpegProcess.StartInfo.Arguments,
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
-
-                IsGenerating = false;
-                ProgressValue = 0;
-            });
-
+            ReportFfmpegFailure(jobItem, "ffmpeg failed for");
             return;
         }
 
-        JobItems[_jobItemIndex].Status = Se.Language.General.Done;
+        if (!File.Exists(jobItem.OutputVideoFileName))
+        {
+            ReportFfmpegFailure(jobItem, "Output video file not generated:");
+            return;
+        }
+
+        JobItems[_jobItemIndex].Status = UiUtil.RemoveAccessKey(Se.Language.General.Done);
 
         Dispatcher.UIThread.Invoke(async () =>
         {
-            ProgressValue = 0;
+            await ContinueWithNextJobItemOrFinish();
+        });
+    }
 
-            if (_jobItemIndex < JobItems.Count - 1)
+    /// <summary>
+    /// Starts the next batch item, or ends the run with the "done" dialog. Called on the UI thread
+    /// after an item finished - or was skipped before ffmpeg was ever started.
+    /// </summary>
+    private async Task ContinueWithNextJobItemOrFinish()
+    {
+        // Closing the window used to leave the batch running: the next job was started from
+        // here, and the "done" dialog below was then shown on a closed window.
+        if (_isClosing)
+        {
+            return;
+        }
+
+        ProgressValue = 0;
+
+        if (_jobItemIndex < JobItems.Count - 1)
+        {
+            await InitAndStartJobItem(_jobItemIndex + 1).ConfigureAwait(false);
+            return;
+        }
+
+        EndRun();
+
+        var runTime = TimeSpan.FromTicks(DateTime.UtcNow.Ticks - _runStartTicks);
+        var elapsed = runTime.TotalHours >= 1
+            ? $"{(int)runTime.TotalHours}:{runTime.Minutes:00}:{runTime.Seconds:00}"
+            : $"{runTime.Minutes}:{runTime.Seconds:00}";
+        var jobItem = JobItems[_jobItemIndex];
+        if (JobItems.Count == 1 && jobItem.Status != StatusSkipped)
+        {
+            await _windowService.ShowDialogAsync<PromptFileSavedWindow, PromptFileSavedViewModel>(Window!, vm =>
             {
-                await InitAndStartJobItem(_jobItemIndex + 1).ConfigureAwait(false);
+                vm.Initialize(
+                    Se.Language.General.VideoFileGenerated,
+                    string.Format(Se.Language.General.VideoFileGeneratedX, jobItem.OutputVideoFileName),
+                    jobItem.OutputVideoFileName,
+                    true,
+                    true,
+                    elapsed);
+            });
+        }
+        else
+        {
+            // Batch: one card per video with its own play / show in folder, instead of a plain
+            // "file ==> status" message box with no way to reach the output.
+            var files = JobItems
+                .Select(p => new SavedFileItem(
+                    p.OutputVideoFileName,
+                    p.Status == UiUtil.RemoveAccessKey(Se.Language.General.Done) && File.Exists(p.OutputVideoFileName),
+                    p.Status))
+                .ToList();
+            var doneCount = files.Count(p => p.IsSuccess);
+            var headline = doneCount == files.Count
+                ? string.Format(Se.Language.General.XVideosGenerated, doneCount)
+                : string.Format(Se.Language.General.XOfYVideosGenerated, doneCount, files.Count);
+
+            await _windowService.ShowDialogAsync<PromptFilesSavedWindow, PromptFilesSavedViewModel>(Window!, vm =>
+            {
+                vm.Initialize(Se.Language.General.VideoFilesGenerated, headline, files, elapsed);
+            });
+        }
+    }
+
+    /// <summary>
+    /// Tells the user that an ffmpeg run failed, and writes the full command line, exit code and
+    /// ffmpeg log to the tools log for bug reports.
+    /// </summary>
+    private void ReportFfmpegFailure(BurnInJobItem jobItem, string reason)
+    {
+        Se.WriteToolsLog(reason + " " + jobItem.OutputVideoFileName + Environment.NewLine +
+                         "ffmpeg: " + _ffmpegProcess!.StartInfo.FileName + Environment.NewLine +
+                         "Parameters: " + _ffmpegProcess.StartInfo.Arguments + Environment.NewLine +
+                         "OS: " + Environment.OSVersion + Environment.NewLine +
+                         "64-bit: " + Environment.Is64BitOperatingSystem + Environment.NewLine +
+                         "ffmpeg exit code: " + _ffmpegProcess.ExitCode + Environment.NewLine +
+                         "ffmpeg log: " + _log);
+
+        jobItem.Status = Se.Language.General.Error;
+
+        Dispatcher.UIThread.Invoke(async () =>
+        {
+            // An ffmpeg killed by closing the window "fails" too - there is no window left to
+            // show the message on.
+            if (_isClosing)
+            {
                 return;
             }
 
-            IsGenerating = false;
+            await MessageBox.Show(Window!,
+                "Unable to generate video",
+                reason + " " + jobItem.OutputVideoFileName + Environment.NewLine +
+                "ffmpeg exit code: " + _ffmpegProcess.ExitCode + Environment.NewLine +
+                "Parameters: " + _ffmpegProcess.StartInfo.Arguments,
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
 
-            if (JobItems.Count == 1)
-            {
-                await _windowService.ShowDialogAsync<PromptFileSavedWindow, PromptFileSavedViewModel>(Window!, vm =>
-                {
-                    vm.Initialize(
-                        Se.Language.General.VideoFileGenerated,
-                        string.Format(Se.Language.General.VideoFileGeneratedX, jobItem.OutputVideoFileName),
-                        jobItem.OutputVideoFileName,
-                        true,
-                        true);
-                });
-            }
-            else
-            {
-                var sb = new StringBuilder($"Generated files ({JobItems.Count}):" + Environment.NewLine + Environment.NewLine);
-                foreach (var item in JobItems)
-                {
-                    sb.AppendLine($"{item.OutputVideoFileName} ==> {item.Status}");
-                }
-
-                await MessageBox.Show(Window!,
-                    "Generating done",
-                    sb.ToString(),
-                    MessageBoxButtons.OK);
-            }
+            EndRun();
         });
     }
 
     private async Task InitAndStartJobItem(int index)
     {
+        if (_isClosing)
+        {
+            return;
+        }
+
         _startTicks = DateTime.UtcNow.Ticks;
         _jobItemIndex = index;
         var jobItem = JobItems[index];
         var mediaInfo = FfmpegMediaInfo.Parse(jobItem.InputVideoFileName);
         jobItem.TotalFrames = mediaInfo.GetTotalFrames();
         jobItem.TotalSeconds = mediaInfo.Duration.TotalSeconds;
-        if (mediaInfo.Dimension.Width > 0 && mediaInfo.Dimension.Height > 0)
+
+        // With "Cut" on, only the cut range is encoded (-ss/-t below). Measuring the full
+        // source made the target-file-size bit rate a fraction of what was asked for, and
+        // left the progress bar creeping to a few percent before jumping to Done.
+        if (IsCutActive && jobItem.TotalSeconds > 0)
+        {
+            var cutSeconds = (CutTo - CutFrom).TotalSeconds;
+            if (cutSeconds > 0 && cutSeconds < jobItem.TotalSeconds)
+            {
+                jobItem.TotalFrames = (long)Math.Round(jobItem.TotalFrames * (cutSeconds / jobItem.TotalSeconds));
+                jobItem.TotalSeconds = cutSeconds;
+            }
+        }
+
+        // Batch rows are created with their source size (Add), and the block below only replaces
+        // a size that is missing - so the resolution picked in the window never reached a batch
+        // item: 4K files with 1280x720 chosen were still encoded with "scale=3840:2160". Set it
+        // here, before MakeAssa, which writes PlayResX/Y and the font size from the job's size.
+        // With "use source resolution" back on, the block below restores the source size.
+        if (IsBatchMode && !UseSourceResolution && VideoWidth is > 0 && VideoHeight is > 0)
+        {
+            jobItem.Width = VideoWidth.Value;
+            jobItem.Height = VideoHeight.Value;
+        }
+
+        // Only adopt the source resolution when the user asked for it. Unconditionally copying it
+        // threw away an explicitly picked output resolution (e.g. 720p from a 4K source), so the
+        // job still encoded at the source size.
+        if (mediaInfo.Dimension.Width > 0 && mediaInfo.Dimension.Height > 0 &&
+            (UseSourceResolution || jobItem.Width <= 0 || jobItem.Height <= 0))
         {
             jobItem.Width = mediaInfo.Dimension.Width;
             jobItem.Height = mediaInfo.Dimension.Height;
         }
-        else
+        else if (mediaInfo.Dimension.Width <= 0 || mediaInfo.Dimension.Height <= 0)
         {
             // No video stream to read a resolution from - keep the resolution chosen in the
             // UI and burn the subtitles onto a generated black canvas (issue #11570).
@@ -508,12 +809,22 @@ public partial class BurnInViewModel : ObservableObject
         jobItem.TargetFileSize = UseTargetFileSize
             ? (MatchSourceVideoSize ? GetSourceFileSizeInMb(jobItem.InputVideoFileName) : TargetFileSize ?? 0)
             : 0;
-        jobItem.AssaSubtitleFileName = MakeAssa(jobItem.SubtitleFileName);
-        jobItem.Status = Se.Language.General.Generating;
         if (IsBatchMode)
         {
             jobItem.OutputVideoFileName = MakeOutputFileName(jobItem.InputVideoFileName);
         }
+
+        jobItem.AssaSubtitleFileName = MakeAssa(jobItem, jobItem.SubtitleFileName);
+        if (jobItem.Status == StatusSkipped)
+        {
+            // An unreadable subtitle file used to be marked "Skipped" and then encoded anyway,
+            // with an empty "ass=" file name that ffmpeg rejects.
+            Se.WriteToolsLog($"Burn-in: skipped \"{jobItem.InputVideoFileName}\" - subtitle file \"{jobItem.SubtitleFileName}\" could not be read");
+            await ContinueWithNextJobItemOrFinish();
+            return;
+        }
+
+        jobItem.Status = Se.Language.General.Generating;
 
         Dispatcher.UIThread.Post(() =>
         {
@@ -555,10 +866,12 @@ public partial class BurnInViewModel : ObservableObject
         if (!result)
         {
             // No process and no timer running: nothing would ever consume _doAbort or reset the
-            // generating state, leaving the dialog stuck with a dead Cancel button.
-            jobItem.Status = Se.Language.General.Error;
-            IsGenerating = false;
-            ProgressValue = 0;
+            // generating state, leaving the dialog stuck with a dead Cancel button. A cancelled
+            // "ffmpeg parameters" prompt (_doAbort) ends the run the same way, also for a later
+            // batch file.
+            DeletePassLogFiles();
+            jobItem.Status = _doAbort ? Se.Language.General.Cancelled : Se.Language.General.Error;
+            EndRun();
         }
     }
 
@@ -603,6 +916,13 @@ public partial class BurnInViewModel : ObservableObject
             return false;
         }
 
+        // One statistics file prefix per job, for both passes. Without "-passlogfile" ffmpeg
+        // writes "ffmpeg2pass-0.log" (+ ".mbtree"/".cutree") to the process working directory:
+        // possibly read-only ("ratecontrol_init: can't open stats file"), shared by two SE
+        // instances encoding at the same time, and never cleaned up.
+        DeletePassLogFiles();
+        _passLogFilePrefix = Path.Combine(Path.GetTempPath(), "se-2pass-" + Guid.NewGuid());
+
         var process = await GetFfmpegProcess(jobItem, 1);
         if (process == null)
         {
@@ -610,10 +930,38 @@ public partial class BurnInViewModel : ObservableObject
         }
 
         _ffmpegProcess = process;
-        StartFfmpegProcess(process, "two-pass analyze (pass 1)");
-        _startTicks = DateTime.UtcNow.Ticks;
+        StartFfmpegProcess(process, "two-pass analyze (pass 1)", false);
 
         return true;
+    }
+
+    /// <summary>
+    /// Adds "-passlogfile" right after the "-pass N" the generator wrote. It is an output option,
+    /// so it cannot simply be put in front of the arguments. The search starts after the input
+    /// file name, so a video called "my -pass 1 clip.mkv" is left alone.
+    /// </summary>
+    internal static string AddPassLogFile(string ffmpegParameters, string inputVideoFileName, string pass, string passLogFilePrefix)
+    {
+        if (string.IsNullOrEmpty(pass) || string.IsNullOrEmpty(passLogFilePrefix))
+        {
+            return ffmpegParameters;
+        }
+
+        var searchFrom = 0;
+        var inputIndex = string.IsNullOrEmpty(inputVideoFileName) ? -1 : ffmpegParameters.IndexOf(inputVideoFileName, StringComparison.Ordinal);
+        if (inputIndex >= 0)
+        {
+            searchFrom = inputIndex + inputVideoFileName.Length;
+        }
+
+        var passArgument = " -pass " + pass + " ";
+        var index = ffmpegParameters.IndexOf(passArgument, searchFrom, StringComparison.Ordinal);
+        if (index < 0)
+        {
+            return ffmpegParameters;
+        }
+
+        return ffmpegParameters.Insert(index + passArgument.Length, $"-passlogfile \"{passLogFilePrefix}\" ");
     }
 
     // Source file size in whole MB (>= 1), used when "match source video size" is enabled.
@@ -637,10 +985,17 @@ public partial class BurnInViewModel : ObservableObject
             return 0;
         }
 
+        // An unreadable duration is 0 seconds: the division below gave Infinity, and casting
+        // that to int is undefined. 0 gets the caller's "bit rate too low" message instead.
+        if (item.TotalSeconds <= 0)
+        {
+            return 0;
+        }
+
         var audioMb = 0;
         if (SelectedAudioEncoding == "copy")
         {
-            audioMb = GetAudioFileSizeInMb(item);
+            audioMb = GetAudioFileSizeInMb(item.InputVideoFileName);
         }
 
         // (MiB * 8192 [converts MiB to kBit]) / video seconds = kBit/s total bitrate
@@ -654,34 +1009,87 @@ public partial class BurnInViewModel : ObservableObject
         return bitRate;
     }
 
-    private int GetAudioFileSizeInMb(BurnInJobItem item)
+    /// <summary>The "-ss" / "-t" arguments for the cut range, empty when "Cut" is off (or not a valid range).</summary>
+    private (string CutStart, string CutEnd) GetCutArguments()
     {
+        if (!IsCutActive || CutTo <= CutFrom)
+        {
+            return (string.Empty, string.Empty);
+        }
+
+        var start = CutFrom;
+        var duration = CutTo - start;
+        return ($"-ss {(int)start.TotalHours:00}:{start.Minutes:00}:{start.Seconds:00}.{start.Milliseconds:000}",
+                $"-t {(int)duration.TotalHours:00}:{duration.Minutes:00}:{duration.Seconds:00}.{duration.Milliseconds:000}");
+    }
+
+    /// <summary>
+    /// Size of the audio that "copy" takes along, measured by stream-copying it to a temp file.
+    /// <para>
+    /// The temp file is Matroska audio: the ".aac" (ADTS) used before only takes AAC, so AC3/DTS
+    /// etc. gave a 0-byte file and the target size was overshot by the whole audio size. With
+    /// "Cut" on only the cut range is measured, as only that is encoded - the full audio of a
+    /// long movie against a 5-minute cut made the bit rate negative.
+    /// </para>
+    /// <para>
+    /// This blocks while ffmpeg demuxes the file, and the target-size field asks again on every
+    /// change, so the result is cached per file + cut range.
+    /// </para>
+    /// </summary>
+    private int GetAudioFileSizeInMb(string videoFileName)
+    {
+        if (string.IsNullOrWhiteSpace(videoFileName) || !File.Exists(videoFileName))
+        {
+            return 0;
+        }
+
+        var (cutStart, cutEnd) = GetCutArguments();
+        var cacheKey = videoFileName + "|" + cutStart + "|" + cutEnd;
+        if (_audioSizeInMbCache.TryGetValue(cacheKey, out var cachedMb))
+        {
+            return cachedMb;
+        }
+
         var ffmpegLocation = Configuration.Settings.General.FFmpegLocation;
         if (!Configuration.IsRunningOnWindows && (string.IsNullOrEmpty(ffmpegLocation) || !File.Exists(ffmpegLocation)))
         {
             ffmpegLocation = "ffmpeg";
         }
 
-        var tempFileName = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".aac");
-        var process = new Process
-        {
-            StartInfo =
-            {
-                FileName = ffmpegLocation,
-                Arguments = $"-i \"{item.InputVideoFileName}\" -vn -acodec copy \"{tempFileName}\"",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            }
-        };
-
-
-#pragma warning disable CA1416
-        _ = process.Start();
-#pragma warning restore CA1416
-        process.WaitForExit();
+        var tempFileName = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".mka");
         try
         {
-            var length = (int)Math.Round(new FileInfo(tempFileName).Length / 1024.0 / 1024);
+            // Same shape as the encode: "-ss" seeks the input, "-t" limits the output.
+            var seek = string.IsNullOrEmpty(cutStart) ? string.Empty : cutStart + " ";
+            var length = string.IsNullOrEmpty(cutEnd) ? string.Empty : cutEnd + " ";
+            using var process = new Process
+            {
+                StartInfo =
+                {
+                    FileName = ffmpegLocation,
+                    Arguments = $"-nostdin -y {seek}-i \"{videoFileName}\" {length}-vn -sn -dn -acodec copy \"{tempFileName}\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                }
+            };
+
+#pragma warning disable CA1416
+            _ = process.Start();
+#pragma warning restore CA1416
+            process.WaitForExit();
+
+            var audioMb = File.Exists(tempFileName)
+                ? (int)Math.Round(new FileInfo(tempFileName).Length / 1024.0 / 1024)
+                : 0;
+            _audioSizeInMbCache[cacheKey] = audioMb;
+            return audioMb;
+        }
+        catch
+        {
+            return 0;
+        }
+        finally
+        {
             try
             {
                 File.Delete(tempFileName);
@@ -690,12 +1098,6 @@ public partial class BurnInViewModel : ObservableObject
             {
                 // ignore
             }
-
-            return length;
-        }
-        catch
-        {
-            return 0;
         }
     }
 
@@ -708,7 +1110,7 @@ public partial class BurnInViewModel : ObservableObject
         }
 
         _ffmpegProcess = process;
-        StartFfmpegProcess(process, "encode");
+        StartFfmpegProcess(process, "encode", true);
 
         return true;
     }
@@ -736,15 +1138,16 @@ public partial class BurnInViewModel : ObservableObject
 
         var cutStart = string.Empty;
         var cutEnd = string.Empty;
-        if (IsCutActive && !preview)
+        if (!preview)
         {
-            var start = CutFrom;
-            cutStart = $"-ss {(int)start.TotalHours:00}:{start.Minutes:00}:{start.Seconds:00}.{start.Milliseconds:000}";
-
-            var end = CutTo;
-            var duration = end - start;
-            cutEnd = $"-t {(int)duration.TotalHours:00}:{duration.Minutes:00}:{duration.Seconds:00}.{duration.Milliseconds:000}";
+            (cutStart, cutEnd) = GetCutArguments();
         }
+
+        // The "save as" dialog can end up with another container than the one the audio encoder
+        // list was built for, so pick an encoder the actual output file can hold.
+        var audioEncoding = OutputContainer.GetAudioEncodingFor(
+            Path.GetExtension(jobItem.OutputVideoFileName),
+            SelectedAudioEncoding);
 
         var ffmpegParameters = FfmpegGenerator.GenerateHardcodedVideoFile(
             jobItem.InputVideoFileName,
@@ -756,10 +1159,10 @@ public partial class BurnInViewModel : ObservableObject
             SelectedVideoPreset ?? string.Empty,
             SelectedVideoPixelFormat?.Codec ?? string.Empty,
             SelectedVideoCrf ?? string.Empty,
-            SelectedAudioEncoding,
+            audioEncoding,
             AudioIsStereo,
             SelectedAudioSampleRate.Replace("Hz", string.Empty).Trim(),
-            string.Empty,
+            SelectedVideoTune ?? string.Empty,
             SelectedAudioBitRate,
             pass,
             jobItem.VideoBitRate,
@@ -767,7 +1170,13 @@ public partial class BurnInViewModel : ObservableObject
             cutEnd,
             audioCutTracks,
             BurnInLogo,
-            jobItem.InputIsAudioOnly);
+            jobItem.InputIsAudioOnly,
+            jobItem.SubtitleIsImage,
+            SelectedMode3D?.Mode ?? Export3DMode.None,
+            Math.Clamp(Depth3D ?? 0, Stereo3DImage.MinDepth, Stereo3DImage.MaxDepth));
+
+        // Before the prompt, so the user sees (and can change) where the statistics go.
+        ffmpegParameters = AddPassLogFile(ffmpegParameters, jobItem.InputVideoFileName, pass, _passLogFilePrefix);
 
         if (PromptForFfmpegParameters)
         {
@@ -778,6 +1187,9 @@ public partial class BurnInViewModel : ObservableObject
 
             if (!result.OkPressed || string.IsNullOrWhiteSpace(result.Text))
             {
+                // The prompt now comes up for every ffmpeg run (pass 2, each batch file), and
+                // cancelling any of them aborts the whole run - see the callers.
+                _doAbort = true;
                 return null;
             }
 
@@ -797,9 +1209,16 @@ public partial class BurnInViewModel : ObservableObject
     /// and failures were undiagnosable from user reports: the command was only logged on the
     /// missing-output-file path, and a wedged ffmpeg logged nothing at all.
     /// </summary>
-    private void StartFfmpegProcess(Process process, string stage)
+    private void StartFfmpegProcess(Process process, string stage, bool writesOutputFile)
     {
         Se.WriteToolsLog($"Burn-in {stage}: \"{process.StartInfo.FileName}\" {process.StartInfo.Arguments}");
+
+        // Progress belongs to this process only: the start time was not reset for pass 2, so its
+        // time estimate included all of pass 1, and the frame count of the previous pass / batch
+        // file was shown until the first "frame=" line of the new one.
+        _startTicks = DateTime.UtcNow.Ticks;
+        _processedFrames = 0;
+        _ffmpegWritesOutputFile = writesOutputFile;
 #pragma warning disable CA1416 // Validate platform compatibility
         process.Start();
 #pragma warning restore CA1416 // Validate platform compatibility
@@ -834,21 +1253,20 @@ public partial class BurnInViewModel : ObservableObject
     {
         var subtitle = new Subtitle(_subtitle);
 
-        var srt = new SubRip();
-        var subtitleFileName = Path.Combine(Path.GetTempFileName() + srt.Extension);
-        if (_subtitleFormat is { Name: AdvancedSubStationAlpha.NameOfFormat })
-        {
-            var assa = new AdvancedSubStationAlpha();
-            subtitleFileName = Path.Combine(Path.GetTempFileName() + assa.Extension);
-            File.WriteAllText(subtitleFileName, assa.ToText(subtitle, string.Empty));
-        }
-        else
-        {
-            File.WriteAllText(subtitleFileName, srt.ToText(subtitle, string.Empty));
-        }
+        // Tracked so the file is swept when the window closes - and not GetTempFileName() plus an
+        // extension, which leaked the empty tmpXXXX.tmp it creates on top of the file written
+        // (#13332).
+        var subtitleFileName = IsImageSubtitle
+            ? _imageSubtitleFileName
+            : _subtitleFormat is { Name: AdvancedSubStationAlpha.NameOfFormat }
+                ? _tempSubtitleFiles.Write(subtitle, new AdvancedSubStationAlpha())
+                : _tempSubtitleFiles.Write(subtitle, new SubRip());
 
         _mediaInfo = FfmpegMediaInfo2.Parse(VideoFileName);
-        if (_mediaInfo.Dimension.Width > 0 && _mediaInfo.Dimension.Height > 0)
+
+        _previewDirty = true;
+        if (_mediaInfo.Dimension.Width > 0 && _mediaInfo.Dimension.Height > 0 &&
+            (UseSourceResolution || VideoWidth is null or <= 0 || VideoHeight is null or <= 0))
         {
             VideoWidth = _mediaInfo.Dimension.Width;
             VideoHeight = _mediaInfo.Dimension.Height;
@@ -866,20 +1284,89 @@ public partial class BurnInViewModel : ObservableObject
         return new ObservableCollection<BurnInJobItem>(new[] { jobItem });
     }
 
-    private string MakeAssa(string subtitleFileName)
+    /// <summary>
+    /// True when the file is a text subtitle without a single line: an empty .srt (what the
+    /// current subtitle is written as when nothing is loaded) or a format that parses to no
+    /// paragraphs. Unreadable files are not "empty" - they are skipped by <see cref="MakeAssa"/>.
+    /// </summary>
+    private static bool HasNoSubtitleLines(string subtitleFileName)
     {
-        var jobItem = JobItems[_jobItemIndex];
+        if (string.IsNullOrWhiteSpace(subtitleFileName) || !File.Exists(subtitleFileName) || FileUtil.IsBluRaySup(subtitleFileName))
+        {
+            return false;
+        }
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(File.ReadAllText(subtitleFileName)))
+            {
+                return true;
+            }
+
+            var subtitle = Subtitle.Parse(subtitleFileName);
+            return subtitle != null && subtitle.Paragraphs.Count == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Converts the job's subtitle to the ASSA file ffmpeg burns in, marking the job "Skipped"
+    /// when the subtitle cannot be read. Batch rows survive between Generate clicks, so the
+    /// status is reset first: a row skipped in one run (missing subtitle) whose subtitle was
+    /// picked afterwards must not be skipped again because of its stale status.
+    /// </summary>
+    internal string MakeAssa(BurnInJobItem jobItem, string subtitleFileName)
+    {
+        jobItem.Status = StatusWaiting;
 
         if (string.IsNullOrWhiteSpace(subtitleFileName) || !File.Exists(subtitleFileName))
         {
-            jobItem.Status = "Skipped";
+            jobItem.Status = StatusSkipped;
+            return string.Empty;
+        }
+
+        jobItem.SubtitleIsImage = FileUtil.IsBluRaySup(subtitleFileName);
+        if (jobItem.SubtitleIsImage)
+        {
+            // The bitmaps are overlaid as they are (see FfmpegGenerator): nothing to style or
+            // convert, and a cut is applied by offsetting the input rather than rewriting the file.
+            return subtitleFileName;
+        }
+
+        if (HasNoSubtitleLines(subtitleFileName))
+        {
+            // Nothing to burn in - the user confirmed this in Generate. An empty file name makes
+            // FfmpegGenerator leave the "ass" filter out, so the video is only re-encoded (#14777).
             return string.Empty;
         }
 
         var isAssa = subtitleFileName.EndsWith(".ass", StringComparison.OrdinalIgnoreCase);
 
         var subtitle = Subtitle.Parse(subtitleFileName);
+        if (subtitle == null)
+        {
+            // Not a subtitle format we know: Parse returns null, and everything below
+            // dereferences it. TransparentSubtitlesViewModel skips the job the same way.
+            jobItem.Status = StatusSkipped;
+            return string.Empty;
+        }
+
         subtitle = GetSubtitleBasedOnCut(subtitle);
+
+        AssaCentisecondTiming.FloorToCentiseconds(subtitle); // first frame kept, issue #15520
+
+        if (subtitle.OriginalFormat is NetflixImsc11Japanese || NetflixImsc11JapaneseToAss.HasJapaneseMarkup(subtitle))
+        {
+            // Furigana, bouten and vertical writing become extra positioned render lines - burning
+            // in the raw tags would put them on screen as literal text (issue #13861). Lambda Cap
+            // decodes to the same markup (issue #14165).
+            var japaneseAssaFileName = _tempSubtitleFiles.GetFileName(".ass");
+            File.WriteAllText(japaneseAssaFileName, NetflixImsc11JapaneseToAss.Convert(subtitle, jobItem.Width, jobItem.Height));
+            return japaneseAssaFileName;
+        }
 
         if (!isAssa)
         {
@@ -889,17 +1376,17 @@ public partial class BurnInViewModel : ObservableObject
                 {
                     var fontSize = CalculateFontSize(jobItem.Width, jobItem.Height, FontFactor ?? 0);
                     var durationMs = (int)(s.Duration.TotalMilliseconds);
-                    s.Text = effect.ApplyEffect(s.Text, VideoWidth ?? 0, VideoHeight ?? 0, fontSize, durationMs);
+                    // This job's dimensions, not the UI's: the effects emit absolute ASSA
+                    // coordinates that are resolved against the PlayResX/Y written from
+                    // jobItem below, so a batch item of another size placed text wrongly.
+                    s.Text = effect.ApplyEffect(s.Text, jobItem.Width, jobItem.Height, fontSize, durationMs);
                 }
             }
 
             SetStyleForNonAssa(subtitle, jobItem.Width, jobItem.Height);
         }
 
-        var assa = new AdvancedSubStationAlpha();
-        var assaFileName = Path.Combine(Path.GetTempFileName() + assa.Extension);
-        File.WriteAllText(assaFileName, assa.ToText(subtitle, string.Empty));
-        return assaFileName;
+        return _tempSubtitleFiles.Write(subtitle, new AdvancedSubStationAlpha());
     }
 
     // The "-ss" input seek makes ffmpeg restart timestamps at zero, so the burned-in
@@ -947,6 +1434,7 @@ public partial class BurnInViewModel : ObservableObject
         style.Outline = FontOutlineColor.ToSKColor();
         style.OutlineWidth = SelectedFontOutline ?? 0;
         style.ShadowWidth = SelectedFontShadowWidth ?? 0;
+        style.Spacing = SelectedFontSpacing ?? 0;
         style.Alignment = SelectedFontAlignment.Code;
         style.MarginLeft = FontMarginHorizontal ?? 0;
         style.MarginRight = FontMarginHorizontal ?? 0;
@@ -980,26 +1468,23 @@ public partial class BurnInViewModel : ObservableObject
         var ext = VideoExtensions.Contains(SelectedVideoExtension) ? SelectedVideoExtension : ".mkv";
 
         var suffix = Se.Settings.Video.BurnIn.BurnInSuffix;
-        var fileName = Path.Combine(Path.GetDirectoryName(videoFileName)!, nameNoExt + suffix + ext);
-        if (Se.Settings.Video.BurnIn.UseOutputFolder &&
-            !string.IsNullOrEmpty(Se.Settings.Video.BurnIn.OutputFolder) &&
-            Directory.Exists(Se.Settings.Video.BurnIn.OutputFolder))
-        {
-            fileName = Path.Combine(Se.Settings.Video.BurnIn.OutputFolder, nameNoExt + suffix + ext);
-        }
+
+        // Decide the folder once: the collision loop below did not check that the output folder
+        // exists, unlike the first candidate - so with a missing folder the first name went to
+        // the video's folder and "_2" to a folder that is not there, which ffmpeg cannot write to.
+        var useOutputFolder = Se.Settings.Video.BurnIn.UseOutputFolder &&
+                              !string.IsNullOrEmpty(Se.Settings.Video.BurnIn.OutputFolder) &&
+                              Directory.Exists(Se.Settings.Video.BurnIn.OutputFolder);
+        var outputFolder = useOutputFolder
+            ? Se.Settings.Video.BurnIn.OutputFolder
+            : Path.GetDirectoryName(videoFileName) ?? Path.GetTempPath();
+
+        var fileName = Path.Combine(outputFolder, nameNoExt + suffix + ext);
 
         var i = 2;
         while (File.Exists(fileName))
         {
-            if (Se.Settings.Video.BurnIn.UseOutputFolder && !string.IsNullOrEmpty(Se.Settings.Video.BurnIn.OutputFolder))
-            {
-                fileName = Path.Combine(Se.Settings.Video.BurnIn.OutputFolder, $"{nameNoExt}{suffix}_{i}{ext}");
-            }
-            else
-            {
-                fileName = Path.Combine(Path.GetDirectoryName(videoFileName) ?? Path.GetTempPath(), $"{nameNoExt}{suffix}_{i}{ext}");
-            }
-
+            fileName = Path.Combine(outputFolder, $"{nameNoExt}{suffix}_{i}{ext}");
             i++;
         }
 
@@ -1034,7 +1519,7 @@ public partial class BurnInViewModel : ObservableObject
 
         var result = await _windowService.ShowDialogAsync<BurnInLogoWindow, BurnInLogoViewModel>(Window!, vm =>
         {
-            vm.BurnInLogo = BurnInLogo;
+            vm.BurnInLogo = BurnInLogo.Clone();
             vm.Initialize(VideoFileName, VideoWidth.Value, VideoHeight.Value);
         });
 
@@ -1073,9 +1558,16 @@ public partial class BurnInViewModel : ObservableObject
             return;
         }
 
+        // Generate() returns as soon as the first ffmpeg process is started, so resetting the flag
+        // here meant only that one was prompted: with a target file size the edits went to pass 1
+        // (which writes to the null device), and in batch mode to the first file only. The flag
+        // now stays on until the run ends (EndRun) - here only when no run was started at all.
         PromptForFfmpegParameters = true;
         await Generate();
-        PromptForFfmpegParameters = false;
+        if (!IsGenerating)
+        {
+            PromptForFfmpegParameters = false;
+        }
     }
 
     [RelayCommand]
@@ -1112,6 +1604,13 @@ public partial class BurnInViewModel : ObservableObject
     [RelayCommand]
     private async Task Add()
     {
+        // The batch list must not change during a run: _jobItemIndex points into it, from the
+        // timer and the ffmpeg reader threads too.
+        if (IsGenerating)
+        {
+            return;
+        }
+
         var fileNames = await _fileHelper.PickOpenVideoFiles(Window!, Se.Language.General.AddVideoFiles);
         if (fileNames == null || fileNames.Length == 0)
         {
@@ -1167,9 +1666,15 @@ public partial class BurnInViewModel : ObservableObject
     [RelayCommand]
     private void Remove()
     {
+        // Removing a row during a run shifted the indexes: Done/Error landed on the wrong row and
+        // the next job was skipped.
+        if (IsGenerating)
+        {
+            return;
+        }
+
         if (SelectedJobItem != null)
         {
-            var idx = JobItems.IndexOf(SelectedJobItem);
             JobItems.Remove(SelectedJobItem);
         }
     }
@@ -1177,18 +1682,28 @@ public partial class BurnInViewModel : ObservableObject
     [RelayCommand]
     private void Clear()
     {
+        // Clearing during a run made JobItems[_jobItemIndex] throw in OutputHandler, on the
+        // process reader thread.
+        if (IsGenerating)
+        {
+            return;
+        }
+
         JobItems.Clear();
     }
 
     [RelayCommand]
     private async Task PickSubtitle()
     {
-        if (SelectedJobItem == null)
+        if (SelectedJobItem == null || IsGenerating)
         {
             return;
         }
 
-        var fileName = await _fileHelper.PickOpenSubtitleFile(Window!, Se.Language.General.OpenSubtitleFileTitle, false);
+        // The text formats plus Blu-ray sup, whose bitmaps are burned in as they are.
+        var patterns = FileHelper.GetOpenSubtitleExtensions(false).Select(p => "*" + p).Append("*.sup").ToList();
+        var fileNames = await _fileHelper.PickOpenFiles(Window!, Se.Language.General.OpenSubtitleFileTitle, Se.Language.General.SubtitleFiles, patterns, Se.Language.General.AllFiles, ["*"]);
+        var fileName = fileNames.FirstOrDefault();
         if (!string.IsNullOrEmpty(fileName))
         {
             SelectedJobItem.SubtitleFileName = fileName;
@@ -1366,6 +1881,21 @@ public partial class BurnInViewModel : ObservableObject
             }
         }
 
+        // A subtitle without lines is most likely a mistake (nothing loaded yet), but it can also
+        // be a deliberate re-encode/cut with no text - so ask instead of failing in ffmpeg (#14777).
+        var emptySubtitleCount = JobItems.Count(p => HasNoSubtitleLines(p.SubtitleFileName));
+        if (emptySubtitleCount > 0)
+        {
+            var prompt = IsBatchMode
+                ? string.Format(Se.Language.Video.BurnIn.NoSubtitlesInXItemsGenerateAnyway, emptySubtitleCount)
+                : Se.Language.Video.BurnIn.NoSubtitlesGenerateAnyway;
+            var answer = await MessageBox.Show(Window!, Se.Language.General.Warning, prompt, MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            if (answer != MessageBoxResult.Yes)
+            {
+                return;
+            }
+        }
+
         _doAbort = false;
         _log.Clear();
         IsGenerating = true;
@@ -1373,6 +1903,7 @@ public partial class BurnInViewModel : ObservableObject
         ProgressValue = 0;
         SaveSettings();
 
+        _runStartTicks = DateTime.UtcNow.Ticks;
         await InitAndStartJobItem(0);
     }
 
@@ -1383,7 +1914,11 @@ public partial class BurnInViewModel : ObservableObject
         FontIsBold = settings.FontBold;
         SelectedFontOutline = settings.OutlineWidth;
         SelectedFontShadowWidth = settings.ShadowWidth;
-        SelectedFontName = settings.FontName;
+        SelectedFontSpacing = settings.NonAssaSpacing;
+        // Guard the fallback the way the constructor does: assigning a font that is not
+        // in FontNames nulls the ComboBox selection, and the TwoWay binding then writes
+        // that null back over the saved font name.
+        SelectedFontName = FontNames.FirstOrDefault(p => p == settings.FontName) ?? FontNames[0];
         FontTextColor = settings.NonAssaTextColor.FromHexToColor();
         FontOutlineColor = settings.NonAssaOutlineColor.FromHexToColor();
         FontBoxColor = settings.NonAssaBoxColor.FromHexToColor();
@@ -1394,6 +1929,8 @@ public partial class BurnInViewModel : ObservableObject
         UseOutputFolderVisible = settings.UseOutputFolder;
         UseSourceFolderVisible = !settings.UseOutputFolder;
         UseSourceResolution = settings.UseSourceResolution;
+        SelectedMode3D = Modes3D.FirstOrDefault(p => p.Mode == settings.Mode3D) ?? Modes3D[0];
+        Depth3D = Math.Clamp(settings.Depth3D, Stereo3DImage.MinDepth, Stereo3DImage.MaxDepth);
 
         FontMarginHorizontal = (int)settings.NonAssaMarginHorizontal;
         FontMarginVertical = (int)settings.NonAssaMarginVertical;
@@ -1402,32 +1939,54 @@ public partial class BurnInViewModel : ObservableObject
         SelectedVideoEncoding = VideoEncodings.FirstOrDefault(p => p.Codec == settings.Encoding)
                                 ?? VideoEncodings.FirstOrDefault(p => p.Codec == SeVideoBurnIn.DefaultEncoding)
                                 ?? VideoEncodings[0];
-        SelectedVideoPixelFormat = VideoPixelFormats.FirstOrDefault(p => p.Codec == settings.PixelFormat) ?? VideoPixelFormats[0];
+        FillPixelFormats(SelectedVideoEncoding.Codec, settings.PixelFormat);
         FillPreset(SelectedVideoEncoding.Codec);
+        FillTune(SelectedVideoEncoding.Codec);
         FillCrf(SelectedVideoEncoding.Codec);
-        if (!string.IsNullOrEmpty(settings.Preset) && VideoPresets.Contains(settings.Preset))
+        var preset = VideoPresetOptions.Migrate(SelectedVideoEncoding.Codec, settings.Preset);
+        if (!string.IsNullOrEmpty(preset) && VideoPresets.Contains(preset))
         {
-            SelectedVideoPreset = settings.Preset;
-        }
-        if (!string.IsNullOrEmpty(settings.Crf) && VideoCrf.Contains(settings.Crf))
-        {
-            SelectedVideoCrf = settings.Crf;
+            SelectedVideoPreset = preset;
         }
 
-        SelectedAudioEncoding = AudioEncodings.Contains(settings.AudioEncoding) ? settings.AudioEncoding : AudioEncodings[0];
+        // A stored preset that was one of the removed aliases carries a tuning mode of its own
+        // ("lossless" was not just a speed), and settings written before the tune list existed
+        // have nothing to say about it - so the alias decides in that case.
+        var tune = VideoPresetOptions.MigrateTune(SelectedVideoEncoding.Codec, settings.Preset);
+        if (string.IsNullOrEmpty(tune))
+        {
+            tune = settings.Tune;
+        }
+
+        if (!string.IsNullOrEmpty(tune) && VideoTunes.Contains(tune))
+        {
+            SelectedVideoTune = tune;
+        }
+
+        // AMF qualities used to be stored as numbers ("0".."10"); the list now holds the names
+        // ffmpeg accepts, so a stored number is mapped to the name that meant the same.
+        var crf = VideoPresetOptions.MigrateAmfQuality(SelectedVideoEncoding.Codec, settings.Crf);
+        if (!string.IsNullOrEmpty(crf) && VideoCrf.Contains(crf))
+        {
+            SelectedVideoCrf = crf;
+        }
+
+        // Extension first: it decides which audio encoders the container can take.
+        FillVideoExtensions(SelectedVideoEncoding.Codec, settings.OutputExtension);
+        FillAudioEncodings(SelectedVideoExtension, settings.AudioEncoding);
+
         AudioIsStereo = settings.AudioForceStereo;
         SelectedAudioSampleRate = AudioSampleRates.FirstOrDefault(p => p.Replace("Hz", string.Empty).Trim() == settings.AudioSampleRate) ?? AudioSampleRates[1];
         SelectedAudioBitRate = AudioBitRates.Contains(settings.AudioBitRate) ? settings.AudioBitRate : AudioBitRates[2];
 
-        SelectedVideoExtension = VideoExtensions.Contains(settings.OutputExtension) ? settings.OutputExtension : VideoExtensions[0];
-
         UseTargetFileSize = settings.TargetFileSize;
         TargetFileSize = settings.TargetFileSizeMb;
         MatchSourceVideoSize = settings.TargetFileSizeMatchSource;
-        PromptForFfmpegParameters = settings.PromptFfmpegParameters;
+        PromptForFfmpegParameters = false; // one-shot, never restored from settings
 
         var effectsAsStringArray = settings.Effects?.Split(',') ?? [];
         _selectedEffects = BurnInEffectItem.List().Where(p => effectsAsStringArray.Contains(p.Name)).ToList();
+        _previewDirty = true;
         DisplayEffect = string.Join(", ", _selectedEffects.Select(p => p.Name));
     }
 
@@ -1438,6 +1997,7 @@ public partial class BurnInViewModel : ObservableObject
         settings.FontBold = FontIsBold;
         settings.OutlineWidth = SelectedFontOutline ?? 0;
         settings.ShadowWidth = SelectedFontShadowWidth ?? 0;
+        settings.NonAssaSpacing = SelectedFontSpacing ?? 0;
         settings.FontName = SelectedFontName;
         settings.NonAssaTextColor = FontTextColor.FromColorToHex();
         settings.NonAssaOutlineColor = FontOutlineColor.FromColorToHex();
@@ -1446,12 +2006,15 @@ public partial class BurnInViewModel : ObservableObject
         settings.NonAssaFixRtlUnicode = FontFixRtl;
         settings.NonAssaAlignment = SelectedFontAlignment.Code;
         settings.UseSourceResolution = UseSourceResolution;
+        settings.Mode3D = SelectedMode3D?.Mode ?? Export3DMode.None;
+        settings.Depth3D = Depth3D ?? 0;
         settings.NonAssaMarginHorizontal = FontMarginHorizontal ?? 0;
         settings.NonAssaMarginVertical = FontMarginVertical ?? 0;
         settings.NonAssaBoxType = (int)SelectedFontBoxType.BoxType;
 
         settings.Encoding = SelectedVideoEncoding.Codec;
         settings.Preset = SelectedVideoPreset ?? string.Empty;
+        settings.Tune = SelectedVideoTune ?? string.Empty;
         settings.Crf = SelectedVideoCrf ?? string.Empty;
         settings.PixelFormat = SelectedVideoPixelFormat?.Codec ?? string.Empty;
 
@@ -1465,11 +2028,19 @@ public partial class BurnInViewModel : ObservableObject
         settings.TargetFileSize = UseTargetFileSize;
         settings.TargetFileSizeMb = TargetFileSize ?? 0;
         settings.TargetFileSizeMatchSource = MatchSourceVideoSize;
-        settings.PromptFfmpegParameters = PromptForFfmpegParameters;
+        // Deliberately not persisted: PromptForFfmpegParameters is a one-shot set by the
+        // "Prompt for ffmpeg params and generate" menu item. Saving it made the plain
+        // Generate button prompt forever, with no UI to turn it back off.
 
         settings.Effects = string.Join(",", _selectedEffects.Select(p => p.Name).Distinct());
 
         Se.SaveSettings();
+    }
+
+    /// <summary>The depth moves the two eyes' copies apart, so it needs a 3D mode.</summary>
+    partial void OnSelectedMode3DChanged(Export3DModeDisplay value)
+    {
+        IsDepth3DEnabled = value?.Mode is not (null or Export3DMode.None);
     }
 
     [RelayCommand]
@@ -1480,14 +2051,22 @@ public partial class BurnInViewModel : ObservableObject
 
         var isAssa = _subtitleFormat is { Name: AdvancedSubStationAlpha.NameOfFormat };
         ShowAssaOnlyBox = isAssa;
+        UpdateNonAssaPreview();
     }
 
     [RelayCommand]
     private void BatchMode()
     {
         IsBatchMode = true;
+
+        // A batch starts out on "use source resolution", which is what it has always done: the
+        // size in the window used to be ignored for batch items. Now that it is applied, the
+        // size left over from the last single video must not be what every file of a batch is
+        // scaled to - only a resolution picked while in batch mode is.
+        UseSourceResolution = true;
         IsSingleModeVisible = !string.IsNullOrEmpty(_inputVideoFileName);
         ShowAssaOnlyBox = false;
+        UpdateNonAssaPreview();
     }
 
     [RelayCommand]
@@ -1523,6 +2102,8 @@ public partial class BurnInViewModel : ObservableObject
         }
 
         _selectedEffects = result.SelectedEffects.ToList();
+
+        _previewDirty = true;
         DisplayEffect = string.Join(", ", _selectedEffects.Select(p => p.Name));
     }
 
@@ -1589,8 +2170,10 @@ public partial class BurnInViewModel : ObservableObject
     {
         if (e.Key == Key.Escape)
         {
+            // Same as the Cancel button: while generating, Escape aborts the run instead of
+            // closing the window on top of a running ffmpeg.
             e.Handled = true;
-            Window?.Close();
+            Cancel();
         }
         else if (UiUtil.IsHelp(e))
         {
@@ -1611,6 +2194,12 @@ public partial class BurnInViewModel : ObservableObject
         if (File.Exists(assa))
         {
             return assa;
+        }
+
+        var sup = Path.ChangeExtension(fileName, ".sup");
+        if (File.Exists(sup))
+        {
+            return sup;
         }
 
         var dir = Path.GetDirectoryName(fileName);
@@ -1648,13 +2237,85 @@ public partial class BurnInViewModel : ObservableObject
             return;
         }
 
+        FillPixelFormats(SelectedVideoEncoding.Codec);
         FillPreset(SelectedVideoEncoding.Codec);
+        FillTune(SelectedVideoEncoding.Codec);
         FillCrf(SelectedVideoEncoding.Codec);
+        FillVideoExtensions(SelectedVideoEncoding.Codec);
+    }
+
+    internal void VideoExtensionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_loading)
+        {
+            return;
+        }
+
+        FillAudioEncodings(SelectedVideoExtension);
+    }
+
+    /// <summary>
+    /// Keeps the output extension list to the containers the chosen video codec can be muxed into
+    /// (e.g. VP9 can go to WebM but not to MPEG-TS), and follows up with the audio encoders that
+    /// the resulting container accepts.
+    /// </summary>
+    private void FillVideoExtensions(string videoCodec, string? preferredExtension = null)
+    {
+        var wanted = preferredExtension ?? SelectedVideoExtension;
+        var items = OutputContainer.GetExtensions(videoCodec);
+
+        VideoExtensions.Clear();
+        VideoExtensions.AddRange(items);
+        SelectedVideoExtension = !string.IsNullOrEmpty(wanted) && items.Contains(wanted) ? wanted : items[0];
+
+        FillAudioEncodings(SelectedVideoExtension);
+    }
+
+    private void FillAudioEncodings(string extension, string? preferredAudioEncoding = null)
+    {
+        var wanted = OutputContainer.MigrateAudioEncoding(preferredAudioEncoding ?? SelectedAudioEncoding);
+        var items = OutputContainer.GetAudioEncodings(extension);
+
+        AudioEncodings.Clear();
+        AudioEncodings.AddRange(items);
+        SelectedAudioEncoding = !string.IsNullOrEmpty(wanted) && items.Contains(wanted) ? wanted : items[0];
+    }
+
+    /// <summary>
+    /// Keeps the pixel format list to the formats the chosen encoder can actually take. ffmpeg
+    /// does not fail on an unsupported "-pix_fmt", it auto-selects another one - so a 10-bit pick
+    /// for nvenc used to write an 8-bit file without saying so.
+    /// </summary>
+    private void FillPixelFormats(string videoCodec, string? preferredPixelFormat = null)
+    {
+        var wanted = PixelFormatItem.Migrate(videoCodec, preferredPixelFormat ?? SelectedVideoPixelFormat?.Codec);
+        var items = PixelFormatItem.GetPixelFormats(videoCodec);
+
+        VideoPixelFormats.Clear();
+        VideoPixelFormats.AddRange(items);
+        SelectedVideoPixelFormat = items.FirstOrDefault(p => p.Codec == wanted) ?? items[0];
+    }
+
+    /// <summary>
+    /// The nvenc tuning modes, empty for every other encoder. The row is hidden when there is
+    /// nothing to pick, so the dialog does not grow a dead field for e.g. libx264.
+    /// </summary>
+    private void FillTune(string videoCodec)
+    {
+        var previousTune = SelectedVideoTune;
+        SelectedVideoTune = null;
+
+        var items = VideoPresetOptions.GetTunes(videoCodec);
+
+        VideoTunes.Clear();
+        VideoTunes.AddRange(items);
+        IsVideoTuneVisible = items.Count > 1;
+        SelectedVideoTune = previousTune != null && VideoTunes.Contains(previousTune) ? previousTune : items[0];
     }
 
     private void FillPreset(string videoCodec)
     {
-        VideoPresetText = "Preset";
+        VideoPresetText = Se.Language.Video.BurnIn.Preset;
         var previousPreset = SelectedVideoPreset;
         SelectedVideoPreset = null;
 
@@ -1673,55 +2334,9 @@ public partial class BurnInViewModel : ObservableObject
 
         var defaultItem = "medium";
 
-        if (videoCodec == "h264_nvenc")
+        if (VideoPresetOptions.IsNvenc(videoCodec))
         {
-            items = new List<string>
-            {
-                "default",
-                "slow",
-                "medium",
-                "fast",
-                "hp",
-                "hq",
-                "bd",
-                "ll",
-                "llhq",
-                "llhp",
-                "lossless",
-                "losslesshp",
-                "p1",
-                "p2",
-                "p3",
-                "p4",
-                "p5",
-                "p6",
-                "p7",
-            };
-        }
-        else if (videoCodec == "hevc_nvenc")
-        {
-            items = new List<string>
-            {
-                "default",
-                "slow",
-                "medium",
-                "fast",
-                "hp",
-                "hq",
-                "bd",
-                "ll",
-                "llhq",
-                "llhp",
-                "lossless",
-                "losslesshp",
-                "p1",
-                "p2",
-                "p3",
-                "p4",
-                "p5",
-                "p6",
-                "p7",
-            };
+            items = VideoPresetOptions.GetNvencPresets();
         }
         else if (videoCodec == "h264_qsv" || videoCodec == "hevc_qsv")
         {
@@ -1767,7 +2382,7 @@ public partial class BurnInViewModel : ObservableObject
 
             defaultItem = "standard";
 
-            VideoPresetText = "Profile";
+            VideoPresetText = Se.Language.General.Profile;
         }
         else if (videoCodec.Contains("av1"))
         {
@@ -1796,6 +2411,7 @@ public partial class BurnInViewModel : ObservableObject
 
         VideoPresets.Clear();
         VideoPresets.AddRange(items);
+        previousPreset = VideoPresetOptions.Migrate(videoCodec, previousPreset);
         if (!string.IsNullOrEmpty(previousPreset) && VideoPresets.Contains(previousPreset))
         {
             SelectedVideoPreset = previousPreset;
@@ -1810,7 +2426,7 @@ public partial class BurnInViewModel : ObservableObject
     {
         var previousCrf = SelectedVideoCrf;
         SelectedVideoCrf = null;
-        VideoCrfText = "CRF";
+        VideoCrfText = Se.Language.Video.BurnIn.Crf;
         VideoCrfHint = string.Empty;
 
         var items = new List<string> { " " };
@@ -1851,19 +2467,29 @@ public partial class BurnInViewModel : ObservableObject
             VideoCrf.AddRange(items);
             SelectedVideoCrf = null;
         }
-        else if (videoCodec == "h264_amf" ||
-                 videoCodec == "hevc_amf")
+        else if (VideoPresetOptions.IsAmf(videoCodec))
         {
-            for (var i = 0; i <= 10; i++)
+            // Named values, not a number - see VideoPresetOptions.GetAmfQualities.
+            VideoCrfText = Se.Language.General.Quality;
+            VideoCrf.Clear();
+            VideoCrf.AddRange(VideoPresetOptions.GetAmfQualities());
+            SelectedVideoCrf = null;
+        }
+        else if (videoCodec is "h264_qsv" or "hevc_qsv")
+        {
+            // QSV has no "crf" option at all: ffmpeg took the value, logged "Codec AVOption crf
+            // ... has not been used for any stream" and encoded with its default CQP, so the
+            // quality picked here did nothing. The QSV knob is "-global_quality".
+            for (var i = 1; i <= 51; i++)
             {
                 items.Add(i.ToString(CultureInfo.InvariantCulture));
             }
 
-            VideoCrfText = "Quality";
-            VideoCrfHint = "0=best quality, 10=best speed";
+            VideoCrfText = Se.Language.General.Quality;
+            VideoCrfHint = "1=best quality, 51=best speed";
             VideoCrf.Clear();
             VideoCrf.AddRange(items);
-            SelectedVideoCrf = null;
+            SelectedVideoCrf = "23";
         }
         else if (videoCodec is "h264_videotoolbox" or "hevc_videotoolbox")
         {
@@ -1876,7 +2502,7 @@ public partial class BurnInViewModel : ObservableObject
                 items.Add(i.ToString(CultureInfo.InvariantCulture));
             }
 
-            VideoCrfText = "Quality";
+            VideoCrfText = Se.Language.General.Quality;
             VideoCrfHint = "1=lowest quality, 100=best quality (Apple silicon only)";
             VideoCrf.Clear();
             VideoCrf.AddRange(items);
@@ -1910,6 +2536,7 @@ public partial class BurnInViewModel : ObservableObject
             SelectedVideoCrf = "23";
         }
 
+        previousCrf = VideoPresetOptions.MigrateAmfQuality(videoCodec, previousCrf);
         if (!string.IsNullOrWhiteSpace(previousCrf) && VideoCrf.Contains(previousCrf))
         {
             SelectedVideoCrf = previousCrf;
@@ -1958,20 +2585,84 @@ public partial class BurnInViewModel : ObservableObject
         UpdateNonAssaPreview();
     }
 
+    private int _previewRequestId;
+
     private void UpdateNonAssaPreview()
     {
-        if (_loading || !string.IsNullOrEmpty(GetValidationError()))
+        if (_loading || IsImageSubtitle || !string.IsNullOrEmpty(GetValidationError()))
         {
             return;
         }
-
-        var text = "This is a test";
 
         if (_subtitleFormat is { Name: AdvancedSubStationAlpha.NameOfFormat } && !IsBatchMode)
         {
             ImagePreview = new SKBitmap(1, 1, true).ToAvaloniaBitmap();
             return;
         }
+
+        // Render the preview with ffmpeg/libass (same engine as the generated video), debounced
+        // as the numeric up/downs fire on every tick. Falls back to the Skia approximation if
+        // ffmpeg is unavailable.
+        var requestId = System.Threading.Interlocked.Increment(ref _previewRequestId);
+        var width = VideoWidth ?? 0;
+        var height = VideoHeight ?? 0;
+        if (width < 16 || height < 16)
+        {
+            width = 1920;
+            height = 1080;
+        }
+
+        Task.Run(async () =>
+        {
+            await Task.Delay(150);
+            if (requestId != _previewRequestId)
+            {
+                return;
+            }
+
+            var previewSubtitle = new Subtitle();
+            previewSubtitle.Paragraphs.Add(new Paragraph("This is a test", 0, 2000));
+            SetStyleForNonAssa(previewSubtitle, width, height);
+
+            SKBitmap? bitmap = null;
+            try
+            {
+                bitmap = NonAssaPreviewRenderer.Render(previewSubtitle, width, height);
+            }
+            catch
+            {
+                // Fall back to the Skia preview below
+            }
+
+            if (requestId != _previewRequestId)
+            {
+                bitmap?.Dispose();
+                return;
+            }
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (requestId != _previewRequestId)
+                {
+                    bitmap?.Dispose();
+                    return;
+                }
+
+                if (bitmap != null)
+                {
+                    ImagePreview = bitmap.CropTransparentColors().ToAvaloniaBitmap();
+                }
+                else
+                {
+                    UpdateNonAssaPreviewSkia();
+                }
+            });
+        });
+    }
+
+    private void UpdateNonAssaPreviewSkia()
+    {
+        var text = "This is a test";
 
 
         var fontSize = (float)CalculateFontSize(VideoWidth ?? 0, VideoHeight ?? 0, FontFactor ?? 0);
@@ -2055,48 +2746,6 @@ public partial class BurnInViewModel : ObservableObject
         UpdateNonAssaPreview();
     }
 
-    private int GetAudioFileSizeInMb()
-    {
-        var ffmpegLocation = Configuration.Settings.General.FFmpegLocation;
-        if (!Configuration.IsRunningOnWindows && (string.IsNullOrEmpty(ffmpegLocation) || !File.Exists(ffmpegLocation)))
-        {
-            ffmpegLocation = "ffmpeg";
-        }
-
-        var tempFileName = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".aac");
-        var process = new Process
-        {
-            StartInfo =
-                {
-                    FileName = ffmpegLocation,
-                    Arguments = $"-i \"{_inputVideoFileName}\" -vn -acodec copy \"{tempFileName}\"",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                }
-        };
-
-        process.Start();
-        process.WaitForExit();
-        try
-        {
-            var length = (int)Math.Round(new FileInfo(tempFileName).Length / 1024.0 / 1024);
-            try
-            {
-                File.Delete(tempFileName);
-            }
-            catch
-            {
-                // ignore
-            }
-
-            return length;
-        }
-        catch
-        {
-            return 0;
-        }
-    }
-
     private int GetVideoBitRate()
     {
         // In "match source" mode the preview uses the loaded file's own size; otherwise the fixed MB.
@@ -2106,19 +2755,31 @@ public partial class BurnInViewModel : ObservableObject
             return 0;
         }
 
-        var audioMb = 0;
-        if (SelectedAudioEncoding == "copy")
-        {
-            audioMb = GetAudioFileSizeInMb();
-        }
-
-        if (_mediaInfo == null || _mediaInfo.Duration == null)
+        if (_mediaInfo == null || _mediaInfo.Duration == null || _mediaInfo.Duration.TotalSeconds <= 0)
         {
             return 0; // Avoid division by zero
         }
 
+        // With "Cut" on only the cut range is encoded - same as InitAndStartJobItem, and what the
+        // audio size below is measured for.
+        var totalSeconds = _mediaInfo.Duration.TotalSeconds;
+        if (IsCutActive)
+        {
+            var cutSeconds = (CutTo - CutFrom).TotalSeconds;
+            if (cutSeconds > 0 && cutSeconds < totalSeconds)
+            {
+                totalSeconds = cutSeconds;
+            }
+        }
+
+        var audioMb = 0;
+        if (SelectedAudioEncoding == "copy")
+        {
+            audioMb = GetAudioFileSizeInMb(_inputVideoFileName);
+        }
+
         // (MiB * 8192 [converts MiB to kBit]) / video seconds = kBit/s total bitrate
-        var bitRate = (int)Math.Round(((double)targetMb - audioMb) * 8192.0 / _mediaInfo.Duration.TotalSeconds);
+        var bitRate = (int)Math.Round(((double)targetMb - audioMb) * 8192.0 / totalSeconds);
         if (SelectedAudioEncoding != "copy" && !string.IsNullOrWhiteSpace(SelectedAudioBitRate))
         {
             var audioBitRate = int.Parse(SelectedAudioBitRate.RemoveChar('k').TrimEnd());
@@ -2190,6 +2851,50 @@ public partial class BurnInViewModel : ObservableObject
     internal void Loaded()
     {
         Dispatcher.UIThread.Post(LoadVideoPreview);
+        _ = Task.Run(RemoveUnsupportedVideoEncodings);
+    }
+
+    /// <summary>
+    /// Hides the video encoders the running ffmpeg was not built with. The list in
+    /// <see cref="VideoEncodingItem.VideoEncodings"/> is what the platform *could* have, not
+    /// what this ffmpeg actually has: the Flatpak bundles an ffmpeg without x265, NVENC, AMF or
+    /// QSV, and distro packages differ again, so picking one of those started a job that only
+    /// failed at encode time with "Unknown encoder".
+    /// <para>
+    /// The probe launches ffmpeg, so it runs off the UI thread and applies its result afterwards;
+    /// the window opens with the full list for the few milliseconds that takes. A probe that fails
+    /// changes nothing (see <see cref="VideoEncodingItem.GetUnsupported"/>).
+    /// </para>
+    /// </summary>
+    private void RemoveUnsupportedVideoEncodings()
+    {
+        var available = FfmpegHelper.GetAvailableEncoders();
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            var unsupported = VideoEncodingItem.GetUnsupported(VideoEncodings, available);
+            if (unsupported.Count == 0)
+            {
+                return;
+            }
+
+            // Re-point the selection before removing anything: dropping the selected item from the
+            // ComboBox's ItemsSource makes it null its SelectedItem, and the TwoWay binding writes
+            // that null straight back into SelectedVideoEncoding.
+            if (unsupported.Contains(SelectedVideoEncoding))
+            {
+                SelectedVideoEncoding = VideoEncodings.First(p => !unsupported.Contains(p));
+                VideoEncodingChanged();
+            }
+
+            foreach (var item in unsupported)
+            {
+                VideoEncodings.Remove(item);
+            }
+
+            Se.WriteToolsLog("Burn-in: hid video encoders missing from ffmpeg: " +
+                             string.Join(", ", unsupported.Select(p => p.Codec)));
+        });
     }
 
     /// <summary>
@@ -2208,6 +2913,11 @@ public partial class BurnInViewModel : ObservableObject
         var height = VideoHeight ?? _mediaInfo?.Dimension.Height ?? 1080;
 
         var subtitle = new Subtitle(_subtitle, false);
+        if (_subtitleFormat is NetflixImsc11Japanese || NetflixImsc11JapaneseToAss.HasJapaneseMarkup(subtitle))
+        {
+            return NetflixImsc11JapaneseToAss.Convert(subtitle, width, height);
+        }
+
         var isAssa = _subtitleFormat is { Name: AdvancedSubStationAlpha.NameOfFormat };
         if (!isAssa)
         {
@@ -2243,6 +2953,14 @@ public partial class BurnInViewModel : ObservableObject
             await VideoPlayerControl.WaitForPlayersReadyAsync();
             SetActivePreviewPlayer(VideoPlayerControl.VideoPlayer as LibMpvDynamicPlayer, alreadyHasSubtitle: false);
 
+            if (IsImageSubtitle)
+            {
+                // mpv shows the sup as it is - there are no settings to restyle it with, so no
+                // preview timer either.
+                LoadImageSubtitlePreview(VideoPlayerControl);
+                return;
+            }
+
             // Seek to the first subtitle so the user immediately sees styled text.
             if (_subtitle.Paragraphs.Count > 0)
             {
@@ -2257,6 +2975,24 @@ public partial class BurnInViewModel : ObservableObject
         }
     }
 
+    private void LoadImageSubtitlePreview(VideoPlayerControl control)
+    {
+        if (_mpvPreviewPlayer == null || !File.Exists(_imageSubtitleFileName))
+        {
+            return;
+        }
+
+        _mpvPreviewPlayer.SubAdd(_imageSubtitleFileName);
+        _isPreviewSubtitleLoaded = true;
+
+        // Seek to the first subtitle so the user immediately sees it, as the text preview does.
+        var first = BluRaySupParser.ParseBluRaySup(_imageSubtitleFileName, new StringBuilder()).FirstOrDefault();
+        if (first != null)
+        {
+            control.SetPosition(first.StartTimeCode.TotalSeconds + 0.05);
+        }
+    }
+
     private void StartPreviewTimer()
     {
         _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
@@ -2267,6 +3003,13 @@ public partial class BurnInViewModel : ObservableObject
                 return;
             }
 
+            if (!_previewDirty)
+            {
+                return;
+            }
+
+            _previewDirty = false;
+
             string? assaText;
             try
             {
@@ -2274,6 +3017,7 @@ public partial class BurnInViewModel : ObservableObject
             }
             catch
             {
+                _previewDirty = true;
                 return; // ignore transient errors while the user is editing settings
             }
 
@@ -2307,7 +3051,36 @@ public partial class BurnInViewModel : ObservableObject
         _mpvPreviewPlayer = mpv;
         _isPreviewSubtitleLoaded = alreadyHasSubtitle;
         _oldPreviewAssa = string.Empty;
+        _previewDirty = true;
     }
+
+    /// <summary>
+    /// Any view-model property may feed the styled preview (font, colors, margins, effects,
+    /// video size, subtitle format ...), so every change marks it dirty except the pure
+    /// output/progress properties that the generate/analyze timers write themselves.
+    /// </summary>
+    protected override void OnPropertyChanged(PropertyChangedEventArgs e)
+    {
+        base.OnPropertyChanged(e);
+
+        if (!PreviewNeutralProperties.Contains(e.PropertyName ?? string.Empty))
+        {
+            _previewDirty = true;
+        }
+    }
+
+    private static readonly HashSet<string> PreviewNeutralProperties =
+    [
+        nameof(ProgressText),
+        nameof(ProgressValue),
+        nameof(IsGenerating),
+        nameof(ImagePreview),
+        nameof(SelectedJobItem),
+        nameof(JobItems),
+        nameof(VideoFileSize),
+        nameof(TargetVideoBitRateInfo),
+        nameof(VideoCrfHint),
+    ];
 
     [RelayCommand]
     private void PreviewFullScreen()
@@ -2358,19 +3131,50 @@ public partial class BurnInViewModel : ObservableObject
             if (_fullScreenVideoPlayerControl == fsControl) // still fullscreen (not closed in the meantime)
             {
                 SetActivePreviewPlayer(fsControl.VideoPlayer as LibMpvDynamicPlayer, alreadyHasSubtitle: false);
+                if (IsImageSubtitle)
+                {
+                    LoadImageSubtitlePreview(fsControl);
+                }
             }
         });
     }
 
+    /// <summary>
+    /// Closing while generating (title-bar X) never goes through Cancel, so ffmpeg was left
+    /// encoding in the background, in batch mode the timer went on starting the remaining jobs
+    /// with no window, and the final message box targeted a closed window. Stop the timers, kill
+    /// ffmpeg and drop the partial output it leaves.
+    /// </summary>
+    internal void OnClosing()
+    {
+        _isClosing = true;
+        _doAbort = true;
+        _timerAnalyze.StopAndDispose(TimerAnalyzeElapsed);
+        _timerGenerate.StopAndDispose(TimerGenerateElapsed);
+
+        if (KillFfmpegProcess() && _ffmpegWritesOutputFile)
+        {
+            DeletePartialOutputFile();
+        }
+
+        DeletePassLogFiles();
+        CleanupPreview();
+        _sleepInhibitor.Dispose();
+    }
+
     public void CleanupPreview()
     {
+        // The subtitle files handed to ffmpeg live as long as the window does - nothing else
+        // removes them, and they used to pile up in the temp folder run after run (#13332).
+        _tempSubtitleFiles.Delete();
+
         _previewTimer?.Stop();
         _previewTimer = null;
         _mpvPreviewPlayer = null;
 
         try
         {
-            VideoPlayerControl?.Close();
+            VideoPlayerControl?.CloseAndDisposePlayer();
         }
         catch
         {

@@ -21,6 +21,7 @@ public partial class TranslateSettingsViewModel : ObservableObject
 
     [ObservableProperty] private decimal? _serverDelaySeconds;
     [ObservableProperty] private int? _maxBytesRequest;
+    [ObservableProperty] private bool _keepMusicLinesUntranslated;
 
     [ObservableProperty] private string _promptText;
     [ObservableProperty] private bool _promptIsVisible;
@@ -40,6 +41,21 @@ public partial class TranslateSettingsViewModel : ObservableObject
     private void Cancel()
     {
         Window?.Close();
+    }
+
+    [RelayCommand]
+    private void ResetPrompt()
+    {
+        if (AutoTranslator == null)
+        {
+            return;
+        }
+
+        var defaultPrompt = GetPrompt(new SeAutoTranslate(), AutoTranslator.GetType());
+        if (defaultPrompt != null)
+        {
+            PromptText = defaultPrompt;
+        }
     }
 
     [RelayCommand]
@@ -100,6 +116,12 @@ public partial class TranslateSettingsViewModel : ObservableObject
         Se.Settings.AutoTranslate.RequestDelaySeconds = ServerDelaySeconds ?? 0;
         Configuration.Settings.Tools.AutoTranslateDelaySeconds = (int)Math.Round(ServerDelaySeconds ?? 0, MidpointRounding.AwayFromZero);
         Se.Settings.AutoTranslate.RequestMaxBytes = MaxBytesRequest ?? 0;
+        // Mirror into the libse setting too, the way the delay above is: MergeAndSplitHelper
+        // reads only Configuration.Settings.Tools.AutoTranslateMaxBytes, so without this the
+        // value was persisted and redisplayed but never actually capped a request.
+        Configuration.Settings.Tools.AutoTranslateMaxBytes = MaxBytesRequest ?? 0;
+        Se.Settings.AutoTranslate.KeepMusicLinesUntranslated = KeepMusicLinesUntranslated;
+        Configuration.Settings.Tools.AutoTranslateKeepMusicLines = KeepMusicLinesUntranslated;
         Se.Settings.AutoTranslate.EngineStrategies[AutoTranslator.Name] =
             SelectedMergeOptions == Se.Language.Translate.TranslateEachLineSeparately
                 ? nameof(TranslateStrategy.TranslateEachLineSeparately)
@@ -197,118 +219,97 @@ public partial class TranslateSettingsViewModel : ObservableObject
 
         ServerDelaySeconds = Se.Settings.AutoTranslate.RequestDelaySeconds;
         MaxBytesRequest = (int)Se.Settings.AutoTranslate.RequestMaxBytes;
+        KeepMusicLinesUntranslated = Se.Settings.AutoTranslate.KeepMusicLinesUntranslated;
         PromptText = string.Empty;
         PromptIsVisible = true;
 
         var engineType = AutoTranslator.GetType();
-        if (engineType == typeof(ChatGptTranslate))
-        {
-            PromptText = Se.Settings.AutoTranslate.ChatGptPrompt;
-            if (string.IsNullOrWhiteSpace(PromptText))
-            {
-                PromptText = new SeAutoTranslate().ChatGptPrompt;
-            }
-        }
-        else if (engineType == typeof(OpenAiCompatibleTranslate))
-        {
-            PromptText = Se.Settings.AutoTranslate.OpenAiCompatiblePrompt;
-            if (string.IsNullOrWhiteSpace(PromptText))
-            {
-                PromptText = new SeAutoTranslate().OpenAiCompatiblePrompt;
-            }
-        }
-        else if (engineType == typeof(OllamaTranslate))
-        {
-            PromptText = Se.Settings.AutoTranslate.OllamaPrompt;
-            if (string.IsNullOrWhiteSpace(PromptText))
-            {
-                PromptText = new SeAutoTranslate().OllamaPrompt;
-            }
-        }
-        else if (engineType == typeof(LmStudioTranslate))
-        {
-            PromptText = Se.Settings.AutoTranslate.LmStudioPrompt;
-            if (string.IsNullOrWhiteSpace(PromptText))
-            {
-                PromptText = new SeAutoTranslate().LmStudioPrompt;
-            }
-        }
-        else if (engineType == typeof(AnthropicTranslate))
-        {
-            PromptText = Se.Settings.AutoTranslate.AnthropicPrompt;
-            if (string.IsNullOrWhiteSpace(PromptText))
-            {
-                PromptText = new SeAutoTranslate().AnthropicPrompt;
-            }
-        }
-        else if (engineType == typeof(PerplexityTranslate))
-        {
-            PromptText = Se.Settings.AutoTranslate.PerplexityPrompt;
-            if (string.IsNullOrWhiteSpace(PromptText))
-            {
-                PromptText = new SeAutoTranslate().PerplexityPrompt;
-            }
-        }
-        else if (engineType == typeof(GroqTranslate))
-        {
-            PromptText = Se.Settings.AutoTranslate.GroqPrompt;
-            if (string.IsNullOrWhiteSpace(PromptText))
-            {
-                PromptText = new SeAutoTranslate().GroqPrompt;
-            }
-        }
-        else if (engineType == typeof(OpenRouterTranslate))
-        {
-            PromptText = Se.Settings.AutoTranslate.OpenRouterPrompt;
-            if (string.IsNullOrWhiteSpace(PromptText))
-            {
-                PromptText = new SeAutoTranslate().OpenRouterPrompt;
-            }
-        }
-        else if (engineType == typeof(NvidiaTranslate))
-        {
-            PromptText = Se.Settings.AutoTranslate.NvidiaPrompt;
-            if (string.IsNullOrWhiteSpace(PromptText))
-            {
-                PromptText = new SeAutoTranslate().NvidiaPrompt;
-            }
-        }
-        else if (engineType == typeof(MistralTranslate))
-        {
-            PromptText = Se.Settings.AutoTranslate.MistralPrompt;
-            if (string.IsNullOrWhiteSpace(PromptText))
-            {
-                PromptText = new SeAutoTranslate().MistralPrompt;
-            }
-        }
-        else if (engineType == typeof(GeminiTranslate))
-        {
-            PromptText = Se.Settings.AutoTranslate.GeminiPrompt;
-            if (string.IsNullOrWhiteSpace(PromptText))
-            {
-                PromptText = new SeAutoTranslate().GeminiPrompt;
-            }
-        }
-        else if (engineType == typeof(DeepSeekTranslate))
-        {
-            PromptText = Se.Settings.AutoTranslate.DeepSeekPrompt;
-            if (string.IsNullOrWhiteSpace(PromptText))
-            {
-                PromptText = new SeAutoTranslate().DeepSeekPrompt;
-            }
-        }
-        else if (engineType == typeof(LlamaCppTranslate))
-        {
-            PromptText = Se.Settings.AutoTranslate.LlamaCppPrompt;
-            if (string.IsNullOrWhiteSpace(PromptText))
-            {
-                PromptText = new SeAutoTranslate().LlamaCppPrompt;
-            }
-        }
-        else
+        var defaultPrompt = GetPrompt(new SeAutoTranslate(), engineType);
+        if (defaultPrompt == null)
         {
             PromptIsVisible = false;
+            return;
         }
+
+        PromptText = GetPrompt(Se.Settings.AutoTranslate, engineType) ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(PromptText))
+        {
+            PromptText = defaultPrompt;
+        }
+    }
+
+    /// <summary>
+    /// Returns the prompt of the given settings object for the engine, or null if the engine has no prompt.
+    /// Pass a fresh <see cref="SeAutoTranslate"/> for the built-in default, or the current settings for the saved one.
+    /// </summary>
+    private static string? GetPrompt(SeAutoTranslate settings, Type engineType)
+    {
+        if (engineType == typeof(ChatGptTranslate))
+        {
+            return settings.ChatGptPrompt;
+        }
+
+        if (engineType == typeof(OpenAiCompatibleTranslate))
+        {
+            return settings.OpenAiCompatiblePrompt;
+        }
+
+        if (engineType == typeof(OllamaTranslate))
+        {
+            return settings.OllamaPrompt;
+        }
+
+        if (engineType == typeof(LmStudioTranslate))
+        {
+            return settings.LmStudioPrompt;
+        }
+
+        if (engineType == typeof(AnthropicTranslate))
+        {
+            return settings.AnthropicPrompt;
+        }
+
+        if (engineType == typeof(PerplexityTranslate))
+        {
+            return settings.PerplexityPrompt;
+        }
+
+        if (engineType == typeof(GroqTranslate))
+        {
+            return settings.GroqPrompt;
+        }
+
+        if (engineType == typeof(OpenRouterTranslate))
+        {
+            return settings.OpenRouterPrompt;
+        }
+
+        if (engineType == typeof(NvidiaTranslate))
+        {
+            return settings.NvidiaPrompt;
+        }
+
+        if (engineType == typeof(MistralTranslate))
+        {
+            return settings.MistralPrompt;
+        }
+
+        if (engineType == typeof(GeminiTranslate))
+        {
+            return settings.GeminiPrompt;
+        }
+
+        if (engineType == typeof(DeepSeekTranslate))
+        {
+            return settings.DeepSeekPrompt;
+        }
+
+        if (engineType == typeof(LlamaCppTranslate))
+        {
+            return settings.LlamaCppPrompt;
+        }
+
+        return null;
     }
 
     public void OnKeyDown(KeyEventArgs e)
@@ -317,6 +318,11 @@ public partial class TranslateSettingsViewModel : ObservableObject
         {
             e.Handled = true;
             Window?.Close();
+        }
+        else if (UiUtil.IsHelp(e))
+        {
+            e.Handled = true;
+            UiUtil.ShowHelp("features/auto-translate", "engine-configuration");
         }
     }
 

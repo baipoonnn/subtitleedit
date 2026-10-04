@@ -1,4 +1,4 @@
-using Nikse.SubtitleEdit.Core.Common;
+﻿using Nikse.SubtitleEdit.Core.Common;
 using SkiaSharp;
 using System;
 using System.Collections.Generic;
@@ -101,6 +101,9 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
         public const string NameOfFormat = "WebVTT";
         public override string Name => NameOfFormat;
+
+        // Carries the region of every cue, and the regions themselves in the header.
+        public override bool HasPositionSupport => true;
 
         public override string ToText(Subtitle subtitle, string title)
         {
@@ -442,16 +445,25 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 subtitle.Paragraphs.AddRange(merged.Paragraphs);
             }
 
-            // Merge consecutive cues with identical time codes (common in WebVTT as alternative to line breaks)
+            // Merge consecutive cues with identical time codes (common in WebVTT as alternative to line breaks) -
+            // but only where they sit together on screen: a caption pinned to the top over the dialogue
+            // below it is two subtitles, not two rows of one.
             for (var i = subtitle.Paragraphs.Count - 2; i >= 0; i--)
             {
                 var current = subtitle.Paragraphs[i];
                 var nextParagraph = subtitle.Paragraphs[i + 1];
                 if (current.StartTime.TotalMilliseconds == nextParagraph.StartTime.TotalMilliseconds &&
                     current.EndTime.TotalMilliseconds == nextParagraph.EndTime.TotalMilliseconds &&
-                    current.Region == nextParagraph.Region)
+                    current.Region == nextParagraph.Region &&
+                    IsSameVerticalPlacement(current.Style, nextParagraph.Style))
                 {
-                    current.Text = current.Text + Environment.NewLine + nextParagraph.Text;
+                    // An exact repeat (same times, same text - e.g. a concatenated/duplicated
+                    // segment) is a duplicate, not a second line: drop it instead of stacking it.
+                    if (current.Text != nextParagraph.Text)
+                    {
+                        current.Text = current.Text + Environment.NewLine + nextParagraph.Text;
+                    }
+
                     subtitle.Paragraphs.RemoveAt(i + 1);
                 }
             }
@@ -532,7 +544,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             for (int i = startIndex + 7; i < s.Length; i++)
             {
                 var ch = s[i];
-                if (CharUtils.IsDigit(ch))
+                if (CharUtils.IsAsciiDigit(ch))
                 {
                     tsSb.Append(ch);
                 }
@@ -552,6 +564,73 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             }
 
             return 0;
+        }
+
+        /// <summary>
+        /// A "line:" cue setting counts rows, not percent, and the WebVTT spec leaves the number of
+        /// rows to the height of the video. Sixteen is the usual assumption - it is the one the
+        /// "0 or -16 = top, 16 or -1 = bottom" reading of a line number is built on.
+        /// </summary>
+        private const double AssumedRowCount = 16.0;
+
+        /// <summary>
+        /// How far apart two cues may sit vertically and still be read as two rows of one caption.
+        /// A row is only a few percent of the video tall, so this leaves room for a row or two of
+        /// rounding while staying far below the gap between a caption at the top of the screen and
+        /// the dialogue at the bottom.
+        /// </summary>
+        private const double SameVerticalPlacementMaxPercentApart = 15.0;
+
+        /// <summary>
+        /// Whether two cues sit close enough vertically to be two rows of one caption.
+        /// Only a cue that says where it sits can rule the merge out, so cues without a usable
+        /// "line:" setting keep merging exactly as they did before this check existed.
+        /// </summary>
+        private static bool IsSameVerticalPlacement(string cueSettings1, string cueSettings2)
+        {
+            return !TryGetVerticalPositionPercent(cueSettings1, out var percent1) ||
+                   !TryGetVerticalPositionPercent(cueSettings2, out var percent2) ||
+                   Math.Abs(percent1 - percent2) <= SameVerticalPlacementMaxPercentApart;
+        }
+
+        /// <summary>
+        /// Reads the "line:" cue setting as a percentage down the video: 0 = top, 100 = bottom.
+        /// Both forms are understood - a percentage, and a line number counting rows from the top
+        /// (0 = top) or, when it is negative, from the bottom (-1 = bottom row).
+        /// Returns false when the cue does not say, or says something we cannot read ("auto").
+        /// </summary>
+        private static bool TryGetVerticalPositionPercent(string s, out double percent)
+        {
+            percent = 0;
+            var line = GetTag(s, "line:");
+            if (string.IsNullOrEmpty(line))
+            {
+                return false;
+            }
+
+            line = line.Trim();
+
+            // The spec allows an alignment suffix after a comma ("line:0,start"). GetTag only
+            // strips it from the percent form ("line:10%,start"), so strip it here too - or the
+            // line-number form with a suffix reads as unparsable and cannot rule a merge out.
+            var comma = line.IndexOf(',');
+            if (comma >= 0)
+            {
+                line = line.Substring(0, comma).TrimEnd();
+            }
+
+            if (line.EndsWith('%'))
+            {
+                return double.TryParse(line.TrimEnd('%'), NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out percent);
+            }
+
+            if (!double.TryParse(line, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var lineNumber))
+            {
+                return false;
+            }
+
+            percent = (lineNumber < 0 ? AssumedRowCount + lineNumber : lineNumber) * 100.0 / AssumedRowCount;
+            return true;
         }
 
         internal static string GetPositionInfo(string s)
@@ -755,6 +834,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             var cueStyles = GetCueStyles(subtitle.Header);
             var italicStyles = GetStylesWith(cueStyles, "font-style:italic;");
             var boldStyles = GetStylesWith(cueStyles, "font-weight:bold;");
+            var skipColor = HasOnlyDefaultTextColor(subtitle, cueStyles);
 
             foreach (var p in subtitle.Paragraphs)
             {
@@ -769,7 +849,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                         var styles = GetStyles(match.Value);
                         var hasItalic = italicStyles.Any(st => styles.Contains(st));
                         var hasBold = boldStyles.Any(st => styles.Contains(st));
-                        var colorTag = FindBestColorTagOrDefault(styles.ToList(), cueStyles);
+                        var colorTag = skipColor ? null : FindBestColorTagOrDefault(styles.ToList(), cueStyles);
                         if (hasItalic)
                         {
                             text = text.Insert(match.Index, "<i>");
@@ -809,6 +889,53 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                     text = RegexTagsPlusWhiteSpace.Replace(text, "$1");
                     p.Text = text;
                 }
+            }
+        }
+
+        /// <summary>
+        /// Streaming services often put one class with their player's near-white text color on every
+        /// cue (e.g. "color_EBEBEB" or "gainsboro"). Such a color says nothing about speakers or emphasis,
+        /// so it should not end up as a font tag around every line in the target format.
+        /// A single color that is not near-white (e.g. all text in gold) is a choice and is kept.
+        /// </summary>
+        private static bool HasOnlyDefaultTextColor(Subtitle subtitle, Dictionary<string, string> cueStyles)
+        {
+            var colors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in subtitle.Paragraphs)
+            {
+                if (!p.Text.Contains("<c.", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var match = RegexRemoveCTags.Match(p.Text);
+                while (match.Success)
+                {
+                    var colorTag = FindBestColorTagOrDefault(GetStyles(match.Value).ToList(), cueStyles);
+                    if (colorTag != null && colors.Add(colorTag) && colors.Count > 1)
+                    {
+                        return false;
+                    }
+
+                    match = match.NextMatch();
+                }
+            }
+
+            return colors.Count == 1 && IsNearWhite(colors.First());
+        }
+
+        private static bool IsNearWhite(string color)
+        {
+            try
+            {
+                var c = DefaultColorClasses.TryGetValue(color, out var defaultColor) ? defaultColor : ColorTranslator.FromHtml(color);
+                var max = Math.Max(c.Red, Math.Max(c.Green, c.Blue));
+                var min = Math.Min(c.Red, Math.Min(c.Green, c.Blue));
+                return min >= 200 && max - min <= 16;
+            }
+            catch
+            {
+                return false;
             }
         }
 
@@ -934,7 +1061,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 // e.g. `::cue(.styledotAB9216) { color:#AB9216;font-weight:bold }`.
                 if (cueStyles != null && cueStyles.TryGetValue(s, out var css))
                 {
-                    var color = ExtractColorFromCueCss(css);
+                    var color = ToFontColor(ExtractColorFromCueCss(css));
                     if (color != null)
                     {
                         return color;
@@ -943,6 +1070,42 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// CSS "rgb(r,g,b)" / "rgba(r,g,b,a)" is not understood in a font tag by most players, so make
+        /// it "#RRGGBB". Fully transparent text gets no color. Other values (hex, names) are kept as is.
+        /// </summary>
+        private static string ToFontColor(string cssColor)
+        {
+            if (cssColor == null || !cssColor.StartsWith("rgb", StringComparison.OrdinalIgnoreCase))
+            {
+                return cssColor;
+            }
+
+            var start = cssColor.IndexOf('(');
+            if (start < 0 || !cssColor.EndsWith(')'))
+            {
+                return null;
+            }
+
+            var arr = cssColor.Substring(start + 1, cssColor.Length - start - 2).Split(',');
+            if (arr.Length < 3 || arr.Length > 4 ||
+                !byte.TryParse(arr[0], NumberStyles.None, CultureInfo.InvariantCulture, out var r) ||
+                !byte.TryParse(arr[1], NumberStyles.None, CultureInfo.InvariantCulture, out var g) ||
+                !byte.TryParse(arr[2], NumberStyles.None, CultureInfo.InvariantCulture, out var b))
+            {
+                return null;
+            }
+
+            if (arr.Length == 4 &&
+                double.TryParse(arr[3], NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var alpha) &&
+                alpha <= 0)
+            {
+                return null;
+            }
+
+            return $"#{r:X2}{g:X2}{b:X2}";
         }
 
         private static string ExtractColorFromCueCss(string css)
@@ -1067,6 +1230,10 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
         private static string ColorHtmlToWebVtt(string text)
         {
             var res = text.Replace("</font>", "</c>");
+            if (res.IndexOf("<font", StringComparison.Ordinal) < 0)
+            {
+                return res;
+            }
 
             for (var i = 0; i < 2; i++)
             {
@@ -1076,7 +1243,8 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                     var fontString = "<c." + match.Value.Substring(13, match.Value.Length - 15) + ">";
                     fontString = fontString.Trim('"').Trim('\'');
                     res = res.Remove(match.Index, match.Length).Insert(match.Index, fontString);
-                    match = RegexHtmlColor.Match(res);
+                    // Continue after the replacement - restarting at 0 rescanned the whole cue per tag.
+                    match = RegexHtmlColor.Match(res, match.Index + fontString.Length);
                 }
 
                 match = RegexHtmlColor2.Match(res);
@@ -1085,7 +1253,8 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                     var fontString = "<c." + match.Value.Substring(12, match.Value.Length - 13) + ">";
                     fontString = fontString.Trim('"').Trim('\'');
                     res = res.Remove(match.Index, match.Length).Insert(match.Index, fontString);
-                    match = RegexHtmlColor2.Match(res);
+                    // Continue after the replacement - restarting at 0 rescanned the whole cue per tag.
+                    match = RegexHtmlColor2.Match(res, match.Index + fontString.Length);
                 }
 
                 match = RegexHtmlColor3.Match(res);
@@ -1100,7 +1269,8 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                     }
                     fontString = fontString.Trim('"').Trim('\'');
                     res = res.Remove(match.Index, match.Length).Insert(match.Index, fontString);
-                    match = RegexHtmlColor3.Match(res);
+                    // Continue after the replacement - restarting at 0 rescanned the whole cue per tag.
+                    match = RegexHtmlColor3.Match(res, match.Index + fontString.Length);
                 }
 
                 match = RegexHtmlColor4.Match(res);
@@ -1118,7 +1288,8 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                     }
                     fontString = fontString.Trim('"').Trim('\'');
                     res = res.Remove(match.Index, match.Length).Insert(match.Index, fontString);
-                    match = RegexHtmlColor4.Match(res);
+                    // Continue after the replacement - restarting at 0 rescanned the whole cue per tag.
+                    match = RegexHtmlColor4.Match(res, match.Index + fontString.Length);
                 }
             }
 

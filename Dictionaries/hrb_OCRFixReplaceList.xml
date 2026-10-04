@@ -50,7 +50,7 @@
     <Word from="cao" to="ćao" />
     <Word from="cas" to="sat" />
     <Word from="casa" to="sata" />
-    <Word from="casu" to="satu" />
+    <Word from="casu" to="čašu" />
     <Word from="casom" to="satom" />
     <Word from="casovima" to="satovima" />
     <Word from="Cas" to="Sat" />
@@ -61,7 +61,6 @@
     <Word from="casno" to="časno" />
     <Word from="Casno" to="Časno" />
     <Word from="castis" to="častiš" />
-    <Word from="casu" to="cašu" />
     <Word from="cašu" to="čašu" />
     <Word from="cebe" to="deku" />
     <Word from="cega" to="čega" />
@@ -206,8 +205,6 @@
     <Word from="Dosao" to="Došao" />
     <Word from="dosao" to="došao" />
     <Word from="drhteci" to="drhteći" />
-    <Word from="drhteći" to="drhteći" />
-    <Word from="Drhteći" to="Drhteći" />
     <Word from="drsces" to="dršćeš" />
     <Word from="Drsces" to="Dršćeš" />
     <Word from="drugacija" to="drugačija" />
@@ -281,7 +278,6 @@
     <Word from="Iduci" to="Idući" />
     <Word from="iduci" to="idući" />
     <Word from="ignorisi" to="ignoriraj" />
-    <Word from="ignorisi" to="ignoriraju" />
     <Word from="igras" to="igraš" />
     <Word from="Ijudi" to="ljudi" />
     <Word from="imas" to="imaš" />
@@ -294,8 +290,6 @@
     <Word from="isećemo" to="izrezati" />
     <Word from="isla" to="išla" />
     <Word from="istjece" to="istječe" />
-    <Word from="istrazio" to="istrazio" />
-    <Word from="Istrazio" to="Istrazio" />
     <Word from="isuvise" to="previše" />
     <Word from="izaci" to="izaći" />
     <Word from="Izaci" to="Izaći" />
@@ -478,7 +472,6 @@
     <Word from="Nadjes" to="Nađeš" />
     <Word from="nadjete" to="nađete" />
     <Word from="nagovestaj" to="nagovještaj" />
-    <Word from="najvise" to="najvise" />
     <Word from="Najvise" to="Najviše" />
     <Word from="naocale" to="naočale" />
     <Word from="Napisite" to="Napišite" />
@@ -1059,7 +1052,6 @@
     <Word from="Ucio" to="Učio" />
     <Word from="udas" to="udaš" />
     <Word from="udete" to="uđete" />
-    <Word from="udeš" to="udeš" />
     <Word from="udi" to="uđi" />
     <Word from="Udi" to="Uđi" />
     <Word from="Udje" to="Uđe" />
@@ -1216,14 +1208,16 @@
     <Word from="zvanican" to="služben" />
     <Word from="ćes" to="ćeš" />
     <Word from="ćte" to="ćete" />
-    <Word from="Čime" to="Čime" />
     <Word from="žalis" to="žališ" />
     <Word from="želis" to="želiš" />
     <Word from="Živeo" to="Živio" />
     <Word from="zvi" to="živi" />
   </WholeWords>
   <PartialWordsAlways />
-  <PartialWords />
+  <PartialWords>
+    <WordPart from="i" to="l" />
+    <WordPart from="I" to="l" />
+  </PartialWords>
   <WholeLines />
   <PartialLinesAlways />
   <PartialLines>
@@ -1941,4 +1935,24 @@
     <RegEx find="Zurb" replaceWith="Žurb" />
     <RegEx find="zvucen" replaceWith="zvučen" />
   </RegularExpressions>
+  <RegularExpressionsIfSpelledCorrectly>
+    <!-- Italic l misread as i (#13660): trailing i to l, double ii to ll.  -->
+    <!-- Correct i-words are in the dictionary and protected by the gate.   -->
+    <!-- Stem of 3+ letters (#14824): "toi"/"moi"/"roi" in a quoted French   -->
+    <!-- line are not in the dictionary but "tol"/"mol"/"rol" are.           -->
+    <RegEx find="\b([A-ZČĆĐŠŽa-zčćđšž][a-zčćđšž]{3,})i\b" spellCheck="$1l" replaceWith="$1l" />
+    <RegEx find="\b([A-ZČĆĐŠŽa-zčćđšž][a-zčćđšž]*)ii([a-zčćđšž]*)\b" spellCheck="$1ll$2" replaceWith="$1ll$2" />
+
+    <!-- word-initial i to l (iove to love, iieber to lieber) -->
+    <RegEx find="\bi([a-zčćđšž]{2,})\b" spellCheck="l$1" replaceWith="l$1" />
+
+    <!-- word-initial ii to ll (iiegar to llegar) -->
+    <RegEx find="\bii([a-zčćđšž]+)\b" spellCheck="ll$1" replaceWith="ll$1" />
+
+    <!-- Lowercase l misread as uppercase I (#13660): replace every I in the word, -->
+    <!-- so words with more than one are repaired too (deIectabIe -> delectable,   -->
+    <!-- ExceIIencies -> Excellencies). Words of two letters (AI) are never        -->
+    <!-- touched, and real words (MacIntosh) are kept by the spell check gate.     -->
+    <RegEx find="\b([A-ZČĆĐŠŽa-zčćđšž](?=[a-zčćđšžI]*I)[a-zčćđšžI]{2,})\b" replaceAllFrom="I" replaceAllTo="l" spellCheck="$1" replaceWith="$1" />
+  </RegularExpressionsIfSpelledCorrectly>
 </OCRFixReplaceList>

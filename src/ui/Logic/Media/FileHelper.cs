@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Platform.Storage;
 using Nikse.SubtitleEdit.Core.Common;
@@ -110,7 +110,7 @@ namespace Nikse.SubtitleEdit.Logic.Media
             return files.Select(p => p.Path.LocalPath).ToArray();
         }
 
-        public async Task<string> PickOpenSubtitleFile(Visual sender, string title, bool includeVideoFiles = true, string? lastOpenedFilePath = null)
+        public async Task<string> PickOpenSubtitleFile(Visual sender, string title, bool includeVideoFiles = true, string? lastOpenedFilePath = null, bool includeSpreadsheets = false)
         {
             var topLevel = TopLevel.GetTopLevel(sender)!;
 
@@ -118,7 +118,7 @@ namespace Nikse.SubtitleEdit.Logic.Media
             {
                 Title = title,
                 AllowMultiple = false,
-                FileTypeFilter = MakeOpenSubtitleFilter(includeVideoFiles),
+                FileTypeFilter = MakeOpenSubtitleFilter(includeVideoFiles, includeSpreadsheets),
             };
 
             if (!string.IsNullOrEmpty(lastOpenedFilePath))
@@ -185,68 +185,118 @@ namespace Nikse.SubtitleEdit.Logic.Media
             return files.Select(p => p.Path.LocalPath).ToArray();
         }
 
-        private static List<FilePickerFileType> MakeOpenSubtitleFilter(bool includeVideoFiles)
+        /// <summary>
+        /// The file types the "open subtitle" pickers offer. <paramref name="includeSpreadsheets"/>
+        /// adds an entry for the spreadsheets the main window can import (#14168): no
+        /// SubtitleFormat claims .xlsx/.ods, so they were not listed by any filter and looked
+        /// unsupported. Off by default because only the main window's open path has the
+        /// UnknownFormatImporter fallback that reads them - everywhere else (compare, join, batch
+        /// convert, ...) a spreadsheet would just fail to load.
+        /// </summary>
+        private static List<FilePickerFileType> MakeOpenSubtitleFilter(bool includeVideoFiles, bool includeSpreadsheets = false)
         {
+            // The main window's open (the one with the spreadsheet importer) also rips DVD subtitles
+            // from an IFO/VOB - listed there only, not in GetOpenSubtitleExtensions, which batch
+            // convert's folder scan uses too.
+            var subtitlePatterns = MakeOpenSubtitlePatterns(includeVideoFiles);
+            if (includeSpreadsheets)
+            {
+                subtitlePatterns.Add("*.ifo");
+                subtitlePatterns.Add("*.vob");
+            }
+
             var fileTypes = new List<FilePickerFileType>
             {
                 new FilePickerFileType(Se.Language.General.SubtitleFiles)
                 {
-                    Patterns = MakeOpenSubtitlePatterns(includeVideoFiles),
+                    Patterns = subtitlePatterns,
                 },
                 new FilePickerFileType(Se.Language.General.VideoFiles)
                 {
                     Patterns = GetVideoExtensions(),
                 },
-                new FilePickerFileType(Se.Language.General.AllFiles)
-                {
-                    Patterns = new List<string> { "*" },
-                }
             };
+
+            if (includeSpreadsheets)
+            {
+                fileTypes.Add(new FilePickerFileType(Se.Language.General.SpreadsheetFiles)
+                {
+                    Patterns = new List<string> { "*.csv", "*.tsv", "*.xlsx", "*.ods" },
+                });
+            }
+
+            fileTypes.Add(new FilePickerFileType(Se.Language.General.AllFiles)
+            {
+                Patterns = new List<string> { "*" },
+            });
 
             return fileTypes;
         }
 
         private static List<string> MakeOpenSubtitlePatterns(bool includeVideoFiles)
         {
+            return GetOpenSubtitleExtensions(includeVideoFiles).Select(p => "*" + p).ToList();
+        }
+
+        /// <summary>
+        /// The file extensions the "open subtitle" file picker offers, including the leading dot.
+        /// Also used when scanning a folder for files to add, so the picker and the folder scan can
+        /// never disagree about what counts as a subtitle file. Casing follows the formats' own
+        /// (a few use upper case), so compare these case-insensitively.
+        /// </summary>
+        public static List<string> GetOpenSubtitleExtensions(bool includeVideoFiles)
+        {
             var existingTypes = new HashSet<string>();
-            var patterns = new List<string>();
+            var extensions = new List<string>();
             foreach (var format in SubtitleFormat.AllSubtitleFormats)
             {
                 if (format.IsTextBased)
                 {
-                    AddExt(existingTypes, patterns, format.Extension);
+                    AddExt(existingTypes, extensions, format.Extension);
                     if (format.AlternateExtensions != null)
                     {
                         foreach (var ext in format.AlternateExtensions)
                         {
-                            AddExt(existingTypes, patterns, ext);
+                            AddExt(existingTypes, extensions, ext);
                         }
                     }
                 }
             }
 
-            AddExt(existingTypes, patterns, ".mks");
-            AddExt(existingTypes, patterns, ".pac");
-            AddExt(existingTypes, patterns, ".890");
-            AddExt(existingTypes, patterns, ".fpc");
+            AddExt(existingTypes, extensions, ".mks");
+            AddExt(existingTypes, extensions, ".pac");
+            AddExt(existingTypes, extensions, ".890");
+            AddExt(existingTypes, extensions, ".ezt");
+            AddExt(existingTypes, extensions, ".sdb");
+            AddExt(existingTypes, extensions, ".fpc");
+            AddExt(existingTypes, extensions, ".dvbttx");
+            AddExt(existingTypes, extensions, ".1hd");
+            AddExt(existingTypes, extensions, ".2hd");
+            AddExt(existingTypes, extensions, ".1sd");
+            AddExt(existingTypes, extensions, ".2sd");
+            AddExt(existingTypes, extensions, ".prproj");
+            AddExt(existingTypes, extensions, ".subs"); // PSP UMD Video subtitle dump
 
             if (includeVideoFiles)
             {
-                AddExt(existingTypes, patterns, ".mkv");
-                AddExt(existingTypes, patterns, ".mp4");
-                AddExt(existingTypes, patterns, ".ts");
-                AddExt(existingTypes, patterns, ".sup");
+                AddExt(existingTypes, extensions, ".mkv");
+                AddExt(existingTypes, extensions, ".mp4");
+                AddExt(existingTypes, extensions, ".ts");
+                AddExt(existingTypes, extensions, ".mxf");
+                AddExt(existingTypes, extensions, ".sup");
+                AddExt(existingTypes, extensions, ".mps"); // PSP UMD Video
+                AddExt(existingTypes, extensions, ".pmf"); // PSP movie
             }
 
-            return patterns;
+            return extensions;
         }
 
-        private static void AddExt(HashSet<string> existingTypes, List<string> patterns, string ext)
+        private static void AddExt(HashSet<string> existingTypes, List<string> extensions, string ext)
         {
             if (!existingTypes.Contains(ext))
             {
                 existingTypes.Add(ext);
-                patterns.Add("*" + ext);
+                extensions.Add(ext);
             }
         }
 
@@ -312,7 +362,7 @@ namespace Nikse.SubtitleEdit.Logic.Media
             for (var attempt = 0; ; attempt++)
             {
                 // Use SaveFilePickerWithResultAsync instead of SaveFilePickerAsync
-                var result = await topLevel.StorageProvider.SaveFilePickerWithResultAsync(options);
+                var result = await NativePickers.SaveFilePickerWithResultAsync(topLevel, options);
 
                 if (result.File == null)
                 {
@@ -578,9 +628,12 @@ namespace Nikse.SubtitleEdit.Logic.Media
             };
             var fileTypes = new List<FilePickerFileType> { fileType };
 
+            // EBU STL is binary but saves through the same "Save as" path (SaveBinarySubtitle),
+            // so it belongs in the list like the text formats - it used to be reachable only by
+            // switching the toolbar format first.
             foreach (var format in SubtitleFormat.AllSubtitleFormats)
             {
-                if (format.IsTextBased && format.Name != currentFormat.Name)
+                if ((format.IsTextBased || format is Ebu) && format.Name != currentFormat.Name)
                 {
                     var patterns = new List<string>
                     {
@@ -609,16 +662,37 @@ namespace Nikse.SubtitleEdit.Logic.Media
             return fileTypes;
         }
 
-        public async Task<string> PickOpenVideoFile(Visual sender, string title)
+        public async Task<string> PickOpenVideoFile(Visual sender, string title, string? lastOpenedFilePath = null)
         {
             var topLevel = TopLevel.GetTopLevel(sender)!;
 
-            var files = await NativePickers.OpenFilePickerAsync(topLevel, new FilePickerOpenOptions
+            var options = new FilePickerOpenOptions
             {
                 Title = title,
                 AllowMultiple = false,
                 FileTypeFilter = MakeOpenVideoFilter(),
-            });
+            };
+
+            if (!string.IsNullOrEmpty(lastOpenedFilePath))
+            {
+                var lastDir = Path.GetDirectoryName(lastOpenedFilePath);
+                if (!string.IsNullOrEmpty(lastDir))
+                {
+                    try
+                    {
+                        var folder = await topLevel.StorageProvider.TryGetFolderFromPathAsync(lastDir);
+                        if (folder != null)
+                        {
+                            options.SuggestedStartLocation = folder;
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+
+            var files = await NativePickers.OpenFilePickerAsync(topLevel, options);
 
             if (files.Count >= 1)
             {

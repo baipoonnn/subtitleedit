@@ -19,6 +19,8 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
 
         private ContinuationUtilities.ContinuationProfile _continuationProfile;
         private List<string> _names;
+        private HashSet<string> _nameSet;
+        private int _nameMaxLength;
         public string FixAction { get; set; }
 
         public void Fix(Subtitle subtitle, IFixCallbacks callbacks)
@@ -40,14 +42,22 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
             var inSentence = false;
             bool? inItalicSentence = null;
 
+            // SanitizeString runs four regex replaces per call, and the loop sanitized every
+            // paragraph twice: once as pNext's text, then again as p's text one iteration later.
+            // Carry the sanitized "next" value forward instead. The carry is dropped whenever the
+            // loop writes pNext.Text below, so the following iteration re-sanitizes what the
+            // paragraph actually holds.
+            string carriedText = null;
+
             for (var i = 0; i < subtitle.Paragraphs.Count - 1; i++)
             {
                 var p = subtitle.Paragraphs[i];
                 var pNext = subtitle.Paragraphs[i + 1];
                 var oldText = p.Text;
                 var oldTextNext = pNext.Text;
-                var text = ContinuationUtilities.SanitizeString(p.Text);
+                var text = carriedText ?? ContinuationUtilities.SanitizeString(p.Text);
                 var textNext = ContinuationUtilities.SanitizeString(pNext.Text);
+                carriedText = textNext; // captured before the Arabic conversion below, which the next iteration reapplies
                 var isChecked = true;
                 var shouldProcess = true;
 
@@ -207,6 +217,7 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
                             if (IsPreviewStep(callbacks) && isChecked || !IsPreviewStep(callbacks))
                             {
                                 pNext.Text = newTextNext;
+                                carriedText = null; // pNext.Text changed - the next iteration must re-sanitize
                             }
 
                             fixCount++;
@@ -282,9 +293,25 @@ namespace Nikse.SubtitleEdit.Core.Forms.FixCommonErrors
                 }
             }
 
-            foreach (var name in _names)
+            if (_nameSet == null)
             {
-                if (input.StartsWith(name + " ", StringComparison.Ordinal) || input.StartsWith(name + ",", StringComparison.Ordinal) || input.StartsWith(name + ":", StringComparison.Ordinal))
+                _nameSet = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var name in _names)
+                {
+                    var n = name ?? string.Empty;
+                    _nameSet.Add(n);
+                    _nameMaxLength = Math.Max(_nameMaxLength, n.Length);
+                }
+            }
+
+            // "Starts with a name followed by space, comma or colon": look the text before each
+            // such character up in the set, instead of three StartsWith (and three string
+            // concatenations) for every one of the thousands of names.
+            var max = Math.Min(input.Length - 1, _nameMaxLength);
+            for (var i = 0; i <= max; i++)
+            {
+                var ch = input[i];
+                if ((ch == ' ' || ch == ',' || ch == ':') && _nameSet.Contains(input.Substring(0, i)))
                 {
                     return true;
                 }

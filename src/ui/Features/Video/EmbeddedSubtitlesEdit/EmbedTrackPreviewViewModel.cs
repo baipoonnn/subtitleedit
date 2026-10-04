@@ -46,12 +46,23 @@ public partial class EmbedTrackPreviewViewModel : ObservableObject
         _matroskaTrack = matroskaTrack;
         _videoFileName = videoFileName;
         _subtitleFileName = subtitleFileName;
-        WindowTitle = string.Format(Se.Language.Video.ViewMatroskaTrackX, videoFileName);
+        WindowTitle = UiUtil.FormatTitleWithFileName(Se.Language.Video.ViewMatroskaTrackX, videoFileName);
     }
 
     private void Close()
     {
         Dispatcher.UIThread.Post(() => { Window?.Close(); });
+    }
+
+    /// <summary>
+    /// The MatroskaFile handed to <see cref="Initialize"/> holds an open FileStream on the video
+    /// and this view model owns it for its lifetime; without this every Preview click left a
+    /// handle on a possibly multi-GB file behind.
+    /// </summary>
+    internal void OnClosing()
+    {
+        _matroskaFile?.Dispose();
+        _matroskaFile = null;
     }
 
     [RelayCommand]
@@ -73,6 +84,11 @@ public partial class EmbedTrackPreviewViewModel : ObservableObject
         {
             Cancel();
             e.Handled = true;
+        }
+        else if (UiUtil.IsHelp(e))
+        {
+            e.Handled = true;
+            UiUtil.ShowHelp("features/embedded-subtitles");
         }
     }
 

@@ -46,11 +46,11 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
         {
             _errorCount = 0;
 
-            var sb = new StringBuilder();
-            lines.ForEach(line => sb.AppendLine(line));
 
-            string allText = sb.ToString();
-            if (!allText.Contains("<Cue") && allText.Contains("value="))
+            string allText = JoinLines(lines);
+            // Only <Cue> elements are read, so without one there is nothing to parse (the old
+            // guard let every file without "value=" through to a full XML parse).
+            if (!allText.Contains("<Cue"))
             {
                 return;
             }

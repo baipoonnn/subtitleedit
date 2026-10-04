@@ -17,6 +17,7 @@ using Nikse.SubtitleEdit.Features.Edit.ShowHistory;
 using Nikse.SubtitleEdit.Features.Files.Compare;
 using Nikse.SubtitleEdit.Features.Files.Export.ExportEbuStl;
 using Nikse.SubtitleEdit.Features.Files.ExportCavena890;
+using Nikse.SubtitleEdit.Features.Files.ExportDvbTeletext;
 using Nikse.SubtitleEdit.Features.Files.ExportCustomTextFormat;
 using Nikse.SubtitleEdit.Features.Files.ExportImageBased;
 using Nikse.SubtitleEdit.Features.Files.ExportPac;
@@ -28,6 +29,7 @@ using Nikse.SubtitleEdit.Features.Files.FormatProperties.TimedText10Properties;
 using Nikse.SubtitleEdit.Features.Files.FormatProperties.TimedTextImsc11Properties;
 using Nikse.SubtitleEdit.Features.Files.FormatProperties.WebVttProperties;
 using Nikse.SubtitleEdit.Features.WebVtt;
+using Nikse.SubtitleEdit.Features.Files.ImportDvd;
 using Nikse.SubtitleEdit.Features.Files.ImportImages;
 using Nikse.SubtitleEdit.Features.Files.ImportCsvXlsxCustomColumns;
 using Nikse.SubtitleEdit.Features.Files.ImportPlainText;
@@ -38,6 +40,11 @@ using Nikse.SubtitleEdit.Features.Files.Statistics;
 using Nikse.SubtitleEdit.Features.Help.About;
 using Nikse.SubtitleEdit.Features.Help.CheckForUpdates;
 using Nikse.SubtitleEdit.Features.Main;
+using Nikse.SubtitleEdit.Features.Main.AssistedMove;
+using Nikse.SubtitleEdit.Features.Main.ActorPicker;
+using Nikse.SubtitleEdit.Features.Main.StylePicker;
+using Nikse.SubtitleEdit.Features.Main.AssistedSplit;
+using Nikse.SubtitleEdit.Features.Main.GridColumns;
 using Nikse.SubtitleEdit.Features.Main.Layout;
 using Nikse.SubtitleEdit.Features.Main.MainHelpers;
 using Nikse.SubtitleEdit.Features.Ocr;
@@ -51,12 +58,16 @@ using Nikse.SubtitleEdit.Features.Options.Language;
 using Nikse.SubtitleEdit.Features.Options.Plugins;
 using Nikse.SubtitleEdit.Features.Options.Settings;
 using Nikse.SubtitleEdit.Features.Options.Settings.SettingsImportExport;
+using Nikse.SubtitleEdit.Features.Options.Settings.MinGapCalculate;
 using Nikse.SubtitleEdit.Features.Options.Settings.SyntaxColorTooWideSettings;
 using Nikse.SubtitleEdit.Features.Options.Settings.WaveformThemes;
+using Nikse.SubtitleEdit.Features.Options.Settings.VideoControlsItems;
 using Nikse.SubtitleEdit.Features.Options.Settings.WaveformToolbarItems;
 using Nikse.SubtitleEdit.Features.Options.Shortcuts;
+using Nikse.SubtitleEdit.Features.Options.Shortcuts.CustomSearch;
 using Nikse.SubtitleEdit.Features.Options.Shortcuts.PickMilliseconds;
 using Nikse.SubtitleEdit.Features.Options.Shortcuts.SurroundWith;
+using Nikse.SubtitleEdit.Features.Options.Shortcuts.CustomShortcuts;
 using Nikse.SubtitleEdit.Features.Options.WordLists;
 using Nikse.SubtitleEdit.Features.Shared;
 using Nikse.SubtitleEdit.Features.Shared.AddToNamesList;
@@ -69,6 +80,8 @@ using Nikse.SubtitleEdit.Features.Shared.BinaryEdit.BinaryAdjustColor;
 using Nikse.SubtitleEdit.Features.Shared.BinaryEdit.BinaryAdjustDuration;
 using Nikse.SubtitleEdit.Features.Shared.BinaryEdit.BinaryApplyDurationLimits;
 using Nikse.SubtitleEdit.Features.Shared.BinaryEdit.BinaryAppendSubtitle;
+using Nikse.SubtitleEdit.Features.Shared.BinaryEdit.BinaryChangeResolution;
+using Nikse.SubtitleEdit.Features.Shared.BinaryEdit.BinaryMoveCaptions;
 using Nikse.SubtitleEdit.Features.Shared.BinaryEdit.BinaryResizeImages;
 using Nikse.SubtitleEdit.Features.Shared.BinaryEdit.BinarySettings;
 using Nikse.SubtitleEdit.Features.Shared.BinaryEdit.SetText;
@@ -77,8 +90,11 @@ using Nikse.SubtitleEdit.Features.Shared.ColorPicker;
 using Nikse.SubtitleEdit.Features.Shared.ColumnPaste;
 using Nikse.SubtitleEdit.Features.Shared.ErrorList;
 using Nikse.SubtitleEdit.Features.Shared.FindText;
+using Nikse.SubtitleEdit.Features.Shared.FormatLimitWarning;
 using Nikse.SubtitleEdit.Features.Shared.GoToLineNumber;
 using Nikse.SubtitleEdit.Features.Shared.PickAlignment;
+using Nikse.SubtitleEdit.Features.Shared.PickTeletextAlignment;
+using Nikse.SubtitleEdit.Features.Shared.PickTeletextColor;
 using Nikse.SubtitleEdit.Features.Shared.PickFontName;
 using Nikse.SubtitleEdit.Features.Shared.PickLanguage;
 using Nikse.SubtitleEdit.Features.Shared.PickLayer;
@@ -91,6 +107,7 @@ using Nikse.SubtitleEdit.Features.Shared.PickSubtitleFormat;
 using Nikse.SubtitleEdit.Features.Shared.PickTsTrack;
 using Nikse.SubtitleEdit.Features.Shared.PickVobSubLanguage;
 using Nikse.SubtitleEdit.Features.Shared.PromptFileSaved;
+using Nikse.SubtitleEdit.Features.Shared.PromptFilesSaved;
 using Nikse.SubtitleEdit.Features.Shared.OpenOriginalMismatch;
 using Nikse.SubtitleEdit.Features.Shared.PromptCheckBox;
 using Nikse.SubtitleEdit.Features.Shared.PromptTextBox;
@@ -138,29 +155,45 @@ using Nikse.SubtitleEdit.Features.Tools.SplitBreakLongLines;
 using Nikse.SubtitleEdit.Features.Tools.SplitSubtitle;
 using Nikse.SubtitleEdit.Features.Translate;
 using Nikse.SubtitleEdit.Features.Translate.LlamaCppEngineSettings;
+using Nikse.SubtitleEdit.Features.Video.BackgroundMusic;
 using Nikse.SubtitleEdit.Features.Video.BlankVideo;
 using Nikse.SubtitleEdit.Features.Video.BurnIn;
+using Nikse.SubtitleEdit.Features.Video.Chapters;
 using Nikse.SubtitleEdit.Features.Video.CutVideo;
 using Nikse.SubtitleEdit.Features.Video.EmbeddedSubtitlesEdit;
 using Nikse.SubtitleEdit.Features.Video.GoToVideoPosition;
 using Nikse.SubtitleEdit.Features.Video.OpenFromUrl;
 using Nikse.SubtitleEdit.Features.Video.OpenFromUrl.PickOnlineSubtitle;
 using Nikse.SubtitleEdit.Features.Video.ReEncodeVideo;
+using Nikse.SubtitleEdit.Features.Video.RemuxVideo;
 using Nikse.SubtitleEdit.Features.Video.ShotChanges;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.ActorVoices;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.AutoCast;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.DetectSpeakers;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.SkipNoiseLines;
 using Nikse.SubtitleEdit.Features.Video.VideoOcr;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.AdvancedTtsSettings;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.DownloadTts;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.ElevenLabsSettings;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.ChatterboxTtsSettings;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.KokoroTtsSettings;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.OpenAiCompatibleSettings;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.PiperSettings;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.OmniVoiceSettings;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.Qwen3TtsSettings;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.Qwen3TtsCrispAsrSettings;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.VibeVoiceCrispAsrSettings;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.Confucius4TtsCrispAsrSettings;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.DotsTtsCrispAsrSettings;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.IndexTtsCrispAsrSettings;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.PocketTtsCrispAsrSettings;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.SupertonicCrispAsrSettings;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.IndexTts25License;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.ModelLicense;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.VoiceCloneConsent;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.IndexTts25AudioCppSettings;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.AudioCppTtsSettings;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.CosyVoice3CrispAsrSettings;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.F5TtsCrispAsrSettings;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.OmniVoiceCrispAsrSettings;
@@ -171,6 +204,8 @@ using Nikse.SubtitleEdit.Features.Video.SpeechToText.OpenAiCompatible;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.EncodingSettings;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.ReviewSpeech;
 using Nikse.SubtitleEdit.Features.Video.TextToSpeech.VoiceSettings;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.VoiceManager;
+using Nikse.SubtitleEdit.Features.Video.TextToSpeech.VoiceManager.VoicePacks;
 using Nikse.SubtitleEdit.Features.Video.TransparentSubtitles;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Compression;
@@ -206,6 +241,7 @@ using TmpegEncXmlPropertiesViewModel = Nikse.SubtitleEdit.Features.Files.FormatP
 using VideoPlayerUndockedViewModel = Nikse.SubtitleEdit.Features.Shared.Undocked.VideoPlayerUndockedViewModel;
 using SpeechToTextAdvancedViewModel = Nikse.SubtitleEdit.Features.Video.SpeechToText.SpeechToTextAdvancedViewModel;
 using SpeechToTextPostProcessingViewModel = Nikse.SubtitleEdit.Features.Video.SpeechToText.SpeechToTextPostProcessingViewModel;
+using SpeechToTextQualityReportViewModel = Nikse.SubtitleEdit.Features.Video.SpeechToText.SpeechToTextQualityReportViewModel;
 
 namespace Nikse.SubtitleEdit;
 
@@ -228,13 +264,11 @@ public static class DependencyInjectionExtensions
         collection.AddTransient<IBatchConvertItemSplitter, BatchConvertTransportStreamSplitter>();
         collection.AddTransient<IBluRayHelper, BluRayHelper>();
         collection.AddTransient<ICasingToggler, CasingToggler>();
-        collection.AddTransient<IChatLlmDownloadService, ChatLlmDownloadService>();
         collection.AddTransient<IColorService, ColorService>();
         collection.AddHttpClientWithProxy<ICrispAsrDownloadService, CrispAsrDownloadService>();
         collection.AddTransient<IDictionaryInitializer, DictionaryInitializer>();
         collection.AddTransient<IFindService, FindService>();
         collection.AddTransient<IFontNameService, FontNameService>();
-        collection.AddTransient<IGoogleLensOcrDownloadService, GoogleLensOcrDownloadService>();
         collection.AddTransient<IInsertService, InsertService>();
         collection.AddTransient<ILanguageInitializer, LanguageInitializer>();
         collection.AddTransient<ILens, Lens>();
@@ -253,17 +287,22 @@ public static class DependencyInjectionExtensions
         collection.AddTransient<ISplitManager, SplitManager>();
         collection.AddTransient<ISubtitleFileService, SubtitleFileService>();
         collection.AddTransient<IThemeInitializer, ThemeInitializer>();
-        collection.AddTransient<ITtsDownloadService, TtsDownloadService>();
         collection.AddTransient<IUndoRedoManager, UndoRedoManager>();
+        collection.AddTransient<IVideoPreviewSubtitle, VideoPreviewSubtitle>();
         collection.AddTransient<IVlcReloader, VlcReloader>();
         collection.AddTransient<IWindowService, WindowService>();
         collection.AddTransient<IZipUnpacker, ZipUnpacker>();
 
         // Download services
+        // These two take an HttpClient like every other downloader, so they must be
+        // registered the same way - plain AddTransient resolved the default client and
+        // silently bypassed the user's proxy settings.
+        collection.AddHttpClientWithProxy<IGoogleLensOcrDownloadService, GoogleLensOcrDownloadService>();
+        collection.AddHttpClientWithProxy<ITtsDownloadService, TtsDownloadService>();
         collection.AddHttpClientWithProxy<IFfmpegDownloadService, FfmpegDownloadService>();
         collection.AddHttpClientWithProxy<ILibMpvDownloadService, LibMpvDownloadService>();
         collection.AddHttpClientWithProxy<ILibVlcDownloadService, LibVlcDownloadService>();
-        collection.AddHttpClientWithProxy<IPaddleOcrDownloadService, PaddleOcrDownloadService>();
+        collection.AddHttpClientWithProxy<IFfmpegLibsDownloadService, FfmpegLibsDownloadService>();
         collection.AddHttpClientWithProxy<ICrispEmbedDownloadService, CrispEmbedDownloadService>();
         collection.AddHttpClientWithProxy<ISpellCheckDictionaryDownloadService, SpellCheckDictionaryDownloadService>();
         collection.AddHttpClientWithProxy<IThaiSpellDownloadService, ThaiSpellDownloadService>();
@@ -274,9 +313,19 @@ public static class DependencyInjectionExtensions
         collection.AddHttpClientWithProxy<ILlamaCppDownloadService, LlamaCppDownloadService>();
         collection.AddHttpClientWithProxy<IQwen3AsrCppDownloadService, Qwen3AsrCppDownloadService>();
         collection.AddHttpClientWithProxy<IQwen3TtsCppDownloadService, Qwen3TtsCppDownloadService>();
+        collection.AddHttpClientWithProxy<IVoicePackDownloadService, VoicePackDownloadService>();
         collection.AddHttpClientWithProxy<IQwen3TtsCrispAsrDownloadService, Qwen3TtsCrispAsrDownloadService>();
         collection.AddHttpClientWithProxy<IVibeVoiceCrispAsrDownloadService, VibeVoiceCrispAsrDownloadService>();
         collection.AddHttpClientWithProxy<IIndexTtsCrispAsrDownloadService, IndexTtsCrispAsrDownloadService>();
+        collection.AddHttpClientWithProxy<IPocketTtsCrispAsrDownloadService, PocketTtsCrispAsrDownloadService>();
+        collection.AddHttpClientWithProxy<ISupertonicCrispAsrDownloadService, SupertonicCrispAsrDownloadService>();
+        collection.AddHttpClientWithProxy<IDotsTtsCrispAsrDownloadService, DotsTtsCrispAsrDownloadService>();
+        collection.AddHttpClientWithProxy<IConfucius4TtsCrispAsrDownloadService, Confucius4TtsCrispAsrDownloadService>();
+        collection.AddHttpClientWithProxy<IIndexTts25AudioCppDownloadService, IndexTts25AudioCppDownloadService>();
+        collection.AddHttpClientWithProxy<IHiggsTtsAudioCppDownloadService, HiggsTtsAudioCppDownloadService>();
+        collection.AddHttpClientWithProxy<IFishTtsAudioCppDownloadService, FishTtsAudioCppDownloadService>();
+        collection.AddHttpClientWithProxy<IFireRedTts3AudioCppDownloadService, FireRedTts3AudioCppDownloadService>();
+        collection.AddHttpClientWithProxy<IAceStepAudioCppDownloadService, AceStepAudioCppDownloadService>();
         collection.AddHttpClientWithProxy<ICosyVoice3CrispAsrDownloadService, CosyVoice3CrispAsrDownloadService>();
         collection.AddHttpClientWithProxy<IF5TtsCrispAsrDownloadService, F5TtsCrispAsrDownloadService>();
         collection.AddHttpClientWithProxy<IOmniVoiceCrispAsrDownloadService, OmniVoiceCrispAsrDownloadService>();
@@ -324,9 +373,11 @@ public static class DependencyInjectionExtensions
         collection.AddTransient<BatchConvertAssaViewModel>();
         collection.AddTransient<BatchConvertFixCommonErrorsSettingsViewModel>();
         collection.AddTransient<BatchConvertSettingsViewModel>();
+        collection.AddTransient<Features.Tools.BatchConvert.BatchConvertTsSettingsViewModel>();
         collection.AddTransient<BatchConvertViewModel>();
         collection.AddTransient<BatchErrorListViewModel>();
         collection.AddTransient<BeautifyTimeCodesViewModel>();
+        collection.AddTransient<Nikse.SubtitleEdit.Features.Tools.ImproveTimeCodes.ImproveTimeCodesViewModel>();
         collection.AddTransient<Nikse.SubtitleEdit.Features.Tools.BeautifyTimeCodes.Profile.BeautifyTimeCodesProfileViewModel>();
         collection.AddTransient<BinaryAdjustAllTimesViewModel>();
         collection.AddTransient<BinaryAdjustAlphaViewModel>();
@@ -335,6 +386,8 @@ public static class DependencyInjectionExtensions
         collection.AddTransient<BinaryAdjustDurationViewModel>();
         collection.AddTransient<BinaryApplyDurationLimitsViewModel>();
         collection.AddTransient<BinaryAppendSubtitleViewModel>();
+        collection.AddTransient<BinaryChangeResolutionViewModel>();
+        collection.AddTransient<BinaryMoveCaptionsViewModel>();
         collection.AddTransient<BinaryEditViewModel>();
         collection.AddTransient<BinaryOcrCharacterAddViewModel>();
         collection.AddTransient<BinaryOcrCharacterHistoryViewModel>();
@@ -344,6 +397,7 @@ public static class DependencyInjectionExtensions
         collection.AddTransient<BinaryOcrSettingsViewModel>();
         collection.AddTransient<BinaryResizeImagesViewModel>();
         collection.AddTransient<BinarySettingsViewModel>();
+        collection.AddTransient<BackgroundMusicViewModel>();
         collection.AddTransient<BlankVideoViewModel>();
         collection.AddTransient<BookmarkEditViewModel>();
         collection.AddTransient<BookmarksListViewModel>();
@@ -356,6 +410,8 @@ public static class DependencyInjectionExtensions
         collection.AddTransient<CategoryPickerViewModel>();
         collection.AddTransient<ChangeCasingViewModel>();
         collection.AddTransient<ChangeFormattingViewModel>();
+        collection.AddTransient<ChaptersViewModel>();
+        collection.AddTransient<WriteChaptersToVideoViewModel>();
         collection.AddTransient<ConvertActorsViewModel>();
         collection.AddTransient<ChangeFrameRateViewModel>();
         collection.AddTransient<ChangeSpeedViewModel>();
@@ -367,6 +423,7 @@ public static class DependencyInjectionExtensions
         collection.AddTransient<CopyPasteTranslateViewModel>();
         collection.AddTransient<CustomContinuationStyleViewModel>();
         collection.AddTransient<CutVideoViewModel>();
+        collection.AddTransient<CutVideoPreviewViewModel>();
         collection.AddTransient<VideoOcrViewModel>();
         collection.AddTransient<DCinemaInteropPropertiesViewModel>();
         collection.AddTransient<DCinemaSmptePropertiesViewModel>();
@@ -374,6 +431,7 @@ public static class DependencyInjectionExtensions
         collection.AddTransient<DownloadGoogleLensOcrViewModel>();
         collection.AddTransient<DownloadLibMpvViewModel>();
         collection.AddTransient<DownloadLibVlcViewModel>();
+        collection.AddTransient<DownloadFfmpegLibsViewModel>();
         collection.AddTransient<DownloadLlamaCppViewModel>();
         collection.AddTransient<DownloadPaddleOcrViewModel>();
         collection.AddTransient<DownloadCrispEmbedViewModel>();
@@ -390,15 +448,18 @@ public static class DependencyInjectionExtensions
         collection.AddTransient<EditRuleViewModel>();
         collection.AddTransient<EditWholeTextViewModel>();
         collection.AddTransient<ElevenLabsSettingsViewModel>();
+        collection.AddTransient<OpenAiCompatibleSettingsViewModel>();
         collection.AddTransient<EmbedTrackPreviewViewModel>();
         collection.AddTransient<EmbeddedSubtitlesEditViewModel>();
         collection.AddTransient<EmbeddedSubtitlesEditMp4ViewModel>();
         collection.AddTransient<EncodingSettingsViewModel>();
         collection.AddTransient<ErrorListViewModel>();
         collection.AddTransient<ExportCavena890ViewModel>();
+        collection.AddTransient<ExportDvbTeletextViewModel>();
         collection.AddTransient<ExportCustomTextFormatViewModel>();
         collection.AddTransient<ExportEbuStlViewModel>();
         collection.AddTransient<ExportImageBasedViewModel>();
+        collection.AddTransient<TextEffectViewModel>();
         collection.AddTransient<ExportPacViewModel>();
         collection.AddTransient<ExportPlainTextViewModel>();
         collection.AddTransient<FindDoubleLinesViewModel>();
@@ -406,6 +467,7 @@ public static class DependencyInjectionExtensions
         collection.AddTransient<FindRuleViewModel>();
         collection.AddTransient<FindTextViewModel>();
         collection.AddTransient<FindViewModel>();
+        collection.AddTransient<FixCommonErrorsLogViewModel>();
         collection.AddTransient<FixCommonErrorsProfileViewModel>();
         collection.AddTransient<Features.Tools.AiReview.AiReviewViewModel>();
         collection.AddTransient<Features.Main.AiAssistant.AiAssistantViewModel>();
@@ -417,11 +479,14 @@ public static class DependencyInjectionExtensions
         collection.AddTransient<GetDictionariesViewModel>();
         collection.AddTransient<GetKeyViewModel>();
         collection.AddTransient<GoToLineNumberViewModel>();
+        collection.AddTransient<GridColumnsViewModel>();
+        collection.AddTransient<FormatLimitWarningViewModel>();
         collection.AddTransient<GoToVideoPositionViewModel>();
         collection.AddTransient<HearingImpairedRuleSettingsViewModel>();
         collection.AddTransient<ImageBasedPreviewViewModel>();
         collection.AddTransient<ImageBasedProfileViewModel>();
         collection.AddTransient<ImportCsvXlsxCustomColumnsViewModel>();
+        collection.AddTransient<ImportDvdViewModel>();
         collection.AddTransient<ImportImagesViewModel>();
         collection.AddTransient<ImportPlainTextViewModel>();
         collection.AddTransient<InterjectionsViewModel>();
@@ -450,6 +515,8 @@ public static class DependencyInjectionExtensions
         collection.AddTransient<NOcrSettingsViewModel>();
         collection.AddTransient<NOcrTrainViewModel>();
         collection.AddTransient<LlamaCppOcrSettingsViewModel>();
+        collection.AddTransient<Features.Video.VideoOcr.EngineSettings.VideoOcrEngineSettingsViewModel>();
+        collection.AddTransient<Features.Ocr.CrispEmbedSettings.CrispEmbedSettingsViewModel>();
         collection.AddTransient<LlamaCppEngineSettingsViewModel>();
         collection.AddTransient<Features.Translate.LlamaCppAdvanced.LlamaCppAdvancedSettingsViewModel>();
         collection.AddTransient<OcrViewModel>();
@@ -458,6 +525,15 @@ public static class DependencyInjectionExtensions
         collection.AddTransient<Qwen3TtsCrispAsrSettingsViewModel>();
         collection.AddTransient<VibeVoiceCrispAsrSettingsViewModel>();
         collection.AddTransient<IndexTtsCrispAsrSettingsViewModel>();
+        collection.AddTransient<PocketTtsCrispAsrSettingsViewModel>();
+        collection.AddTransient<SupertonicCrispAsrSettingsViewModel>();
+        collection.AddTransient<DotsTtsCrispAsrSettingsViewModel>();
+        collection.AddTransient<Confucius4TtsCrispAsrSettingsViewModel>();
+        collection.AddTransient<IndexTts25LicenseViewModel>();
+        collection.AddTransient<ModelLicenseViewModel>();
+        collection.AddTransient<VoiceCloneConsentViewModel>();
+        collection.AddTransient<IndexTts25AudioCppSettingsViewModel>();
+        collection.AddTransient<AudioCppTtsSettingsViewModel>();
         collection.AddTransient<CosyVoice3CrispAsrSettingsViewModel>();
         collection.AddTransient<F5TtsCrispAsrSettingsViewModel>();
         collection.AddTransient<OmniVoiceCrispAsrSettingsViewModel>();
@@ -471,7 +547,13 @@ public static class DependencyInjectionExtensions
         collection.AddTransient<PickOnlineSubtitleViewModel>();
         collection.AddTransient<OpenSecondarySubtitleViewModel>();
         collection.AddTransient<PartsSavedViewModel>();
+        collection.AddTransient<ActorPickerViewModel>();
+        collection.AddTransient<StylePickerViewModel>();
+        collection.AddTransient<AssistedSplitViewModel>();
+        collection.AddTransient<AssistedMoveViewModel>();
         collection.AddTransient<PickAlignmentViewModel>();
+        collection.AddTransient<PickTeletextAlignmentViewModel>();
+        collection.AddTransient<PickTeletextColorViewModel>();
         collection.AddTransient<PickFontNameViewModel>();
         collection.AddTransient<PickLayerFilterViewModel>();
         collection.AddTransient<PickLayerViewModel>();
@@ -497,11 +579,15 @@ public static class DependencyInjectionExtensions
         collection.AddTransient<ProfilesExportViewModel>();
         collection.AddTransient<ProfilesViewModel>();
         collection.AddTransient<PromptFileSavedViewModel>();
+        collection.AddTransient<PromptFilesSavedViewModel>();
         collection.AddTransient<PromptCheckBoxViewModel>();
         collection.AddTransient<OpenOriginalMismatchViewModel>();
         collection.AddTransient<PromptTextBoxViewModel>();
         collection.AddTransient<PromptUnknownWordViewModel>();
         collection.AddTransient<ReEncodeVideoViewModel>();
+        collection.AddTransient<RemuxVideoViewModel>();
+        collection.AddTransient<PickAudioTrackViewModel>();
+        collection.AddTransient<PickAudioTrackWindow>();
         collection.AddTransient<RemoveTextForHearingImpairedViewModel>();
         collection.AddTransient<RemoveUnicodeCharactersViewModel>();
         collection.AddTransient<RenumberViewModel>();
@@ -531,10 +617,17 @@ public static class DependencyInjectionExtensions
         collection.AddTransient<SplitSubtitleViewModel>();
         collection.AddTransient<StatisticsViewModel>();
         collection.AddTransient<SurroundWithViewModel>();
+        collection.AddTransient<CustomShortcutEditViewModel>();
+        collection.AddTransient<CustomShortcutStepViewModel>();
+        collection.AddTransient<CustomSearchViewModel>();
         collection.AddTransient<SyntaxColorTooWideSettingsViewModel>();
+        collection.AddTransient<MinGapCalculateViewModel>();
         collection.AddTransient<TextToSpeechViewModel>();
         collection.AddTransient<ActorVoiceMappingViewModel>();
         collection.AddTransient<ActorVoiceRowSettingsViewModel>();
+        collection.AddTransient<AutoCastSpeakersViewModel>();
+        collection.AddTransient<SkipNoiseLinesViewModel>();
+        collection.AddTransient<DetectSpeakersViewModel>();
         collection.AddTransient<TimedText10PropertiesViewModel>();
         collection.AddTransient<TimedTextImsc11PropertiesViewModel>();
         collection.AddTransient<TmpegEncXmlPropertiesViewModel>();
@@ -543,9 +636,12 @@ public static class DependencyInjectionExtensions
         collection.AddTransient<TranslationErrorViewModel>();
         collection.AddTransient<TransparentSettingsViewModel>();
         collection.AddTransient<TransparentSubtitlesViewModel>();
+        collection.AddTransient<VideoControlsItemsViewModel>();
         collection.AddTransient<VideoPlayerUndockedViewModel>();
         collection.AddTransient<VisualSyncViewModel>();
         collection.AddTransient<VoiceSettingsViewModel>();
+        collection.AddTransient<VoiceManagerViewModel>();
+        collection.AddTransient<DownloadVoicePacksViewModel>();
         collection.AddTransient<WaveformGuessTimeCodesViewModel>();
         collection.AddTransient<WaveformSeekSilenceViewModel>();
         collection.AddTransient<WaveformThemesViewModel>();
@@ -555,6 +651,7 @@ public static class DependencyInjectionExtensions
         collection.AddTransient<WebVttStylePickerViewModel>();
         collection.AddTransient<SpeechToTextAdvancedViewModel>();
         collection.AddTransient<SpeechToTextPostProcessingViewModel>();
+        collection.AddTransient<SpeechToTextQualityReportViewModel>();
         collection.AddTransient<WordListsViewModel>();
     }
 
@@ -567,7 +664,14 @@ public static class DependencyInjectionExtensions
         where TClient : class
         where TImplementation : class, TClient
     {
-        collection.AddHttpClient<TClient, TImplementation>()
+        collection.AddHttpClient<TClient, TImplementation>(client =>
+            {
+                // The download helper governs its own deadline with a linked CancellationTokenSource
+                // (30 minutes for large files). HttpClient.Timeout defaults to 100 s and aborts
+                // during the body read too, so it silently capped every download attempt and made
+                // that CTS dead code.
+                client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
+            })
             .ConfigurePrimaryHttpMessageHandler(() => HttpClientFactoryWithProxy.CreateHandler());
     }
 }

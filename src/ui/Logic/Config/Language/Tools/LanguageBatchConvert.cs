@@ -24,6 +24,7 @@ public class LanguageBatchConvert
     public string AddColor { get; set; }
     public string DeleteLinesWithSpecificActorsOrStyles { get; set; }
     public string UseSourceStylesIfPossible { get; set; }
+    public string KeepSourceEmbeddedFonts { get; set; }
     public string EditStyles { get; set; }
     public string EditProperties { get; set; }
     public string EditAttachments { get; set; }
@@ -45,6 +46,35 @@ public class LanguageBatchConvert
     public string AssaChangeStyleToStyle { get; set; }
     public string AssaChangeStyleImportStyle { get; set; }
     public string AssaChangeStyleTrimUnusedStyles { get; set; }
+    public string AssaChangeStylePropertiesTitle { get; set; }
+    public string AssaChangeStylePropertiesInfo { get; set; }
+    public string AssaChangeStylePropertiesSetSpacing { get; set; }
+    public string AssaChangeStylePropertiesSetAlignment { get; set; }
+    public string ConvertColorsToDialogTitle { get; set; }
+    public string ConvertColorsToDialogRemoveColorTags { get; set; }
+    public string ConvertColorsToDialogAddNewLines { get; set; }
+    public string ConvertColorsToDialogReBreakLines { get; set; }
+    public string SnapTimeCodesToFramesInfo { get; set; }
+    public string AddFolderDotDotDot { get; set; }
+    public string AddFolderRecursiveDotDotDot { get; set; }
+    public string SelectFolderToConvert { get; set; }
+    public string IncludeSubfolders { get; set; }
+    public string KeepSourceFileTimestamp { get; set; }
+    public string PreventSleepWhileConverting { get; set; }
+    public string ScanningFolderX { get; set; }
+    public string TransportStreamSettings { get; set; }
+    public string TransportStreamSettingsDotDotDot { get; set; }
+    public string TransportStreamSettingsInfo { get; set; }
+    public string TransportStreamOverrideXPosition { get; set; }
+    public string TransportStreamOverrideYPosition { get; set; }
+    public string TransportStreamOverrideVideoSize { get; set; }
+    public string TransportStreamBottomMargin { get; set; }
+    public string TransportStreamFileNameEnding { get; set; }
+    public string TransportStreamFileNameEndingInfo { get; set; }
+    public string TransportStreamOnlyTeletext { get; set; }
+    public string TransportStreamGetSizeFromVideo { get; set; }
+    public string TwoLetterLanguageCodeUppercase { get; set; }
+    public string ThreeLetterLanguageCodeUppercase { get; set; }
 
     public LanguageBatchConvert()
     {
@@ -65,7 +95,8 @@ public class LanguageBatchConvert
         AddAlignment = "Add alignment";
         AddColor = "Add color";
         DeleteLinesWithSpecificActorsOrStyles = "Delete lines with actors or styles (separate multiple by comma)";
-        UseSourceStylesIfPossible = "Use source styles if possible";
+        UseSourceStylesIfPossible = "Use source styles if possible (the header below is then only used for non-ASSA input)";
+        KeepSourceEmbeddedFonts = "Keep source embedded fonts (footer)";
         EditStyles = "Edit styles";
         EditProperties = "Edit properties";
         EditAttachments = "Edit attachments";
@@ -87,6 +118,35 @@ public class LanguageBatchConvert
         AssaChangeStyleToStyle = "to";
         AssaChangeStyleImportStyle = "Import style...";
         AssaChangeStyleTrimUnusedStyles = "Trim unused styles";
+        AssaChangeStylePropertiesTitle = "Change style properties";
+        AssaChangeStylePropertiesInfo = "Changes the chosen fields in every style in the file, leaving the styles themselves alone.";
+        AssaChangeStylePropertiesSetSpacing = "Set spacing to";
+        AssaChangeStylePropertiesSetAlignment = "Set alignment to";
         AssaSource = "ASSA source";
+        ConvertColorsToDialogTitle = "Convert colors to dialog";
+        ConvertColorsToDialogRemoveColorTags = "Remove color tags";
+        ConvertColorsToDialogAddNewLines = "Add new lines";
+        ConvertColorsToDialogReBreakLines = "Re-break lines";
+        SnapTimeCodesToFramesInfo = "Rounds every start and end time to the nearest frame. The frame rate is read from a video file with the same name as the subtitle file, unless a fixed frame rate is chosen.";
+        AddFolderDotDotDot = "Add folder...";
+        AddFolderRecursiveDotDotDot = "Add folder recursive...";
+        SelectFolderToConvert = "Select folder with files to convert";
+        IncludeSubfolders = "Include subfolders when adding a folder";
+        KeepSourceFileTimestamp = "Keep source file date/time on output files";
+        PreventSleepWhileConverting = "Prevent computer from sleeping while converting";
+        ScanningFolderX = "Scanning {0}...";
+        TransportStreamSettings = "Transport Stream settings";
+        TransportStreamSettingsDotDotDot = "Transport Stream settings...";
+        TransportStreamSettingsInfo = "Applies to subtitle tracks extracted from Transport Stream files (.ts/.m2ts). Position and video size only affect DVB image tracks exported to an image based format.";
+        TransportStreamOverrideXPosition = "Override original X position";
+        TransportStreamOverrideYPosition = "Override original Y position";
+        TransportStreamOverrideVideoSize = "Override original video size";
+        TransportStreamBottomMargin = "Bottom margin";
+        TransportStreamFileNameEnding = "File name ending";
+        TransportStreamFileNameEndingInfo = "Added before the extension for each extracted track. Leave empty to use the regular language post fix.";
+        TransportStreamOnlyTeletext = "Only teletext";
+        TransportStreamGetSizeFromVideo = "Get size from video...";
+        TwoLetterLanguageCodeUppercase = "Two-letter language code (uppercase)";
+        ThreeLetterLanguageCodeUppercase = "Three-letter language code (uppercase)";
     }
 }

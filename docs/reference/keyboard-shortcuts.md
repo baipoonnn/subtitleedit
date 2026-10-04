@@ -1,8 +1,27 @@
 # Keyboard Shortcuts
 
-A reference for the default keyboard shortcuts in Subtitle Edit. Every shortcut can be customized in **Options** → **Shortcuts** — and many more actions are available there without a default binding. On macOS, Cmd (`Win` in the shortcut editor) is used wherever Ctrl is shown below.
+A reference for the default keyboard shortcuts in Subtitle Edit. Every shortcut can be customized in **Options** → **Shortcuts** — and many more actions are available there without a default binding. On macOS, Cmd (`Win` in the shortcut editor) is used wherever Ctrl is shown below, except for the [macOS differences](#macos-differences).
 
 See also: [Shortcuts Settings](../features/shortcuts.md)
+
+## macOS Differences
+
+A few defaults differ on macOS so the standard macOS shortcuts keep working and every default can be typed on an Apple keyboard.
+
+| Action | Windows / Linux | macOS | Why |
+|--------|-----------------|-------|-----|
+| Replace | Ctrl+H | Cmd+Option+F | Cmd+H hides the app |
+| Find next / previous | F3 / Shift+F3 | Cmd+G / Cmd+Shift+G | The macOS standard |
+| Go to line number | Ctrl+G | Control+G | Cmd+G is find next |
+| Auto-translate | Ctrl+Shift+G | Cmd+Shift+T | Cmd+Shift+G is find previous |
+| Redo | Ctrl+Y | Cmd+Shift+Z | The macOS standard |
+| Insert line after / before | Alt+Insert / Ctrl+Shift+Insert | Cmd+Option+I / Cmd+Option+Shift+I | Apple keyboards have no Insert key |
+| Delete selected line(s) | Delete | Cmd+Backspace | The Delete key on Apple keyboards is a backspace |
+| Extend selected line to previous | Alt+Shift+E | Cmd+Option+Shift+E | Option+Shift+E types a character (È on Italian keyboards) |
+| Set start time | F11 | F9 | F11 shows the desktop |
+| Toggle play/pause (secondary) | Ctrl+Space | No default | Cmd+Space opens Spotlight |
+
+Settings that still had the old defaults are moved to the new ones on first start. Shortcuts you assigned yourself are left alone.
 
 ## General
 
@@ -27,6 +46,8 @@ See also: [Shortcuts Settings](../features/shortcuts.md)
 | Ctrl+4 | Set up like Subtitle Edit 4 (classic theme, icons, waveform, replace rules and shortcuts) |
 | Alt+Up | Go to previous line |
 | Alt+Down | Go to next line |
+| Ctrl+Home | Go to first line |
+| Ctrl+End | Go to last line |
 | F1 | Show help |
 | F2 | Show source view |
 
@@ -44,6 +65,19 @@ See also: [Shortcuts Settings](../features/shortcuts.md)
 | Ctrl+Shift+F3 | Toggle casing |
 | Ctrl+Shift+E | Extend selected line to next |
 | Alt+Shift+E | Extend selected line to previous |
+
+## Text Box
+
+Active while the subtitle text box has focus.
+
+| Shortcut | Action |
+|----------|--------|
+| Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste |
+| Ctrl+A | Select all text |
+| Shift+Delete | Cut (Windows-standard gesture; Subtitle Edit binds it because Avalonia does not) |
+| Shift+Backspace | Delete selection or next character — forward delete. Default on macOS only, where the Delete key is a backspace; assign it yourself elsewhere |
+
+> **Note:** "Text box: Cut / Copy / Paste (alternative)" exist as separate, unbound actions in **Options** → **Shortcuts** for anyone who wants a second gesture (e.g. Ctrl+Insert / Shift+Insert).
 
 ## Subtitle Grid
 
@@ -65,6 +99,8 @@ Inside the [source view](../features/source-view.md) window (F2), which edits th
 
 | Shortcut | Action |
 |----------|--------|
+| Ctrl+Z | Undo |
+| Ctrl+Shift+Z / Ctrl+Y | Redo |
 | Ctrl+F | Find in the source |
 | Ctrl+H | Replace in the source (Cmd+Alt+F also works on macOS) |
 | F3 / Shift+F3 | Find next / previous |
@@ -109,6 +145,7 @@ wins over the menu activation.
 | Shortcut | Action |
 |----------|--------|
 | Ctrl+V | Paste lines from clipboard at waveform position |
+| Ctrl+C | Copy the selected subtitle to the clipboard ("Copy (text only)" has no default key) |
 | Shift++ | Vertical zoom in |
 | Shift+- | Vertical zoom out |
 
@@ -129,11 +166,25 @@ wins over the menu activation.
 | Ctrl+Alt+Shift+D | Open data folder |
 | Ctrl+Alt+Shift+L | Save language file |
 
-> **Note:** Several actions (Bold, Underline, shot-change snapping/extending, green-zone in/out cues, etc.) ship without a default key. Open **Options** → **Shortcuts** to assign them, or use **Import from SE 4.x** to bring over a familiar set.
+> **Note:** Several actions (Bold, Underline, shot-change snapping/extending, green-zone in/out cues, "Guess start time from waveform" / "Guess end time from waveform" / "Guess start and end time from waveform", "Go to next empty line", "Waveform paste clipboard text to new selection", etc.) ship without a default key. Open **Options** → **Shortcuts** to assign them, or use **Import from SE 4.x** to bring over a familiar set.
+
+## Find and Replace Windows
+
+Button accelerators in the [Find and Replace](../features/edit.md#replace) windows. They are fixed, not part of **Options** → **Shortcuts**.
+
+| Shortcut | Action |
+|----------|--------|
+| Alt+F | Find next (both windows) |
+| Alt+P | Find previous (Find window) |
+| Alt+R | Replace & find next (Replace window) |
+| Alt+A | Replace all (Replace window) |
+| F / P / R / A | The same, without Alt, when the focus is not in a text box (e.g. after clicking a button) |
+| Ctrl+Delete | Remove the current search text from the search history |
+| Escape | Close the window |
 
 ## Fix Lists in Dialogs
 
-Dialogs that preview their changes in a list of checkboxes — [Remove text for hearing impaired](../features/remove-text-hi.md) — accept these in the list itself. They are fixed and not part of **Options** → **Shortcuts**.
+Dialogs that preview their changes in a list of checkboxes — [Remove text for hearing impaired](../features/remove-text-hi.md), [Multiple replace](../features/edit.md#choosing-which-fixes-to-apply) — accept these in the list itself. They are fixed and not part of **Options** → **Shortcuts**.
 
 | Shortcut | Action |
 |----------|--------|
@@ -142,4 +193,16 @@ Dialogs that preview their changes in a list of checkboxes — [Remove text for 
 | Ctrl+Shift+I | Invert selection |
 | Space | Toggle the checkbox of the highlighted rows |
 
-The same three actions sit in the list's right-click menu. Other tools with such a list (Fix common errors, Merge continuation lines, Remove unicode characters, Fix Netflix errors, AI review) put buttons below the list for the same job.
+The same three actions sit in the list's right-click menu. In Multiple replace they apply to the fixes preview on the right; the rules tree on the left keeps its own `Ctrl+D` (duplicate rule). Other tools with such a list (Fix common errors, Merge continuation lines, Remove unicode characters, Fix Netflix errors, AI review) put buttons below the list for the same job.
+
+## Beautify Time Codes
+
+The [Beautify time codes](../features/beautify-time-codes.md) window steps through the cues the beautify pass moved. These keys work wherever the focus is inside the window and are fixed, not part of **Options** → **Shortcuts**.
+
+| Shortcut | Action |
+|----------|--------|
+| Up / Left / PageUp | Previous change |
+| Down / Right / PageDown | Next change |
+| Home | First change |
+| End | Last change |
+| Escape | Cancel |

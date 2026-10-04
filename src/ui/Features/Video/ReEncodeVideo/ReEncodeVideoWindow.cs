@@ -5,6 +5,7 @@ using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Styling;
+using Nikse.SubtitleEdit.Controls;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
 using Nikse.SubtitleEdit.Logic.ValueConverters;
@@ -32,7 +33,7 @@ public class ReEncodeVideoWindow : Window
 
         var videoSettingsView = MakeVideoSettingsView(vm);
         var progressView = MakeProgressView(vm);
-        var buttonGenerate = new SplitButton
+        var buttonGenerate = new SeSplitButton
         {
             Content = Se.Language.General.Generate,
             Command = vm.GenerateCommand,
@@ -48,9 +49,9 @@ public class ReEncodeVideoWindow : Window
                 }
             }
         };
-        buttonGenerate.Bind(SplitButton.IsEnabledProperty, new Binding(nameof(vm.IsGenerating)) { Converter = new InverseBooleanConverter() });
+        buttonGenerate.Bind(SplitButton.IsEnabledProperty, new Binding(nameof(vm.IsGenerating)) { Converter = InverseBooleanConverter.Instance });
 
-        var buttonDone = UiUtil.MakeButtonDone(vm.OkCommand).WithBindEnabled(nameof(vm.IsGenerating), new InverseBooleanConverter());
+        var buttonDone = UiUtil.MakeButtonDone(vm.OkCommand).WithBindEnabled(nameof(vm.IsGenerating), InverseBooleanConverter.Instance);
         var buttonPanel = UiUtil.MakeButtonBar(
             buttonGenerate,
             buttonDone,
@@ -82,7 +83,7 @@ public class ReEncodeVideoWindow : Window
 
         Content = grid;
 
-        Activated += delegate { _comboBoxFrameRate?.Focus(); }; // initial focus on an input, not an action button - a focused button clicks on bare Space
+        UiUtil.FocusOnFirstActivation(this, () => { _comboBoxFrameRate?.Focus(); }); // initial focus on an input, not an action button - a focused button clicks on bare Space
     }
 
     private Border MakeVideoSettingsView(ReEncodeVideoViewModel vm)
@@ -103,7 +104,7 @@ public class ReEncodeVideoWindow : Window
                 textBoxHeight,
                 buttonResolution,
             }
-        }.WithBindVisible(vm, nameof(vm.UseSourceResolution), new InverseBooleanConverter());
+        }.WithBindVisible(vm, nameof(vm.UseSourceResolution), InverseBooleanConverter.Instance);
 
         var labelSourceResolution = UiUtil.MakeLabel(Se.Language.General.UseSourceResolution).WithBindVisible(vm, nameof(vm.UseSourceResolution));
         var buttonResolutionSource = UiUtil.MakeButtonBrowse(vm.BrowseResolutionCommand, accessibleName: Se.Language.General.Resolution);
@@ -119,7 +120,7 @@ public class ReEncodeVideoWindow : Window
         }.WithBindVisible(vm, nameof(vm.UseSourceResolution));
 
         var labelFrameRate = UiUtil.MakeLabel(Se.Language.General.FrameRate);
-        var comboBoxFrameRate = UiUtil.MakeComboBox(vm.FrameRates, vm, nameof(vm.SelectedFrameRate));
+        var comboBoxFrameRate = UiUtil.MakeComboBox(vm.FrameRates, vm, nameof(vm.SelectedFrameRate)).WithFrameRateDisplay();
         _comboBoxFrameRate = comboBoxFrameRate;
 
         var labelVideoExtension = UiUtil.MakeLabel(Se.Language.General.VideoExtension);
@@ -191,6 +192,12 @@ public class ReEncodeVideoWindow : Window
         grid.Add(statusText, 1, 0);
 
         return grid;
+    }
+
+    protected override void OnClosing(WindowClosingEventArgs e)
+    {
+        base.OnClosing(e);
+        _vm.OnClosing();
     }
 
     protected override void OnKeyDown(KeyEventArgs e)

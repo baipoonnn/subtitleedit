@@ -12,7 +12,13 @@ namespace Nikse.SubtitleEdit.Core.Common
         /// matches on the UI thread that means a frozen program with no way out. SE 4 used the same five
         /// seconds in its find/replace helper; callers treat the timeout as "no match".
         /// </summary>
-        public static readonly TimeSpan UserPatternMatchTimeout = TimeSpan.FromSeconds(5);
+        /// <remarks>
+        /// Settable only so the tests that prove the timeout works do not have to wait it out - fourteen
+        /// of them sat on the full five seconds, close to half the whole UI suite. Nothing in the program
+        /// writes it; callers read it when they build the Regex, so a test sets it before the pattern is
+        /// compiled and puts it back afterwards.
+        /// </remarks>
+        public static TimeSpan UserPatternMatchTimeout { get; set; } = TimeSpan.FromSeconds(5);
 
         // Others classes may want to use this regex.
 #if NET7_0_OR_GREATER
@@ -56,7 +62,7 @@ namespace Nikse.SubtitleEdit.Core.Common
                     RegexFactory(@"\bburde i (?:gøre|ikke|købe|løbe|se|sig|tage)\b"),
                     RegexFactory(@"\bfanden vil i\?"),
                     RegexFactory(@"\b[Ff]or ser i\b"),
-                    RegexFactory(@"\b[Db]a i (?:ankom|forlod|fik|gik|kom|dræbte|ikke|gjorde|har|havde|så)\b"),
+                    RegexFactory(@"\b[Dd]a i (?:ankom|forlod|fik|gik|kom|dræbte|ikke|gjorde|har|havde|så)\b"),
                     RegexFactory(@"\b[Dd]et (?:får i|har i|må i|gør i|gjorde i)\b"),
                     RegexFactory(@"\b[Dd]et må i (?:fandme|ikke|sgu|gerne|selv|da|faktisk)\b"),
                     RegexFactory(@"\b[Dd]et Det kan i sgu"),
@@ -144,7 +150,7 @@ namespace Nikse.SubtitleEdit.Core.Common
                     RegexFactory(@"\b[Tt]og i (?:bilen|liften|toget)\b"),
                     RegexFactory(@"\b[Tt]ræder i frem\b"),
                     RegexFactory(@"\b[Tt]ror i (?:at|det|jeg|på|virkelig)\b"),
-                    RegexFactory(@"\b[Tr]ror i(?:, | på\b)"),
+                    RegexFactory(@"\b[Tt]ror i(?:, | på\b)"),
                     RegexFactory(@"\b[Vv]ar i blevet\b"),
                     RegexFactory(@"\b[Vv]ed i (?:alle|allesammen|er|ikke|hvad|hvem|hvor|hvorfor|hvordan|var|ville|har|havde|hvem|hvad|hvor|mente|tror)\b"),
                     RegexFactory(@"\b[Vv]enter i på\b"),
@@ -192,22 +198,29 @@ namespace Nikse.SubtitleEdit.Core.Common
             }
         }
 
-        public static Regex MakeWordSearchRegex(string word)
-        {
-            string s = word.Replace("\\", "\\\\");
-            s = s.Replace("*", "\\*");
-            s = s.Replace(".", "\\.");
-            s = s.Replace("?", "\\?");
-            return new Regex(@"\b" + s + @"\b", RegexOptions.Compiled);
-        }
-
+        /// <summary>
+        /// A pattern that finds <paramref name="searchText"/> as a whole word. A word character at an
+        /// edge gets a word boundary (<c>\b</c>); punctuation at an edge (e.g. "|t" or "'Tis") must not
+        /// touch a word character either. White space at an edge already separates the text from its
+        /// neighbour, so that side gets no check at all - otherwise "Zeyn " could never match
+        /// "Zeyn is here", as the white space would have to be followed by a non-word character.
+        /// </summary>
         public static string BuildWholeWordPattern(string searchText)
         {
             var escaped = Regex.Escape(searchText);
-            var prefix = searchText.Length > 0 && (char.IsLetterOrDigit(searchText[0]) || searchText[0] == '_') ? @"\b" : @"(?<!\w)";
-            var suffix = searchText.Length > 0 && (char.IsLetterOrDigit(searchText[searchText.Length - 1]) || searchText[searchText.Length - 1] == '_') ? @"\b" : @"(?!\w)";
-            return $"{prefix}{escaped}{suffix}";
+            if (searchText.Length == 0)
+            {
+                return @"(?<!\w)(?!\w)";
+            }
+
+            var first = searchText[0];
+            var last = searchText[searchText.Length - 1];
+            var prefix = IsWordChar(first) ? @"\b" : char.IsWhiteSpace(first) ? string.Empty : @"(?<!\w)";
+            var suffix = IsWordChar(last) ? @"\b" : char.IsWhiteSpace(last) ? string.Empty : @"(?!\w)";
+            return prefix + escaped + suffix;
         }
+
+        private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
 
         public static string GetRegExGroup(string pattern)
         {
@@ -300,7 +313,7 @@ namespace Nikse.SubtitleEdit.Core.Common
         /// \n left behind by the match normalization above was written as a physical newline
         /// inside the Dialogue line, corrupting the saved file on Windows (#12620).
         /// </summary>
-        private static string RestorePlatformNewLines(string text)
+        public static string RestorePlatformNewLines(string text)
         {
             if (Environment.NewLine == "\n" || text.IndexOf('\n') < 0)
             {

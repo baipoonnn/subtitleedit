@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.UiLogic.AutoTranslate;
 using Nikse.SubtitleEdit.UiLogic.Translate;
@@ -28,6 +29,46 @@ public class DoAutoTranslateTests
         {
             ReceivedTexts.Add(text);
             return Task.FromResult(Translation(text));
+        }
+    }
+
+    /// <summary>
+    /// Stands in for the "advanced" local-LLM engines: translates whole batches itself and must
+    /// never see the plain per-line <see cref="IAutoTranslator.Translate"/> call.
+    /// </summary>
+    private sealed class FakeBatchTranslator : IAutoTranslator, IBatchContextTranslator
+    {
+        public int BatchSize { get; set; } = 4;
+        public List<int> BatchStartIndexes { get; } = new();
+
+        public string Name => "FakeBatchTranslator";
+        public string Url => "https://example.com";
+        public string Error { get; set; } = string.Empty;
+        public int MaxCharacters => 1500;
+
+        public void Initialize()
+        {
+        }
+
+        public List<TranslationPair> GetSupportedSourceLanguages() => new() { new TranslationPair("English", "en") };
+
+        public List<TranslationPair> GetSupportedTargetLanguages() => new() { new TranslationPair("Danish", "da") };
+
+        public Task<string> Translate(string text, string sourceLanguageCode, string targetLanguageCode, CancellationToken cancellationToken)
+        {
+            throw new InvalidOperationException("The per-line path must not be used for a batch-context engine");
+        }
+
+        public Task<int> TranslateBatchAsync(ObservableCollection<TranslateRow> rows, int index, string sourceLanguageCode, string targetLanguageCode, CancellationToken cancellationToken)
+        {
+            BatchStartIndexes.Add(index);
+            var count = Math.Min(BatchSize, rows.Count - index);
+            for (var i = 0; i < count; i++)
+            {
+                rows[index + i].TranslatedText = "X" + rows[index + i].Text;
+            }
+
+            return Task.FromResult(count);
         }
     }
 
@@ -87,6 +128,29 @@ public class DoAutoTranslateTests
     }
 
     [Fact]
+    public async Task BatchContextTranslator_DrivesItsOwnBatchLoop()
+    {
+        var translator = new FakeBatchTranslator { BatchSize = 4 };
+        // Single-line mode is a merge/split setting; the batch engine guarantees line alignment
+        // on its own and keeps batching regardless (same as the Auto-translate window).
+        var doAutoTranslate = new DoAutoTranslate { TranslateEachLineSeparately = true };
+        const int lineCount = 10;
+
+        var rows = await doAutoTranslate.DoTranslate(
+            MakeSubtitle(lineCount),
+            new TranslationPair("English", "en"),
+            new TranslationPair("Danish", "da"),
+            translator,
+            CancellationToken.None);
+
+        Assert.Equal(lineCount, rows.Count);
+        Assert.All(rows, row => Assert.StartsWith("X", row.TranslatedText));
+
+        // 4 + 4 + 2 - the last batch is trimmed to what is left, and no line is sent twice.
+        Assert.Equal(new List<int> { 0, 4, 8 }, translator.BatchStartIndexes);
+    }
+
+    [Fact]
     public async Task EmptyTranslations_TerminateInsteadOfLoopingForever()
     {
         // An engine that always returns nothing must not make the loop retry the
@@ -111,5 +175,49 @@ public class DoAutoTranslateTests
             var rows = await task;
             Assert.Equal(5, rows.Count);
         }
+    }
+
+    [Fact]
+    public async Task LineRejectedEveryTime_FailsWithTheEnginesReason()
+    {
+        // llama.cpp reports a reply that echoed the source as no translation, with the reason in
+        // Error - seconv only shows the exception message, so the reason has to be in it.
+        var translator = new FakeTranslator();
+        translator.Translation = _ =>
+        {
+            translator.Error = "The model returned the English source text untranslated";
+            return string.Empty;
+        };
+        var doAutoTranslate = new DoAutoTranslate();
+
+        var exception = await Assert.ThrowsAsync<Exception>(() => doAutoTranslate.DoTranslate(
+            MakeSubtitle(3),
+            new TranslationPair("English", "en"),
+            new TranslationPair("Danish", "da"),
+            translator,
+            CancellationToken.None));
+
+        Assert.Contains("returned no translation for line 1", exception.Message);
+        Assert.Contains("untranslated", exception.Message);
+    }
+
+    [Fact]
+    public async Task MergedRequestRejected_FallsBackToSingleLines()
+    {
+        // TranslateGemma 12B echoes merged blocks but translates the same lines one at a time:
+        // a rejected merged request must end with every line translated, not with an error.
+        var translator = new FakeTranslator { Translation = text => text.Contains('\n') ? string.Empty : "X" + text };
+        var doAutoTranslate = new DoAutoTranslate();
+        const int lineCount = 6;
+
+        var rows = await doAutoTranslate.DoTranslate(
+            MakeSubtitle(lineCount),
+            new TranslationPair("English", "en"),
+            new TranslationPair("Danish", "da"),
+            translator,
+            CancellationToken.None);
+
+        Assert.Equal(lineCount, rows.Count);
+        Assert.All(rows, row => Assert.StartsWith("X", row.TranslatedText));
     }
 }

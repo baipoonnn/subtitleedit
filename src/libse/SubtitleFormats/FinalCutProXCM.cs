@@ -30,7 +30,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 "<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"no\"?>" + Environment.NewLine +
                 "<!DOCTYPE fcpxml>" + Environment.NewLine +
                 Environment.NewLine +
-                "<fcpxml version=\"1.1\">" + Environment.NewLine +
+                "<fcpxml version=\"1.2\">" + Environment.NewLine + // chapter-marker exists from FCPXML 1.2
                 "  <project name=\"Subtitle Edit subtitle\" uid=\"C1E80D31-57D4-4E6C-84F6-86A75DCB7A54\" eventID=\"B5C98F73-1D7E-4205-AEF3-1485842EB191\" location=\"file://localhost/Volumes/Macintosh%20HD/Final%20Cut%20Projects/Yma%20Sumac/Yma%20LIVE%20in%20Moscow/\" >" + Environment.NewLine +
                 "    <resources>" + Environment.NewLine +
                 "      <format id=\"r1\" name=\"FFVideoFormatDV720x480i5994\" frameDuration=\"2002/60000s\" fieldOrder=\"lower first\" width=\"720\" height=\"480\" paspH=\"10\" paspV=\"11\"/>" + Environment.NewLine +
@@ -84,18 +84,27 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
             return xmlAsText;
         }
 
+        public override bool IsMine(List<string> lines, string fileName)
+        {
+            // Paragraphs only come from fcpxml/.../chapter-marker elements: skip parsing any other XML.
+            if (lines != null && (!AnyLineContains(lines, "<fcpxml") || !AnyLineContains(lines, "<chapter-marker")))
+            {
+                return false;
+            }
+
+            return base.IsMine(lines, fileName);
+        }
+
         public override void LoadSubtitle(Subtitle subtitle, List<string> lines, string fileName)
         {
             _errorCount = 0;
             FrameRate = Configuration.Settings.General.CurrentFrameRate;
 
-            var sb = new StringBuilder();
-            lines.ForEach(line => sb.AppendLine(line));
             var xml = new XmlDocument { XmlResolver = null };
             xml.PreserveWhitespace = true;
             try
             {
-                xml.LoadXml(sb.ToString().Trim());
+                xml.LoadXml(JoinLinesTrimmed(lines));
 
                 foreach (XmlNode node in xml.SelectNodes("fcpxml/project/sequence/spine/clip/chapter-marker"))
                 {

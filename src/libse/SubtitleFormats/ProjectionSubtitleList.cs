@@ -85,9 +85,9 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
         private static int GetUnicodeNumber(char character)
         {
-            var encoding = new UTF32Encoding();
-            var bytes = encoding.GetBytes(character.ToString().ToCharArray());
-            return BitConverter.ToInt32(bytes, 0);
+            // A lone surrogate is what UTF32Encoding's replacement fallback turned into U+FFFD;
+            // anything else is its own code point. The old code allocated four objects per character.
+            return char.IsSurrogate(character) ? 0xFFFD : character;
         }
 
         public override void LoadSubtitle(Subtitle subtitle, List<string> lines, string fileName)
@@ -161,7 +161,10 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                 {
                     if (ch == 'u' && i + 6 < text.Length && char.IsNumber(text[i + 1]) && char.IsNumber(text[i + 2]) && char.IsNumber(text[i + 3]) && char.IsNumber(text[i + 4]) && char.IsNumber(text[i + 5]))
                     {
-                        var unicodeNumber = text.Substring(i + 1, 4);
+                        // Five digits, not four - RftEncode writes the decimal code point, which is
+                        // five digits from U+2710 up, so a copy of the four digit branch below
+                        // decoded every CJK/Cyrillic/emoji character as a different one.
+                        var unicodeNumber = text.Substring(i + 1, 5);
                         var unescaped = char.ConvertFromUtf32(int.Parse(unicodeNumber));
                         sb.Append(unescaped);
                         if (i + 7 < text.Length && text[i + 6] == ' ')

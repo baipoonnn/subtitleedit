@@ -80,7 +80,7 @@ public class FontCollectorWindow : Window
     /// <summary>The fonts the current subtitle uses, with found/not-found status and copy actions.</summary>
     private static Grid MakeCurrentSubtitleView(FontCollectorViewModel vm)
     {
-        var dataGrid = TableViewExtras.MakeTableView();
+        var dataGrid = TableViewExtras.MakeTableView().WithAccessibleName(Se.Language.Assa.FontCollectorCurrentSubtitle); // the tab header (#12087)
         dataGrid.DataContext = vm;
         dataGrid.ItemsSource = vm.FontItems;
 
@@ -143,7 +143,8 @@ public class FontCollectorWindow : Window
             .WithIconLeft(IconNames.Paperclip);
         var buttonCopyToSeFolder = UiUtil.MakeButton(Se.Language.Assa.FontCollectorCopyFontsToSeFontsFolder, vm.CopyFontsToSeFontsFolderCommand)
             .WithIconLeft(IconNames.FormatFont);
-        var buttonBar = UiUtil.MakeButtonBar(buttonEmbedFonts, buttonCopyToSeFolder);
+        var checkBoxTrimFonts = UiUtil.MakeCheckBox(Se.Language.Assa.FontCollectorTrimFonts, vm, nameof(vm.TrimFontsToUsedCharacters));
+        var buttonBar = UiUtil.MakeButtonBar(buttonEmbedFonts, buttonCopyToSeFolder, checkBoxTrimFonts);
 
         var grid = new Grid
         {
@@ -175,7 +176,7 @@ public class FontCollectorWindow : Window
     /// <summary>All fonts installed on this machine, with a sample-text preview.</summary>
     private static Grid MakeInstalledFontsView(FontCollectorViewModel vm)
     {
-        var dataGrid = TableViewExtras.MakeTableView(multiSelect: false);
+        var dataGrid = TableViewExtras.MakeTableView(multiSelect: false).WithAccessibleName(Se.Language.Tools.PickFontNameInstalledFonts);
         dataGrid.DataContext = vm;
         dataGrid.ItemsSource = vm.InstalledFontNames;
 
@@ -220,7 +221,7 @@ public class FontCollectorWindow : Window
     /// <summary>The fonts collected in SE's own Fonts folder, with a sample-text preview.</summary>
     private static Grid MakeCollectedFontsView(FontCollectorViewModel vm)
     {
-        var dataGrid = TableViewExtras.MakeTableView(multiSelect: false);
+        var dataGrid = TableViewExtras.MakeTableView(multiSelect: false).WithAccessibleName(Se.Language.Tools.PickFontNameCollectedFonts);
         dataGrid.DataContext = vm;
         dataGrid.ItemsSource = vm.CollectedFonts;
 

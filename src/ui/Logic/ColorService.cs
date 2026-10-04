@@ -1,6 +1,7 @@
 ﻿using Avalonia.Media;
 using Avalonia.Skia;
 using Nikse.SubtitleEdit.Core.Common;
+using Nikse.SubtitleEdit.Core.ContainerFormats.TransportStream;
 using Nikse.SubtitleEdit.Core.SubtitleFormats;
 using Nikse.SubtitleEdit.Features.Main;
 using System;
@@ -20,6 +21,31 @@ public interface IColorService
 
 public class ColorService : IColorService
 {
+    // Parsing a WebVTT header splits the whole style block into lines and re-reads every
+    // "::cue(...)" rule. Set/remove color runs per selected line and asked for the styles up to
+    // five times per line, so colorizing a large selection re-parsed the same header thousands
+    // of times. Memo on the header instance: the only thing that changes it mid-batch is
+    // AddStyleToHeader, which produces a new string and so misses the memo exactly once.
+    // The returned list is only ever read - no WebVttHelper method mutates it.
+    private string? _cachedStylesHeader;
+    private List<WebVttStyle> _cachedStyles = new();
+
+    private static bool HasWebVttHeader(string header)
+    {
+        return !string.IsNullOrEmpty(header) && header.Contains("WEBVTT");
+    }
+
+    private List<WebVttStyle> GetWebVttStyles(string header)
+    {
+        if (!ReferenceEquals(header, _cachedStylesHeader))
+        {
+            _cachedStyles = WebVttHelper.GetStyles(header);
+            _cachedStylesHeader = header;
+        }
+
+        return _cachedStyles;
+    }
+
     public void RemoveColorTags(List<SubtitleLineViewModel> subtitles, Subtitle subtitle, SubtitleFormat subtitleFormat)
     {
         foreach (var p in subtitles)
@@ -28,11 +54,11 @@ public class ColorService : IColorService
         }
     }
 
-    private static void RemoveColorTags(SubtitleLineViewModel p, Subtitle subtitle, SubtitleFormat subtitleFormat)
+    private void RemoveColorTags(SubtitleLineViewModel p, Subtitle subtitle, SubtitleFormat subtitleFormat)
     {
         if (subtitleFormat is WebVTT or WebVTTFileWithLineNumber)
         {
-            var styles = WebVttHelper.GetStyles(subtitle.Header);
+            var styles = GetWebVttStyles(subtitle.Header);
             foreach (var style in styles)
             {
                 if (style.Color.HasValue &&
@@ -98,22 +124,25 @@ public class ColorService : IColorService
             return text;
         }
 
-        if (subtitleFormat is WebVTT)
+        if (subtitleFormat is WebVTT or WebVTTFileWithLineNumber)
         {
             try
             {
-                var existingStyle = WebVttHelper.GetOnlyColorStyle(color.ToSKColor(), subtitle.Header);
-                if (existingStyle != null)
+                var hasWebVttHeader = HasWebVttHeader(subtitle.Header);
+                var styles = hasWebVttHeader ? GetWebVttStyles(subtitle.Header) : new List<WebVttStyle>();
+                var style = hasWebVttHeader ? WebVttHelper.GetOnlyColorStyle(color.ToSKColor(), styles) : null;
+                if (style == null)
                 {
-                    text = WebVttHelper.AddStyleToText(text, existingStyle, WebVttHelper.GetStyles(subtitle.Header));
-                    text = WebVttHelper.RemoveUnusedColorStylesFromText(text, subtitle.Header);
+                    style = WebVttHelper.AddStyleFromColor(color.ToSKColor());
+                    subtitle.Header = WebVttHelper.AddStyleToHeader(subtitle.Header, style);
+                    hasWebVttHeader = HasWebVttHeader(subtitle.Header);
+                    styles = GetWebVttStyles(subtitle.Header);
                 }
-                else
+
+                text = WebVttHelper.AddStyleToText(text, style, styles);
+                if (hasWebVttHeader && styles.Count > 1)
                 {
-                    var styleWithColor = WebVttHelper.AddStyleFromColor(color.ToSKColor());
-                    subtitle.Header = WebVttHelper.AddStyleToHeader(subtitle.Header, styleWithColor);
-                    text = WebVttHelper.AddStyleToText(text, styleWithColor, WebVttHelper.GetStyles(subtitle.Header));
-                    text = WebVttHelper.RemoveUnusedColorStylesFromText(text, subtitle.Header);
+                    text = WebVttHelper.RemoveUnusedColorStylesFromText(text, styles);
                 }
             }
             catch
@@ -122,6 +151,24 @@ public class ColorService : IColorService
             }
 
             return text;
+        }
+
+        // An STL file carries eight teletext colours, and Ebu.Save snaps whatever it finds to the
+        // nearest of them - so a shortcut colour like orange was shown orange in the grid and in
+        // the video preview and came out yellow in the file. Snap when the tag is written instead:
+        // grid, preview and file then agree. Written as the colour name the STL reader itself
+        // produces, so the shortcut also toggles off a colour that came from a file.
+        var colorText = ToHex(color);
+        if (subtitleFormat is Ebu)
+        {
+            colorText = Ebu.GetNearestColorName(colorText) ?? colorText;
+        }
+        else if (subtitleFormat is DvbTeletext)
+        {
+            // A .dvbttx colour map entry holds four bits per component (Level 2.5), so snap the
+            // tag to that grid - grid, preview and the written file then agree, and the tag
+            // matches what the teletext reader produces so ContainsColor can toggle it off.
+            colorText = TeletextTables.ColorToHtml(TeletextColorMap.QuantizeRgb(color.R, color.G, color.B));
         }
 
         string pre = string.Empty;
@@ -143,7 +190,7 @@ public class ColorService : IColorService
                 if (f.Contains(" face=", StringComparison.OrdinalIgnoreCase) && !f.Contains(" color=", StringComparison.OrdinalIgnoreCase))
                 {
                     var start = s.IndexOf(" face=", StringComparison.OrdinalIgnoreCase);
-                    s = s.Insert(start, string.Format(" color=\"{0}\"", ToHex(color)));
+                    s = s.Insert(start, string.Format(" color=\"{0}\"", colorText));
                     text = pre + s;
                     return text;
                 }
@@ -151,19 +198,35 @@ public class ColorService : IColorService
                 var colorStart = f.IndexOf(" color=", StringComparison.OrdinalIgnoreCase);
                 if (colorStart >= 0)
                 {
-                    if (s.IndexOf('"', colorStart + 8) > 0)
+                    var valueStart = colorStart + " color=".Length;
+                    var quoteEnd = s.IndexOf('"', valueStart);
+                    if (quoteEnd > 0)
                     {
-                        end = s.IndexOf('"', colorStart + 8);
+                        // Quoted value: the closing quote comes from the tail we keep.
+                        s = s.Substring(0, colorStart) + string.Format(" color=\"{0}", colorText) + s.Substring(quoteEnd);
+                    }
+                    else
+                    {
+                        // Unquoted value ("<font color=red>"). "end" is the '>' here, so the old
+                        // code emitted an opening quote and then kept the rest of the tag,
+                        // producing the broken '<font color="#0000FF>'. Replace the whole
+                        // unquoted value with a properly quoted one instead.
+                        var valueEnd = valueStart;
+                        while (valueEnd < end && !char.IsWhiteSpace(s[valueEnd]))
+                        {
+                            valueEnd++;
+                        }
+
+                        s = s.Substring(0, colorStart) + string.Format(" color=\"{0}\"", colorText) + s.Substring(valueEnd);
                     }
 
-                    s = s.Substring(0, colorStart) + string.Format(" color=\"{0}", ToHex(color)) + s.Substring(end);
                     text = pre + s;
                     return text;
                 }
             }
         }
 
-        return $"{pre}<font color=\"{ToHex(color)}\">{text}</font>";
+        return $"{pre}<font color=\"{colorText}\">{text}</font>";
     }
 
     public string RemoveColorTag(string input, Color color, Subtitle subtitle, SubtitleFormat subtitleFormat)
@@ -188,11 +251,11 @@ public class ColorService : IColorService
             return text;
         }
 
-        if (subtitleFormat is WebVTT)
+        if (subtitleFormat is WebVTT or WebVTTFileWithLineNumber)
         {
             try
             {
-                text = WebVttHelper.RemoveColorTag(text, color.ToSKColor(), WebVttHelper.GetStyles(subtitle.Header));
+                text = WebVttHelper.RemoveColorTag(text, color.ToSKColor(), GetWebVttStyles(subtitle.Header));
             }
             catch
             {

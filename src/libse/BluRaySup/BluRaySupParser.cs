@@ -26,6 +26,7 @@ using System.Collections.Generic;
 using System.IO;
 using System;
 using System.Linq;
+using System.Runtime.InteropServices;
 
 public class BluRayPoint
 {
@@ -287,18 +288,18 @@ namespace Nikse.SubtitleEdit.Core.BluRaySup
                     count = maxCount;
                 }
 
-                var r = color.Red;
-                var g = color.Green;
-                var b = color.Blue;
-                var a = color.Alpha;
+                // Pack the four channel bytes in the order they would have been stored one at a
+                // time, then read them back as a uint, so the filled bytes come out identical on
+                // either endianness. idx is always a multiple of 4, so the cast covers the run.
+                Span<byte> pixel = stackalloc byte[4];
+                pixel[0] = color.Red;
+                pixel[1] = color.Green;
+                pixel[2] = color.Blue;
+                pixel[3] = color.Alpha;
 
-                for (var i = 0; i < count; i++)
-                {
-                    pixelSpan[idx++] = r;
-                    pixelSpan[idx++] = g;
-                    pixelSpan[idx++] = b;
-                    pixelSpan[idx++] = a;
-                }
+                MemoryMarshal.Cast<byte, uint>(pixelSpan)
+                    .Slice(idx / 4, count)
+                    .Fill(MemoryMarshal.Read<uint>(pixel));
             }
 
             // Optimized single pixel setter
@@ -526,79 +527,95 @@ namespace Nikse.SubtitleEdit.Core.BluRaySup
             }
         }
 
-        public static List<PcsData> ParseBluRaySupFromMatroska(MatroskaTrackInfo matroskaSubtitleInfo, MatroskaFile matroska)
+        public static List<PcsData> ParseBluRaySupFromMatroska(MatroskaTrackInfo matroskaSubtitleInfo, MatroskaFile matroska, MatroskaFile.LoadMatroskaCallback progressCallback = null)
         {
-            var sub = matroska.GetSubtitle(matroskaSubtitleInfo.TrackNumber, null);
-            var subtitles = new List<PcsData>();
-            var log = new StringBuilder();
-            var clusterStream = new MemoryStream();
-            var lastPalettes = new Dictionary<int, List<PaletteInfo>>();
-            var lastBitmapObjects = new Dictionary<int, List<OdsData>>();
-            foreach (var p in sub)
-            {
-                var buffer = p.GetData(matroskaSubtitleInfo);
-                if (buffer != null && buffer.Length > 2)
-                {
-                    clusterStream.Write(buffer, 0, buffer.Length);
-                    if (ContainsBluRayStartSegment(buffer))
-                    {
-                        if (subtitles.Count > 0 && subtitles[subtitles.Count - 1].StartTime == subtitles[subtitles.Count - 1].EndTime)
-                        {
-                            subtitles[subtitles.Count - 1].EndTime = (long)((p.Start - 1) * 90.0);
-                        }
-
-                        clusterStream.Position = 0;
-                        var list = ParseBluRaySup(clusterStream, log, true, lastPalettes, lastBitmapObjects);
-                        foreach (var sup in list)
-                        {
-                            sup.StartTime = (long)((p.Start - 1) * 90.0);
-                            sup.EndTime = (long)((p.End - 1) * 90.0);
-                            subtitles.Add(sup);
-
-                            // fix overlapping
-                            if (subtitles.Count > 1 && sub[subtitles.Count - 2].End > sub[subtitles.Count - 1].Start)
-                            {
-                                subtitles[subtitles.Count - 2].EndTime = subtitles[subtitles.Count - 1].StartTime - 1;
-                            }
-                        }
-
-                        clusterStream = new MemoryStream();
-                    }
-                }
-                else if (subtitles.Count > 0)
-                {
-                    var lastSub = subtitles[subtitles.Count - 1];
-                    if (lastSub.StartTime == lastSub.EndTime)
-                    {
-                        lastSub.EndTime = (long)((p.Start - 1) * 90.0);
-                        if (lastSub.EndTime - lastSub.StartTime > 1000000)
-                        {
-                            lastSub.EndTime = lastSub.StartTime;
-                        }
-                    }
-                }
-            }
-
-            return subtitles;
+            var blocks = matroska.GetSubtitle(matroskaSubtitleInfo.TrackNumber, progressCallback);
+            return ParseBluRaySupFromMatroska(blocks, matroskaSubtitleInfo);
         }
 
-        private static bool ContainsBluRayStartSegment(byte[] buffer)
+        /// <summary>
+        /// Parses the blocks of a Matroska S_HDMV/PGS track. The blocks are rewrapped as a regular
+        /// .sup stream ("PG" + PTS header per segment, PTS taken from the block time code - the
+        /// same thing mkvextract does) and parsed in one pass, so a display set ends at the next
+        /// display set and fade/palette-update display sets showing the same image are merged,
+        /// exactly as when loading a .sup file (issue #14269).
+        /// </summary>
+        public static List<PcsData> ParseBluRaySupFromMatroska(List<MatroskaSubtitle> blocks, MatroskaTrackInfo matroskaSubtitleInfo)
         {
-            const int epochStart = 0x80;
-            var position = 0;
-            while (position + 3 <= buffer.Length)
+            using (var supStream = new MemoryStream())
             {
-                var segmentType = buffer[position];
-                if (segmentType == epochStart)
+                var header = new byte[HeaderSize];
+                header[0] = 0x50; // P
+                header[1] = 0x47; // G
+                var pending = new List<byte>();
+                long pendingPts = 0;
+                long lastBlockEndPts = 0;
+                foreach (var block in blocks)
                 {
-                    return true;
+                    var data = block.GetData(matroskaSubtitleInfo);
+                    if (data == null || data.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    if (pending.Count == 0)
+                    {
+                        pendingPts = block.Start * 90;
+                    }
+
+                    lastBlockEndPts = Math.Max(lastBlockEndPts, block.End * 90);
+                    pending.AddRange(data);
+
+                    // Emit every complete segment; a segment split across blocks keeps the
+                    // time code of the block it started in.
+                    var position = 0;
+                    while (position + 3 <= pending.Count)
+                    {
+                        var size = (pending[position + 1] << 8) | pending[position + 2];
+                        if (position + 3 + size > pending.Count)
+                        {
+                            break;
+                        }
+
+                        var pts = (uint)pendingPts;
+                        header[2] = (byte)(pts >> 24);
+                        header[3] = (byte)(pts >> 16);
+                        header[4] = (byte)(pts >> 8);
+                        header[5] = (byte)pts;
+                        header[10] = pending[position];
+                        header[11] = pending[position + 1];
+                        header[12] = pending[position + 2];
+                        supStream.Write(header, 0, header.Length);
+                        for (var i = position + 3; i < position + 3 + size; i++)
+                        {
+                            supStream.WriteByte(pending[i]);
+                        }
+
+                        position += 3 + size;
+                    }
+
+                    pending.RemoveRange(0, position);
+                    if (pending.Count > 0)
+                    {
+                        pendingPts = block.Start * 90;
+                    }
                 }
 
-                var length = BigEndianInt16(buffer, position + 1) + 3;
-                position += length;
-            }
+                supStream.Position = 0;
+                var subtitles = ParseBluRaySup(supStream, new StringBuilder(), false, new Dictionary<int, List<PaletteInfo>>(), new Dictionary<int, List<OdsData>>());
 
-            return false;
+                // The last display set has no following display set to end it - use the block duration.
+                if (subtitles.Count > 0)
+                {
+                    var last = subtitles[subtitles.Count - 1];
+                    if (last.EndTime <= last.StartTime)
+                    {
+                        last.EndTime = Math.Max(last.StartTime, lastBlockEndPts);
+                    }
+                }
+
+                return subtitles;
+            }
         }
 
         private static SupSegment ParseSegmentHeader(byte[] buffer, StringBuilder log)
@@ -1121,6 +1138,10 @@ namespace Nikse.SubtitleEdit.Core.BluRaySup
                 // Merge images that are the same (probably due to fade)
                 // First we find groups with same pixels
                 var removeIndices = new List<DeleteIndex>();
+
+                // What "removeIndices" holds, for the duplicate checks below - scanning the list
+                // there made a long SUP with fades quadratic.
+                var removeIndexSet = new HashSet<(int Number, int Index)>();
                 var deleteNo = 0;
                 for (var pcsIndex = pcsList.Count - 1; pcsIndex > 0; pcsIndex--)
                 {
@@ -1156,11 +1177,11 @@ namespace Nikse.SubtitleEdit.Core.BluRaySup
 
                             if (remove)
                             {
-                                if (!removeIndices.Any(p => p.Number == deleteNo && p.Index == pcsIndex - 1))
+                                if (removeIndexSet.Add((deleteNo, pcsIndex - 1)))
                                 {
                                     removeIndices.Add(new DeleteIndex { Number = deleteNo, Index = pcsIndex - 1 });
                                 }
-                                if (!removeIndices.Any(p => p.Number == deleteNo && p.Index == pcsIndex))
+                                if (removeIndexSet.Add((deleteNo, pcsIndex)))
                                 {
                                     removeIndices.Add(new DeleteIndex { Number = deleteNo, Index = pcsIndex });
                                 }

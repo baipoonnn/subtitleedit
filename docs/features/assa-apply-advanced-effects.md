@@ -27,6 +27,17 @@ Effects range from text animations (typewriter, karaoke, bounce-in) to visual en
 
 > Note: Audio-reactive effects (like **Audio text pulse**) are only shown when waveform/audio peak data is available.
 
+## Effect Settings
+
+Some effects show their own settings next to the effect description in the list:
+
+- **Infinite snow** — **Flake count**
+- **Infinite starfield** — **Star count**, **Speed**
+- **Karaoke** — **Right-to-left**
+- **Karaoke - active word pop** — **Auto-detect active word**, **Right-to-left**, **Active word glow** (with a glow color), **Active color**, **Inactive color**
+- **Lower third** — **Accent color**
+- **Word spacing** — **Spacing (pixels)**
+
 ## Available Effects
 
 ### Text Animation Effects
@@ -45,6 +56,8 @@ Effects range from text animations (typewriter, karaoke, bounce-in) to visual en
 | **Slide in from left** | Text slides in from off-screen left, holds, then exits back to the left |
 | **Slide in from right** | Text slides in from off-screen right, holds, then exits back to the right |
 | **Word spacing** | Increases spacing between words using the `\fsp` tag for better readability |
+| **Word flip 3D** | Each word folds in with a 3D flip and elastic pop as it is spoken — modern "Shorts" caption style |
+| **Cinematic title** | Letters track from wide to normal spacing while resolving from a soft blur — classic film title reveal |
 
 ### Visual Enhancement Effects
 
@@ -56,6 +69,7 @@ Effects range from text animations (typewriter, karaoke, bounce-in) to visual en
 | **Wave (blue)** | Blue/cyan wave variant |
 | **Glitch** | Digital glitch overlays with flashes, distortion, and chromatic offset |
 | **Audio text pulse** | Audio-reactive glow/scale pulse driven by waveform amplitude |
+| **Lower third** | Name and role banner bottom-left with an accent bar sliding in — interview/documentary style (first line = name, following lines = role). The accent color is picked in the effect settings |
 
 ### Transition Effects
 

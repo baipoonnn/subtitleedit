@@ -258,6 +258,13 @@ public static class SubtitleSyntaxTokenizer
 
         colorValue = colorValue.Trim();
 
+        // Inside a "\t(..)" transition the colour tag is followed by the transition's closing
+        // paren, which lands on the colour fragment when the block is split on '\'
+        // ({\c&HFFFFFF&\t(20,1000,\c&H29F2FF&)} - #10955). The grid's ParseAssaColor trims it;
+        // without the same trim here the EndsWith("&") test failed and the edit box painted the
+        // transition's colour in the generic values colour instead.
+        colorValue = colorValue.TrimEnd(')');
+
         // ASS/SSA color format: &HBBGGRR& or &HAABBGGRR&
         if (colorValue.StartsWith("&H", StringComparison.OrdinalIgnoreCase) && colorValue.EndsWith("&"))
         {
@@ -367,6 +374,16 @@ public static class SubtitleSyntaxTokenizer
     /// </summary>
     public static List<ColoredRange> Tokenize(string text)
     {
+        // Plain text produces no ranges at all: an ASSA tag needs '{', an HTML tag needs '<',
+        // and every other branch below is only reachable once one of them has been seen. The
+        // grid tokenizes every visible row on each repaint and the edit box every keystroke,
+        // and most lines carry no markup - so one vectorized scan replaces the whole
+        // per-character walk (and the theme lookup StyleColor does).
+        if (string.IsNullOrEmpty(text) || text.AsSpan().IndexOfAny('{', '<') < 0)
+        {
+            return new List<ColoredRange>();
+        }
+
         var ranges = new List<ColoredRange>();
 
         // Snapshot the theme-dependent palette once per pass.

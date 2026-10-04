@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -29,6 +29,9 @@ public partial class BatchConvertSettingsViewModel : ObservableObject
     [ObservableProperty] private bool _useOutputFolder;
     [ObservableProperty] private string _outputFolder;
     [ObservableProperty] private bool _overwrite;
+    [ObservableProperty] private bool _keepSourceTimestamp;
+    [ObservableProperty] private bool _preventSleep;
+    [ObservableProperty] private bool _scanFolderRecursive;
     [ObservableProperty] private ObservableCollection<string> _targetEncodings;
     [ObservableProperty] private string? _selectedTargetEncoding;
 
@@ -45,6 +48,8 @@ public partial class BatchConvertSettingsViewModel : ObservableObject
     [ObservableProperty] private TesseractEngineModeItem? _selectedTesseractEngineMode;
 
     [ObservableProperty] private ObservableCollection<OcrLanguage2> _paddleOcrLanguages;
+    [ObservableProperty] private ObservableCollection<OcrLanguage2> _appleVisionLanguages;
+    [ObservableProperty] private OcrLanguage2? _selectedAppleVisionLanguage;
     [ObservableProperty] private OcrLanguage2? _selectedPaddleOcrLanguage;
 
     [ObservableProperty] private ObservableCollection<string> _binaryOcrDatabases;
@@ -78,6 +83,7 @@ public partial class BatchConvertSettingsViewModel : ObservableObject
     [ObservableProperty] bool _isOllamaVisible;
     [ObservableProperty] bool _isLlamaCppVisible;
     [ObservableProperty] bool _isCrispEmbedVisible;
+    [ObservableProperty] bool _isAppleVisionVisible;
 
     public Window? Window { get; set; }
     public Action? RefreshCrispEmbedModelCombo { get; set; }
@@ -94,6 +100,11 @@ public partial class BatchConvertSettingsViewModel : ObservableObject
         TargetEncodings = new ObservableCollection<string>(encodings);
 
         OcrEngines = new ObservableCollection<string> { "nOcr", "BinaryOcr", "Tesseract", "Ollama", "llama.cpp" };
+        if (AppleVisionOcr.IsAvailable())
+        {
+            OcrEngines.Add(AppleVisionOcr.StaticName);
+        }
+
         if (CrispEmbedEngine.CanBeDownloaded())
         {
             OcrEngines.Add(CrispEmbedEngine.StaticName);
@@ -120,6 +131,7 @@ public partial class BatchConvertSettingsViewModel : ObservableObject
         }
 
         PaddleOcrLanguages = new ObservableCollection<OcrLanguage2>(PaddleOcr.GetLanguages().OrderBy(p => p.ToString()));
+        AppleVisionLanguages = new ObservableCollection<OcrLanguage2>(AppleVisionOcr.GetLanguages().OrderBy(p => p.ToString()));
         TesseractDictionaryItems = new ObservableCollection<TesseractDictionary>();
         TesseractEngineModes = new ObservableCollection<TesseractEngineModeItem>(TesseractEngineModeItem.List());
         SelectedTesseractEngineMode = TesseractEngineModes.FirstOrDefault(p => p.Oem == Se.Settings.Tools.BatchConvert.TesseractEngineMode)
@@ -140,7 +152,7 @@ public partial class BatchConvertSettingsViewModel : ObservableObject
         OllamaModels = new ObservableCollection<string>(Se.Settings.Ocr.OllamaModels);
         LlamaCppOcrModels = new ObservableCollection<LlamaCppModelDisplay>();
         SelectedLlamaCppOcrModel = LlamaCppDownloadHelper.PopulateModels(
-            LlamaCppOcrModels, LlamaCppServerManager.OcrModels, Se.Settings.Ocr.LlamaCppOcrModel);
+            LlamaCppOcrModels, LlamaCppServerManager.GetAllOcrModels(), Se.Settings.Ocr.LlamaCppOcrModel);
 
         CrispEmbedBackends = new ObservableCollection<CrispEmbedBackend>(CrispEmbedEngine.GetBackends());
         CrispEmbedModels = new ObservableCollection<CrispEmbedModelDisplay>();
@@ -196,11 +208,14 @@ public partial class BatchConvertSettingsViewModel : ObservableObject
         UseOutputFolder = !UseSourceFolder;
         OutputFolder = Se.Settings.Tools.BatchConvert.OutputFolder;
         Overwrite = Se.Settings.Tools.BatchConvert.Overwrite;
+        KeepSourceTimestamp = Se.Settings.Tools.BatchConvert.KeepSourceTimestamp;
+        PreventSleep = Se.Settings.Tools.BatchConvert.PreventSleep;
         SelectedTargetEncoding = TargetEncodings.FirstOrDefault(p => p == Se.Settings.Tools.BatchConvert.TargetEncoding)
             ?? TargetEncodings.FirstOrDefault(p => p == TextEncoding.Utf8WithBom)
             ?? TargetEncodings.First();
         SelectedOcrEngine = OcrEngines.FirstOrDefault(p => p == Se.Settings.Tools.BatchConvert.OcrEngine) ?? OcrEngines.First();
         VobSubIsolateColors = Se.Settings.Tools.BatchConvert.VobSubIsolateColors;
+        ScanFolderRecursive = Se.Settings.Tools.BatchConvert.ScanFolderRecursive;
     }
 
     private void SaveSettings()
@@ -208,10 +223,13 @@ public partial class BatchConvertSettingsViewModel : ObservableObject
         Se.Settings.Tools.BatchConvert.SaveInSourceFolder = !UseOutputFolder;
         Se.Settings.Tools.BatchConvert.OutputFolder = OutputFolder;
         Se.Settings.Tools.BatchConvert.Overwrite = Overwrite;
+        Se.Settings.Tools.BatchConvert.KeepSourceTimestamp = KeepSourceTimestamp;
+        Se.Settings.Tools.BatchConvert.PreventSleep = PreventSleep;
         Se.Settings.Tools.BatchConvert.TargetEncoding = SelectedTargetEncoding ?? TextEncoding.Utf8WithBom;
         Se.Settings.Tools.BatchConvert.LanguagePostFix = SelectedLanguagePostFix ?? Se.Language.General.TwoLetterLanguageCode;
         Se.Settings.Tools.BatchConvert.OcrEngine = SelectedOcrEngine ?? "nOcr";
         Se.Settings.Tools.BatchConvert.VobSubIsolateColors = VobSubIsolateColors;
+        Se.Settings.Tools.BatchConvert.ScanFolderRecursive = ScanFolderRecursive;
 
         var ocrEngine = SelectedOcrEngine;
         if (ocrEngine == "Tesseract")
@@ -223,6 +241,12 @@ public partial class BatchConvertSettingsViewModel : ObservableObject
         if (ocrEngine == "PaddleOCR")
         {
             Se.Settings.Tools.BatchConvert.PaddleLanguage = SelectedPaddleOcrLanguage?.Code ?? "en";
+        }
+
+        if (ocrEngine == AppleVisionOcr.StaticName)
+        {
+            Se.Settings.Tools.BatchConvert.AppleVisionLanguage =
+                SelectedAppleVisionLanguage?.Code ?? Se.Settings.Tools.BatchConvert.AppleVisionLanguage;
         }
 
         if (ocrEngine == "BinaryOcr")
@@ -335,8 +359,8 @@ public partial class BatchConvertSettingsViewModel : ObservableObject
     {
         if (UseOutputFolder && string.IsNullOrWhiteSpace(OutputFolder))
         {
-            await MessageBox.Show(Window!, "Error",
-                "Please select output folder", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            await MessageBox.Show(Window!, Se.Language.General.Error,
+                Se.Language.General.PleaseSelectOutputFolder, MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
 
@@ -345,7 +369,7 @@ public partial class BatchConvertSettingsViewModel : ObservableObject
         if (SelectedOcrEngine == "llama.cpp")
         {
             var ready = await LlamaCppDownloadHelper.EnsureReadyAsync(Window!, _windowService,
-                SelectedLlamaCppOcrModel?.Model.FileName, LlamaCppServerManager.OcrModels, persistAsTranslateModel: false);
+                SelectedLlamaCppOcrModel?.Model.FileName, LlamaCppServerManager.GetAllOcrModels(), persistAsTranslateModel: false);
             if (!ready)
             {
                 return;
@@ -376,7 +400,7 @@ public partial class BatchConvertSettingsViewModel : ObservableObject
     [RelayCommand]
     private async Task BrowseOutputFolder()
     {
-        var folder = await _folderHelper.PickFolderAsync(Window!, "Select output folder");
+        var folder = await _folderHelper.PickFolderAsync(Window!, Se.Language.General.PickOutputFolder);
         if (!string.IsNullOrEmpty(folder))
         {
             OutputFolder = folder;
@@ -398,6 +422,11 @@ public partial class BatchConvertSettingsViewModel : ObservableObject
             e.Handled = true;
             Window?.Close();
         }
+        else if (UiUtil.IsHelp(e))
+        {
+            e.Handled = true;
+            UiUtil.ShowHelp("features/batch-convert", "settings");
+        }
     }
 
     internal void OnOcrEngineChanged()
@@ -411,7 +440,7 @@ public partial class BatchConvertSettingsViewModel : ObservableObject
             return;
         }
 
-        IsOcrLanguageVisible = ocrEngine != "nOcr" && ocrEngine != "BinaryOcr" && ocrEngine != "Ollama" && ocrEngine != "llama.cpp" && ocrEngine != CrispEmbedEngine.StaticName;
+        IsOcrLanguageVisible = ocrEngine != "nOcr" && ocrEngine != "BinaryOcr" && ocrEngine != "Ollama" && ocrEngine != "llama.cpp" && ocrEngine != CrispEmbedEngine.StaticName && ocrEngine != AppleVisionOcr.StaticName;
         IsTesseractOcrVisible = ocrEngine == "Tesseract";
         IsPaddleOCrVisible = ocrEngine == "PaddleOCR";
         IsBinaryOcrVisible = ocrEngine == "BinaryOcr";
@@ -419,11 +448,20 @@ public partial class BatchConvertSettingsViewModel : ObservableObject
         IsOllamaVisible = ocrEngine == "Ollama";
         IsLlamaCppVisible = ocrEngine == "llama.cpp";
         IsCrispEmbedVisible = ocrEngine == CrispEmbedEngine.StaticName;
+        IsAppleVisionVisible = ocrEngine == AppleVisionOcr.StaticName;
 
         if (ocrEngine == "Tesseract")
         {
             SelectedTesseractDictionaryItem = TesseractDictionaryItems
                 .FirstOrDefault(p => p.Code == Se.Settings.Tools.BatchConvert.TesseractLanguage) ?? TesseractDictionaryItems.FirstOrDefault();
+        }
+
+        if (ocrEngine == AppleVisionOcr.StaticName)
+        {
+            SelectedAppleVisionLanguage =
+                AppleVisionLanguages.FirstOrDefault(p => p.Code == Se.Settings.Tools.BatchConvert.AppleVisionLanguage) ??
+                AppleVisionLanguages.FirstOrDefault(p => p.Code == "en-US") ??
+                AppleVisionLanguages.FirstOrDefault();
         }
 
         if (ocrEngine == "PaddleOCR")

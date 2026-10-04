@@ -25,6 +25,8 @@ public enum ShortcutGroup
     Search,
     Tools,
     Ai,
+    Plugins,
+    Custom,
 }
 
 public static class ShortcutGroupUi
@@ -57,6 +59,8 @@ public static class ShortcutGroupUi
             ShortcutGroup.Search => Se.Language.General.Search,
             ShortcutGroup.Tools => Se.Language.General.Tools,
             ShortcutGroup.Ai => language.CategoryAi,
+            ShortcutGroup.Plugins => Se.Language.Plugins.Title.Replace("_", string.Empty), // menu header string, "_" marks the access key
+            ShortcutGroup.Custom => language.CategoryCustom,
             _ => Se.Language.General.General,
         };
     }
@@ -76,6 +80,8 @@ public static class ShortcutGroupUi
             ShortcutGroup.Search => IconNames.Find,
             ShortcutGroup.Tools => IconNames.Tools,
             ShortcutGroup.Ai => IconNames.Creation,
+            ShortcutGroup.Plugins => IconNames.PuzzleOutline,
+            ShortcutGroup.Custom => IconNames.PlayPlaylist,
             _ => IconNames.Settings,
         };
     }
@@ -116,6 +122,8 @@ public static class ShortcutGroupUi
             ShortcutGroup.Search => new SolidColorBrush(Color.Parse("#d9a03f")),
             ShortcutGroup.Tools => new SolidColorBrush(Color.Parse("#f0885a")),
             ShortcutGroup.Ai => new SolidColorBrush(Color.Parse("#e668c4")),
+            ShortcutGroup.Plugins => new SolidColorBrush(Color.Parse("#c9a45c")),
+            ShortcutGroup.Custom => new SolidColorBrush(Color.Parse("#d98080")),
             _ => new SolidColorBrush(Color.Parse("#8494a4")),
         };
     }

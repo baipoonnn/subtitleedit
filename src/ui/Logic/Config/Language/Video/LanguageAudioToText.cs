@@ -1,4 +1,4 @@
-namespace Nikse.SubtitleEdit.Logic.Config.Language;
+﻿namespace Nikse.SubtitleEdit.Logic.Config.Language;
 
 public class LanguageAudioToText
 {
@@ -7,6 +7,20 @@ public class LanguageAudioToText
     public string TranslateToEnglish { get; set; }
     public string Transcribing { get; set; }
     public string TranscribingXOfY { get; set; }
+    public string LinesTranscribedXOfYFailedZ { get; set; }
+    public string LinesTranscribedXOfYCancelled { get; set; }
+    public string NoLinesTranscribed { get; set; }
+    public string ApplyTranscribedLines { get; set; }
+    public string RetryFailedLines { get; set; }
+    public string IsolateSpeech { get; set; }
+    public string IsolateSpeechHint { get; set; }
+    public string IsolatingSpeech { get; set; }
+    public string IsolateSpeechFailed { get; set; }
+    public string DetectSpeakers { get; set; }
+    public string DetectSpeakersHint { get; set; }
+    public string DetectSpeakersNeedsNewerCrispAsr { get; set; }
+    public string Vad { get; set; }
+    public string VadHint { get; set; }
     public string InputLanguage { get; set; }
     public string AdvancedWhisperSettings { get; set; }
     public string DownloadingSpeechToTextEngine { get; set; }
@@ -32,6 +46,33 @@ public class LanguageAudioToText
     public string FixCasing { get; set; }
     public string AddPeriods { get; set; }
     public string ChangeUnderlineToColor { get; set; }
+    public string RemoveNonSpeechLines { get; set; }
+    public string RemoveNonSpeechLinesHint { get; set; }
+    public string RemoveRepeatedLines { get; set; }
+    public string RemoveRepeatedLinesHint { get; set; }
+    public string ShowQualityReport { get; set; }
+    public string QualityReportTitle { get; set; }
+    public string QualityReportNoIssues { get; set; }
+    public string QualityReportSummaryX { get; set; }
+    public string QualityReportLinesChecked { get; set; }
+    public string QualityReportIssuesFound { get; set; }
+    public string QualityReportLinesRemoved { get; set; }
+    public string QualityReportTooShort { get; set; }
+    public string QualityReportTooShortHint { get; set; }
+    public string QualityReportTooLong { get; set; }
+    public string QualityReportTooLongHint { get; set; }
+    public string QualityReportOverlap { get; set; }
+    public string QualityReportOverlapHint { get; set; }
+    public string QualityReportNonSpeech { get; set; }
+    public string QualityReportNonSpeechHint { get; set; }
+    public string QualityReportRepeated { get; set; }
+    public string QualityReportRepeatedHint { get; set; }
+    public string QualityReportRemoved { get; set; }
+    public string QualityReportAll { get; set; }
+    public string QualityReportIssue { get; set; }
+    public string QualityReportDetail { get; set; }
+    public string QualityReportTip { get; set; }
+    public string QualityReportDoNotShowAgain { get; set; }
 
     public string EngineSettings { get; set; }
     public string EngineSettingsSubtitle { get; set; }
@@ -46,6 +87,20 @@ public class LanguageAudioToText
         TranslateToEnglish = "Translate to English";
         Transcribing = "Transcribing...";
         TranscribingXOfY = "Transcribing {0} of {1}...";
+        LinesTranscribedXOfYFailedZ = "{0} of {1} lines were transcribed - {2} failed or had no speech.\n\nFailed lines keep their current text. Apply the transcribed lines, or retry the failed ones (you can change engine or settings first)?";
+        LinesTranscribedXOfYCancelled = "Transcription was cancelled after {0} of {1} lines.\n\nApply the transcribed lines? The other lines keep their current text.";
+        NoLinesTranscribed = "None of the {0} lines could be transcribed.\nPlease check the tools log for details.";
+        ApplyTranscribedLines = "Apply transcribed";
+        RetryFailedLines = "Retry failed";
+        IsolateSpeech = "Isolate speech (slow)";
+        IsolateSpeechHint = "Removes music and sound effects before transcribing. Gives fewer missed lines and better timing on audio with loud music, but takes about as long as the audio itself with a GPU - and many times longer without one.";
+        IsolatingSpeech = "Isolating speech...";
+        IsolateSpeechFailed = "Could not isolate the speech - transcribing the original audio instead.";
+        DetectSpeakers = "Detect speakers";
+        DetectSpeakersHint = "Starts each line with the speaker, like \"(speaker 0)\", using NVIDIA's Sortformer diarization (up to 8 speakers). Works best with backends that split lines where the speaker changes, like Parakeet and Cohere.";
+        DetectSpeakersNeedsNewerCrispAsr = "\"Detect speakers\" needs Crisp ASR v{0} or newer, but v{1} is installed.\n\nUpdate Crisp ASR (the gear button next to the engine) or turn off \"Detect speakers\".";
+        Vad = "VAD";
+        VadHint = "Voice activity detection: only the speech is transcribed, cut where the speaker pauses.\nAuto: Silero, and only for the engines that need it (Cohere, Mega, Index-Echo).\nSilero, FireRedVAD, WebRTC: always on, for every Crisp ASR engine. FireRedVAD is the most accurate.\nIndex-Echo always uses Silero. --vad, --vad-model or --chunk-seconds in the advanced settings take precedence.";
         InputLanguage = "Input language";
         AdvancedWhisperSettings = "Advanced speech-to-text parameters";
         DownloadingSpeechToTextEngine = "Downloading speech-to-text engine";
@@ -71,6 +126,33 @@ public class LanguageAudioToText
         FixCasing = "Fix casing";
         AddPeriods = "Add periods";
         ChangeUnderlineToColor = "Change underline to color";
+        RemoveNonSpeechLines = "Remove non-speech lines";
+        RemoveNonSpeechLinesHint = "Drop lines that only describe sound, like \"[Music]\" or \"(waves crashing)\"";
+        RemoveRepeatedLines = "Remove repeated lines";
+        RemoveRepeatedLinesHint = "Drop lines that repeat the previous line word for word (engine loops)";
+        ShowQualityReport = "Show quality report after transcription";
+        QualityReportTitle = "Transcription quality report";
+        QualityReportNoIssues = "No issues found - the transcription looks good.";
+        QualityReportSummaryX = "{0} issue(s) found in {1} line(s)";
+        QualityReportLinesChecked = "Lines checked";
+        QualityReportIssuesFound = "Issues found";
+        QualityReportLinesRemoved = "Lines removed";
+        QualityReportTooShort = "Too short";
+        QualityReportTooShortHint = "Shorter than the minimum display time, or reading speed above the maximum";
+        QualityReportTooLong = "Too long";
+        QualityReportTooLongHint = "Longer than the maximum display time, or very few words over a long time (often a hallucination)";
+        QualityReportOverlap = "Overlapping";
+        QualityReportOverlapHint = "Ends after the next line starts";
+        QualityReportNonSpeech = "Non-speech";
+        QualityReportNonSpeechHint = "Only a sound or music description, like \"[Music]\"";
+        QualityReportRepeated = "Repeated";
+        QualityReportRepeatedHint = "Same text as the previous line (engine loop)";
+        QualityReportRemoved = "Removed";
+        QualityReportAll = "All";
+        QualityReportIssue = "Issue";
+        QualityReportDetail = "Detail";
+        QualityReportTip = "Lines are listed with their numbers in the new subtitle. Use \"Fix common errors\" or the post-processing settings to fix more automatically, or try another model/engine if many lines are affected.";
+        QualityReportDoNotShowAgain = "Do not show this report again";
 
         EngineSettings = "Speech-to-text engine settings";
         EngineSettingsSubtitle = "Speech-to-text engine";

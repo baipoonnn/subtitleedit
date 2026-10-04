@@ -11,6 +11,7 @@ using CommunityToolkit.Mvvm.Input;
 using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Core.SubtitleFormats;
 using Nikse.SubtitleEdit.Logic.Config;
+using Nikse.SubtitleEdit.Logic;
 
 namespace Nikse.SubtitleEdit.Features.Files.FormatProperties.TimedText10Properties;
 
@@ -363,20 +364,24 @@ public partial class TimedText10PropertiesViewModel : ObservableObject
         }
 
         // Settings
-        Configuration.Settings.SubtitleSettings.TimedText10TimeCodeFormat = SelectedTimeCodeFormat;
+        var formats = Se.Settings.Formats;
+        formats.TimedText10TimeCodeFormat = SelectedTimeCodeFormat;
 
-        var currentExt = Configuration.Settings.SubtitleSettings.TimedText10FileExtension;
+        var currentExt = formats.TimedText10FileExtension;
         if (currentExt != SelectedFileExtension)
         {
-            var favoriteFormats = Configuration.Settings.General.FavoriteSubtitleFormats;
+            // SE5's favourites live in Se.Settings.General - nothing mirrors them onto the libse
+            // copy this used to edit, so the rename was a no-op and the stored
+            // "Timed Text 1.0 (.xml)" entry stopped matching the renamed format and was dropped.
+            var favoriteFormats = Se.Settings.General.FavoriteSubtitleFormats;
             var currentWithExt = $"Timed Text 1.0 ({currentExt})";
             var newWithExt = $"Timed Text 1.0 ({SelectedFileExtension})";
-            if (favoriteFormats != null && favoriteFormats.Contains(currentWithExt))
+            if (!string.IsNullOrEmpty(favoriteFormats) && favoriteFormats.Contains(currentWithExt))
             {
-                Configuration.Settings.General.FavoriteSubtitleFormats = favoriteFormats.Replace(currentWithExt, newWithExt);
+                Se.Settings.General.FavoriteSubtitleFormats = favoriteFormats.Replace(currentWithExt, newWithExt);
             }
 
-            Configuration.Settings.SubtitleSettings.TimedText10FileExtension = SelectedFileExtension;
+            formats.TimedText10FileExtension = SelectedFileExtension;
         }
     }
 
@@ -396,17 +401,21 @@ public partial class TimedText10PropertiesViewModel : ObservableObject
     private void Ok()
     {
         WriteValuesToXml();
-        
+
         if (!string.IsNullOrEmpty(SelectedFileExtension))
         {
-            Configuration.Settings.SubtitleSettings.TimedText10FileExtension = SelectedFileExtension;
+            Se.Settings.Formats.TimedText10FileExtension = SelectedFileExtension;
         }
-        
+
         if (!string.IsNullOrEmpty(SelectedTimeCodeFormat))
         {
-            Configuration.Settings.SubtitleSettings.TimedText10TimeCodeFormat = SelectedTimeCodeFormat;
+            Se.Settings.Formats.TimedText10TimeCodeFormat = SelectedTimeCodeFormat;
         }
-        
+
+        // Writing only to the libse singleton, as this did, lost every choice on restart - it has
+        // no persistence in SE5. SaveSettings mirrors these back onto it.
+        Se.SaveSettings();
+
         OkPressed = true;
         Window?.Close();
     }
@@ -423,6 +432,11 @@ public partial class TimedText10PropertiesViewModel : ObservableObject
         {
             e.Handled = true;
             Window?.Close();
+        }
+        else if (UiUtil.IsHelp(e))
+        {
+            e.Handled = true;
+            UiUtil.ShowHelp("features/file", "format-properties");
         }
     }
 }

@@ -1,9 +1,12 @@
-using Nikse.SubtitleEdit.Core.BluRaySup;
+﻿using Nikse.SubtitleEdit.Core.BluRaySup;
 using Nikse.SubtitleEdit.Core.Common;
+using Nikse.SubtitleEdit.Core.ContainerFormats;
 using Nikse.SubtitleEdit.Core.ContainerFormats.Matroska;
 using Nikse.SubtitleEdit.Core.ContainerFormats.Mp4.Boxes;
+using Nikse.SubtitleEdit.Core.ContainerFormats.ProgramStream;
 using Nikse.SubtitleEdit.Core.ContainerFormats.TransportStream;
 using Nikse.SubtitleEdit.Core.VobSub;
+using Nikse.SubtitleEdit.UiLogic.Ocr;
 using SkiaSharp;
 using System.Text;
 
@@ -53,6 +56,86 @@ internal static class BitmapSubtitleLoader
             throw new InvalidOperationException($"No Blu-Ray sup subtitles found in: {filePath}");
         }
         return PcsListToItems(pcsList);
+    }
+
+    /// <summary>
+    /// HD-DVD .sup file → bitmap events. The stream carries no frame size; HD-DVD video is
+    /// always 1920x1080.
+    /// </summary>
+    public static IReadOnlyList<BitmapSubtitleItem> LoadHdDvdSup(string filePath)
+    {
+        var pictures = HdDvdSupParser.Parse(filePath);
+        if (pictures.Count == 0)
+        {
+            throw new InvalidOperationException($"No HD-DVD sup subtitles found in: {filePath}");
+        }
+
+        var items = new List<BitmapSubtitleItem>(pictures.Count);
+        foreach (var picture in pictures)
+        {
+            // ImagePosition is only filled in by GetBitmap - read it after decoding.
+            var bmp = picture.GetBitmap();
+            items.Add(new BitmapSubtitleItem(
+                new TimeCode(picture.StartTime.TotalMilliseconds),
+                new TimeCode(picture.EndTime.TotalMilliseconds),
+                bmp,
+                1920,
+                1080,
+                picture.ImagePosition));
+        }
+
+        return items;
+    }
+
+    /// <summary>
+    /// DVD .sup file ("SP" packets) → bitmap events, rendered like the GUI's OCR (white
+    /// text, black outline). The stream carries no frame size, so pick the DVD standard
+    /// from the display areas (720x576 PAL / 720x480 NTSC).
+    /// </summary>
+    /// <summary>
+    /// One PSP UMD Video subtitle stream → bitmap events on the 720x480 UMD video frame.
+    /// </summary>
+    public static IReadOnlyList<BitmapSubtitleItem> LoadUmdVideo(List<UmdVideoSubtitle> pictures)
+    {
+        var items = new List<BitmapSubtitleItem>(pictures.Count);
+        foreach (var picture in pictures)
+        {
+            items.Add(new BitmapSubtitleItem(
+                new TimeCode(picture.StartTime.TotalMilliseconds),
+                new TimeCode(picture.EndTime.TotalMilliseconds),
+                picture.GetBitmap() ?? new SKBitmap(1, 1),
+                UmdVideoSubtitle.ScreenWidth,
+                UmdVideoSubtitle.ScreenHeight,
+                new SKPointI(picture.X, picture.Y)));
+        }
+
+        return items;
+    }
+
+    public static IReadOnlyList<BitmapSubtitleItem> LoadSpDvdSup(string filePath)
+    {
+        var headers = SpDvdSupParser.Parse(filePath);
+        if (headers.Count == 0)
+        {
+            throw new InvalidOperationException($"No DVD sup subtitles found in: {filePath}");
+        }
+
+        var screenHeight = headers.Any(h => h.Picture.ImageDisplayArea.Bottom > 480) ? 576 : 480;
+        var items = new List<BitmapSubtitleItem>(headers.Count);
+        foreach (var header in headers)
+        {
+            // ImagePosition is only filled in by GetBitmap - read it after decoding.
+            var bmp = header.Picture.GetBitmap(null, SKColors.Transparent, SKColors.White, SKColors.Black, SKColors.Black, false);
+            items.Add(new BitmapSubtitleItem(
+                new TimeCode(header.StartTime.TotalMilliseconds),
+                new TimeCode((header.StartTime + header.Picture.Delay).TotalMilliseconds),
+                bmp,
+                720,
+                screenHeight,
+                header.Picture.ImagePosition));
+        }
+
+        return items;
     }
 
     /// <summary>
@@ -120,8 +203,8 @@ internal static class BitmapSubtitleLoader
             // 1115 zero-duration cues in the .sup export). MergeVobSubPacks has already
             // repaired EndTime for missing/negative/over-long delays — the same times the
             // GUI shows.
-            // GetPosition reads SubPicture.ImageDisplayArea, which is only filled in while
-            // decoding - so after GetBitmap above, never before.
+            // GetPosition reads SubPicture.ImageDisplayArea and the crop offset, which are
+            // only filled in while decoding - so after GetBitmap above, never before.
             var position = pack.GetPosition();
             items.Add(new BitmapSubtitleItem(
                 new TimeCode(pack.StartTime.TotalMilliseconds),
@@ -208,6 +291,11 @@ internal static class BitmapSubtitleLoader
                 packs[^2].EndTime = TimeSpan.FromMilliseconds(packs[^1].StartTime.TotalMilliseconds - 1);
             }
         }
+
+        // ffmpeg leaves BlockDuration unset (or "unknown") on the VobSub tracks it muxes, so
+        // every pack came out ending where it started; the sub picture's own stop-display
+        // delay is the real duration. Same repair the .sub/.idx path does.
+        VobSubParser.FixPackTimes(packs);
 
         var items = new List<BitmapSubtitleItem>(packs.Count);
         var skipped = 0;
@@ -338,16 +426,145 @@ internal static class BitmapSubtitleLoader
             {
                 continue;
             }
-            // ImageDisplayArea is filled in by GetBitmap above.
-            var displayArea = subPictures[i].ImageDisplayArea;
+            // ImagePosition is filled in by GetBitmap above: the display area's origin plus
+            // the crop offset, so it matches the cropped bitmap.
+            var position = subPictures[i].ImagePosition;
             items.Add(new BitmapSubtitleItem(paragraphs[i].StartTime, paragraphs[i].EndTime, bmp,
-                Position: new SKPointI(displayArea.Left, displayArea.Top)));
+                Position: position));
         }
         if (items.Count == 0)
         {
             throw new InvalidOperationException("No VobSub subpictures found in MP4 track.");
         }
         return items;
+    }
+
+    /// <summary>
+    /// DVB subtitles carried in a Matroska track (codec <c>S_DVBSUB</c>). The blocks hold the
+    /// same segments a transport stream would, in one of a few framings, so each is wrapped
+    /// back into a <see cref="DvbSubPes"/> before decoding - mirrors the GUI's MKV DVB path.
+    /// Without this the track fell through to the text loader and produced empty cues.
+    /// </summary>
+    public static IReadOnlyList<BitmapSubtitleItem> LoadMatroskaDvbSub(MatroskaFile matroska, MatroskaTrackInfo track)
+    {
+        var sub = matroska.GetSubtitle(track.TrackNumber, null);
+        var pesList = new List<(DvbSubPes Pes, long Start, long End)>();
+        foreach (var msub in sub)
+        {
+            DvbSubPes? pes = null;
+            var data = msub.GetData(track);
+            if (data == null)
+            {
+                continue;
+            }
+
+            if (data.Length > 9 && data[0] == 15 &&
+                data[1] >= SubtitleSegment.PageCompositionSegment &&
+                data[1] <= SubtitleSegment.DisplayDefinitionSegment) // sync byte + segment id
+            {
+                var buffer = new byte[data.Length + 3];
+                Buffer.BlockCopy(data, 0, buffer, 2, data.Length);
+                buffer[0] = 32;
+                buffer[1] = 0;
+                buffer[^1] = 255;
+                pes = new DvbSubPes(0, buffer);
+            }
+            else if (VobSubParser.IsMpeg2PackHeader(data))
+            {
+                pes = new DvbSubPes(data, Mpeg2Header.Length);
+            }
+            else if (VobSubParser.IsPrivateStream1(data, 0))
+            {
+                pes = new DvbSubPes(data, 0);
+            }
+            else if (data.Length > 9 && data[0] == 32 && data[1] == 0 && data[2] == 14 && data[3] == 16)
+            {
+                pes = new DvbSubPes(0, data);
+            }
+
+            if (pes?.PageCompositions != null && pes.PageCompositions.Any(p => p.Regions.Count > 0))
+            {
+                pesList.Add((pes, msub.Start, msub.End));
+            }
+        }
+
+        if (pesList.Count == 0)
+        {
+            throw new InvalidOperationException($"No DVB subtitles in MKV track #{track.TrackNumber}.");
+        }
+
+        // Same end-time repair as the GUI: a block with no usable duration runs for three
+        // seconds, clipped to the next block's start.
+        var items = new List<BitmapSubtitleItem>(pesList.Count);
+        var skipped = 0;
+        for (var i = 0; i < pesList.Count; i++)
+        {
+            var (pes, start, end) = pesList[i];
+            if (end - start < 200)
+            {
+                end = start + 3000;
+            }
+
+            if (i + 1 < pesList.Count && pesList[i + 1].Start < end)
+            {
+                end = pesList[i + 1].Start - Configuration.Settings.General.MinimumMillisecondsBetweenLines;
+            }
+
+            var item = DvbFrameToItem(pes.GetImageFull(), new TimeCode(start), new TimeCode(end));
+            if (item is null)
+            {
+                skipped++;
+                continue;
+            }
+
+            items.Add(item);
+        }
+
+        WarnSkippedBitmaps(skipped, "MKV DVB-sub");
+        if (items.Count == 0)
+        {
+            throw new InvalidOperationException($"No DVB subtitles in MKV track #{track.TrackNumber}.");
+        }
+
+        return items;
+    }
+
+    /// <summary>
+    /// XSUB ("DivX") subtitles in an .avi/.divx → one bitmap list per subtitle stream (a file
+    /// can carry one stream per language, same as MKV). The packet header carries the bitmap's
+    /// position in the video frame, and the AVI main header the frame size those coordinates
+    /// are in, so an image output keeps the original placement instead of being re-centred.
+    /// </summary>
+    public static List<(IReadOnlyList<BitmapSubtitleItem> Items, int? StreamNumber)> LoadXSub(string filePath)
+    {
+        var avi = XSubParser.ParseAvi(filePath);
+        var screenWidth = avi.VideoWidth > 0 ? avi.VideoWidth : (int?)null;
+        var screenHeight = avi.VideoHeight > 0 ? avi.VideoHeight : (int?)null;
+
+        var results = new List<(IReadOnlyList<BitmapSubtitleItem>, int?)>();
+        foreach (var track in avi.Tracks)
+        {
+            var items = new List<BitmapSubtitleItem>(track.Subtitles.Count);
+            foreach (var xSub in track.Subtitles)
+            {
+                items.Add(new BitmapSubtitleItem(
+                    xSub.Start,
+                    xSub.End,
+                    xSub.GetImage(),
+                    screenWidth,
+                    screenHeight,
+                    new SKPointI(xSub.Left, xSub.Top)));
+            }
+
+            if (items.Count > 0)
+            {
+                // StreamNumber is -1 when the packets were recovered by the parser's fallback
+                // scan and belong to no identifiable stream - report that as "no track number".
+                results.Add((items, track.StreamNumber >= 0 ? track.StreamNumber : (int?)null));
+            }
+        }
+
+        return results;
     }
 
     /// <summary>
@@ -377,17 +594,33 @@ internal static class BitmapSubtitleLoader
             var items = new List<BitmapSubtitleItem>(dvbSubtitles.Count);
             foreach (var dvb in dvbSubtitles)
             {
+                if (dvb.IsDvbSub)
+                {
+                    var item = DvbFrameToItem(dvb.GetBitmap(), dvb.StartTimeCode, dvb.EndTimeCode);
+                    if (item is not null)
+                    {
+                        items.Add(item);
+                    }
+
+                    continue;
+                }
+
+                // A Blu-ray sup carried in the stream: a tight bitmap with its own position.
                 var bmp = dvb.GetBitmap();
                 if (bmp is null)
                 {
                     continue;
                 }
+
                 var position = dvb.GetPosition();
+                var screenSize = dvb.GetScreenSize();
                 items.Add(new BitmapSubtitleItem(
-                    new TimeCode(dvb.StartMilliseconds),
-                    new TimeCode(dvb.EndMilliseconds),
+                    dvb.StartTimeCode,
+                    dvb.EndTimeCode,
                     bmp,
-                    Position: new SKPointI(position.Left, position.Top)));
+                    screenSize.Width > 0 ? (int)screenSize.Width : null,
+                    screenSize.Height > 0 ? (int)screenSize.Height : null,
+                    new SKPointI(position.Left, position.Top)));
             }
             if (items.Count > 0)
             {
@@ -395,6 +628,33 @@ internal static class BitmapSubtitleLoader
             }
         }
         return results;
+    }
+
+    /// <summary>
+    /// A DVB subtitle decodes to an image of the whole video frame with the text drawn in place.
+    /// Handing that on together with the text's position placed a frame-sized image at an offset
+    /// (the offset counted twice), in whatever frame <c>--resolution</c> said. Crop to the ink
+    /// instead: a tight bitmap, its position, and the frame both belong to - what the PGS and
+    /// VobSub loaders produce. Takes ownership of <paramref name="fullFrame"/>; null = no image.
+    /// </summary>
+    internal static BitmapSubtitleItem? DvbFrameToItem(SKBitmap? fullFrame, TimeCode start, TimeCode end)
+    {
+        if (fullFrame is null)
+        {
+            return null;
+        }
+
+        using (fullFrame)
+        {
+            var ink = BitmapInkBounds.Crop(fullFrame);
+            if (ink is null)
+            {
+                return null;
+            }
+
+            // The decoder sizes the image by the stream's display definition, so the image is the frame.
+            return new BitmapSubtitleItem(start, end, ink.Value.Bitmap, fullFrame.Width, fullFrame.Height, ink.Value.Position);
+        }
     }
 
     private static IReadOnlyList<BitmapSubtitleItem> PcsListToItems(IReadOnlyList<BluRaySupParser.PcsData> pcsList)

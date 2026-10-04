@@ -2,6 +2,7 @@ using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
 using Nikse.SubtitleEdit.UiLogic.Http;
+using Nikse.SubtitleEdit.UiLogic.Ocr;
 using SkiaSharp;
 using System;
 using System.Collections.Generic;
@@ -19,9 +20,13 @@ public class OllamaOcr : IDisposable
 {
     // glm-ocr and similar are "thinking" models that, left unchecked, emit reasoning, markdown
     // fences and the same line over and over. We disable thinking, use a strict prompt, cap the
-    // tokens (a subtitle frame is short) and discourage repetition. Tuned against local glm-ocr.
-    private const int MaxTokens = 96;
+    // tokens and discourage repetition. Tuned against local glm-ocr. The token cap is only a
+    // runaway guard: 96 cut burned-in narration (a paragraph of vertical Japanese per frame,
+    // ~300 characters) mid-text (#14920), and "think": false is what stopped the 50 s garbage.
+    private const int MaxTokens = 1024;
     private const double RepeatPenalty = 1.1;
+    // Also only a runaway guard, not a subtitle shape - see VideoOcrLineBuilder.MaxLinesPerFrame.
+    internal const int MaxLines = 32;
 
     private readonly HttpClient _httpClient;
 
@@ -93,17 +98,7 @@ public class OllamaOcr : IDisposable
             // Strip any trailing garbage the model still appends after the real text (repeated
             // lines, ``` fences, an echo of the prompt) — the transcription is always first.
             resultText = CleanOcrText(resultText, prompt);
-            resultText = resultText.Replace(" ,", ",");
-            resultText = resultText.Replace(" .", ".");
-            resultText = resultText.Replace(" !", "!");
-            resultText = resultText.Replace(" ?", "?");
-            resultText = resultText.Replace("( ", "(");
-            resultText = resultText.Replace(" )", ")");
-            resultText = resultText.Replace("\\\"", "\"");
-            if (resultText.EndsWith("!'"))
-            {
-                resultText = resultText.TrimEnd('\'');
-            }
+            resultText = OcrHelper.FixAiOcrPunctuationSpaces(resultText, language);
 
             return resultText.Trim();
         }
@@ -131,8 +126,8 @@ public class OllamaOcr : IDisposable
     /// <summary>
     /// Keeps only the real transcription. glm-ocr (and similar) reliably emit the correct text
     /// first and then append garbage — repeated lines, a ``` markdown fence, or an echo of the
-    /// prompt. A subtitle frame is at most a few short lines, so stop at the first line that is a
-    /// duplicate, a code fence, or the start of the prompt, and never keep more than 4 lines.
+    /// prompt. So stop at the first line that is a duplicate (which also ends A/B/A/B loops), a
+    /// code fence, or the start of the prompt, and never keep more than <see cref="MaxLines"/>.
     /// </summary>
     internal static string CleanOcrText(string text, string prompt)
     {
@@ -162,7 +157,7 @@ public class OllamaOcr : IDisposable
 
             seen.Add(line);
             kept.Add(line);
-            if (kept.Count >= 4)
+            if (kept.Count >= MaxLines)
             {
                 break;
             }

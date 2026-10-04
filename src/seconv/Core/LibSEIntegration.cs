@@ -1,7 +1,8 @@
-using Nikse.SubtitleEdit.Core.Common;
+﻿using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Core.Forms;
 using Nikse.SubtitleEdit.Core.Interfaces;
 using Nikse.SubtitleEdit.Core.SubtitleFormats;
+using Nikse.SubtitleEdit.UiLogic.SubtitleLoading;
 using Spectre.Console;
 using System.Text;
 
@@ -13,18 +14,21 @@ namespace SeConv.Core;
 internal static class LibSEIntegration
 {
     /// <summary>
-    /// Gets all subtitle formats from LibSE — text, binary (input-only), and "other text" lists combined.
+    /// Gets all subtitle formats from LibSE — the registered formats, the binary formats and the
+    /// "other text" formats combined. A format that cannot be a conversion target (see
+    /// <see cref="CanWrite"/>) is marked "(input)".
     /// </summary>
     public static List<FormatEntry> GetAvailableFormats()
     {
         var entries = new List<FormatEntry>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        // EBU STL and DVB Teletext are registered too, but they are binary.
         foreach (var f in SubtitleFormat.AllSubtitleFormats)
         {
             if (seen.Add(f.Name))
             {
-                entries.Add(new FormatEntry(f, "text"));
+                entries.Add(new FormatEntry(f, f.IsTextBased ? "text" : "binary"));
             }
         }
 
@@ -32,7 +36,7 @@ internal static class LibSEIntegration
         {
             if (seen.Add(f.Name))
             {
-                entries.Add(new FormatEntry(f, "binary (input)"));
+                entries.Add(new FormatEntry(f, CanWrite(f) ? "binary" : "binary (input)"));
             }
         }
 
@@ -48,6 +52,23 @@ internal static class LibSEIntegration
     }
 
     public sealed record FormatEntry(SubtitleFormat Format, string Kind);
+
+    /// <summary>
+    /// True when seconv can write <paramref name="format"/>: a binary format with a writer (EBU,
+    /// PAC, Cavena 890, Cheetah, CapMaker, Ayato, ...), or a registered text format. The rest of
+    /// GetBinaryFormats() (Chk, TSB4, WinCaps32, ...) and all of GetTextOtherFormats() can only be
+    /// read - their ToText is a stub.
+    /// </summary>
+    public static bool CanWrite(SubtitleFormat format)
+    {
+        if (format is IBinaryPersistableSubtitle)
+        {
+            return true;
+        }
+
+        var type = format.GetType();
+        return format.IsTextBased && SubtitleFormat.AllSubtitleFormats.Any(f => f.GetType() == type);
+    }
 
     /// <summary>
     /// Loads a subtitle file using LibSE. When <paramref name="encodingName"/> is null/blank,
@@ -130,6 +151,23 @@ internal static class LibSEIntegration
             }
         }
 
+        // 1b. Formats SE 4 opened that are in none of libse's lists: ARIB STD-B36 (.1hd, ...)
+        // and Adobe Premiere projects (gzipped xml, so the lines above are gzip bytes).
+        var aribSubtitle = NonRegisteredFormatLoader.TryLoadAribB36(filePath);
+        if (aribSubtitle?.OriginalFormat != null)
+        {
+            return (aribSubtitle, aribSubtitle.OriginalFormat);
+        }
+
+        if (filePath.EndsWith(".prproj", StringComparison.OrdinalIgnoreCase))
+        {
+            var prProjSubtitle = NonRegisteredFormatLoader.TryLoadPremiereProject(filePath);
+            if (prProjSubtitle != null)
+            {
+                return (prProjSubtitle, new AdobePremierePrProj());
+            }
+        }
+
         // 2. Try binary formats (Pac, Ebu, Cavena890, ...) — they read raw bytes themselves
         foreach (var format in SubtitleFormat.GetBinaryFormats(true))
         {
@@ -151,18 +189,14 @@ internal static class LibSEIntegration
             }
         }
 
-        // 3. Try the "other text" formats (NkhCuePoints, BdnXml, JSON variants, ...)
-        foreach (var format in SubtitleFormat.GetTextOtherFormats())
+        // 3. Try the load-only text formats (NkhCuePoints, WSB, JSON variants, ...) - the same
+        // fallback as the GUI's File > Open: image-list formats are skipped (they are OCR'd by
+        // ContainerSubtitleLoader; as text they would convert to png file names), and a parser
+        // that throws on a file it doesn't understand counts as "not this format".
+        var loadOnly = LoadOnlyTextFormatLoader.TryLoad(lines, filePath);
+        if (loadOnly?.OriginalFormat != null)
         {
-            if (format.IsMine(lines, filePath))
-            {
-                var freshSubtitle = new Subtitle();
-                format.LoadSubtitle(freshSubtitle, lines, filePath);
-                if (freshSubtitle.Paragraphs.Count > 0)
-                {
-                    return (freshSubtitle, format);
-                }
-            }
+            return (loadOnly, loadOnly.OriginalFormat);
         }
 
         // 4. Last resort: generic auto-guesser (handles freeform CSV, xlsx, ods, JSON variants, ...)
@@ -285,6 +319,12 @@ internal static class LibSEIntegration
                 var n = file.Read(buffer, totalRead, buffer.Length - totalRead);
                 if (n <= 0) break;
                 totalRead += n;
+            }
+
+            var utf16 = LanguageAutoDetect.GetUtf16WithoutByteOrderMark(totalRead == buffer.Length ? buffer : buffer.AsSpan(0, totalRead).ToArray());
+            if (utf16 != null)
+            {
+                return utf16;
             }
 
             if (LooksLikeUtf8(buffer, totalRead))
@@ -452,11 +492,21 @@ internal static class LibSEIntegration
 
         var targetFormat = ResolveFormatByName(formatName)
             ?? throw new InvalidOperationException($"Unknown subtitle format: {formatName}");
+        if (!CanWrite(targetFormat))
+        {
+            // Its ToText is a stub - without this the output was an empty or "Not supported" file.
+            throw new InvalidOperationException($"{targetFormat.Name} can be read but not written. Run 'seconv formats' to see which formats can be a conversion target.");
+        }
 
         // Strip native source-format markup that the target wouldn't understand
         if (sourceFormat != null && !sourceFormat.GetType().Equals(targetFormat.GetType()))
         {
-            targetFormat.RemoveNativeFormatting(subtitle, sourceFormat);
+            // The *source* format strips its own markup, taking the target as the argument -
+            // see SubtitleFormat.RemoveNativeFormatting(subtitle, newFormat) and every UI/batch
+            // caller. Swapped, this asked the target to strip the source's tags, which for a
+            // text target is a no-op: every ASSA override and drawing block survived into the
+            // converted file.
+            sourceFormat.RemoveNativeFormatting(subtitle, targetFormat);
         }
 
         var outputDir = Path.GetDirectoryName(filePath);
@@ -489,6 +539,7 @@ internal static class LibSEIntegration
             {
                 pac.CodePage = pacCodePage.Value;
             }
+            pac.SecondaryCodePage = options?.PacSecondaryCodePage ?? -1;
             pac.Save(filePath, subtitle);
             return;
         }
@@ -602,7 +653,7 @@ internal static class LibSEIntegration
                 {
                     var hiSettings = new RemoveTextForHISettings(subtitle);
                     var hiLib = new RemoveTextForHI(hiSettings);
-                    var hiLanguage = LanguageAutoDetect.AutoDetectGoogleLanguage(subtitle);
+                    var hiLanguage = SubtitleLanguageDetector.Detect(subtitle);
                     var hiIndex = subtitle.Paragraphs.Count - 1;
                     while (hiIndex >= 0)
                     {
@@ -620,7 +671,9 @@ internal static class LibSEIntegration
 
             case "mergesametexts":
                 {
-                    var merged = MergeLinesSameTextUtils.MergeLinesWithSameTextInSubtitle(subtitle, true, 250);
+                    // 100 ms is the GUI default for "Merge lines with same text" (SeMergeSameText /
+                    // BatchConvertConfig); seconv used 250 and merged lines the dialog would not.
+                    var merged = MergeLinesSameTextUtils.MergeLinesWithSameTextInSubtitle(subtitle, true, 100);
                     if (merged.Paragraphs.Count != subtitle.Paragraphs.Count)
                     {
                         subtitle.Paragraphs.Clear();
@@ -631,7 +684,9 @@ internal static class LibSEIntegration
 
             case "mergesametimecodes":
                 {
-                    var merged = MergeLinesWithSameTimeCodes.Merge(subtitle, new List<int>(), out _, true, false, false, 1000, "en", new List<int>(), new Dictionary<int, bool>(), new Subtitle());
+                    // 250 ms is the GUI default for "Merge lines with same time codes". At 1000 ms
+                    // this merged cues a full second apart - not "same time codes" at all.
+                    var merged = MergeLinesWithSameTimeCodes.Merge(subtitle, new List<int>(), out _, true, false, false, 250, "en", new List<int>(), new Dictionary<int, bool>(), new Subtitle());
                     if (merged.Paragraphs.Count != subtitle.Paragraphs.Count)
                     {
                         subtitle.Paragraphs.Clear();
@@ -652,21 +707,18 @@ internal static class LibSEIntegration
                 break;
 
             case "splitlonglines":
-                try
                 {
+                    // No catch-all here: every sibling operation lets a failure surface, and
+                    // swallowing it left the CLI reporting success on a file it had not split.
                     var split = SplitLongLinesHelper.SplitLongLinesInSubtitle(subtitle, Configuration.Settings.General.SubtitleLineMaximumLength * 2, Configuration.Settings.General.SubtitleLineMaximumLength);
                     subtitle.Paragraphs.Clear();
                     subtitle.Paragraphs.AddRange(split.Paragraphs);
-                }
-                catch
-                {
-                    // ignore
                 }
                 break;
 
             case "balancelines":
                 {
-                    var balanceLanguage = LanguageAutoDetect.AutoDetectGoogleLanguage(subtitle);
+                    var balanceLanguage = SubtitleLanguageDetector.Detect(subtitle);
                     foreach (var p in subtitle.Paragraphs)
                     {
                         p.Text = Utilities.AutoBreakLine(p.Text, balanceLanguage, false);
@@ -676,7 +728,7 @@ internal static class LibSEIntegration
 
             case "redocasing":
                 {
-                    var casingLanguage = LanguageAutoDetect.AutoDetectGoogleLanguage(subtitle);
+                    var casingLanguage = SubtitleLanguageDetector.Detect(subtitle);
                     var fixCasing = new FixCasing(casingLanguage)
                     {
                         FixNormal = true,
@@ -727,7 +779,7 @@ internal static class LibSEIntegration
 
             case "convertcolorstodialog":
                 {
-                    var ctdLanguage = LanguageAutoDetect.AutoDetectGoogleLanguage(subtitle);
+                    var ctdLanguage = SubtitleLanguageDetector.Detect(subtitle);
                     ConvertColorsToDialogUtils.ConvertColorsToDialogInSubtitle(subtitle, true, false, false, false, false, ctdLanguage);
                 }
                 break;
@@ -789,8 +841,7 @@ internal static class LibSEIntegration
 
     /// <summary>
     /// Enforces a minimum gap of <paramref name="minMs"/> between consecutive paragraphs by pulling
-    /// the earlier end time backwards. Skips edits that would shrink a paragraph below the
-    /// configured minimum display duration.
+    /// the earlier end time backwards. Skips only edits that would leave no duration at all.
     /// </summary>
     public static void ApplyMinGap(Subtitle subtitle, int minMs)
     {
@@ -799,7 +850,6 @@ internal static class LibSEIntegration
             return;
         }
 
-        var minDisplayMs = Configuration.Settings.General.SubtitleMinimumDisplayMilliseconds;
         for (var i = 0; i < subtitle.Paragraphs.Count - 1; i++)
         {
             var current = subtitle.Paragraphs[i];
@@ -812,7 +862,11 @@ internal static class LibSEIntegration
 
             var newEndMs = next.StartTime.TotalMilliseconds - minMs;
             var newDuration = newEndMs - current.StartTime.TotalMilliseconds;
-            if (newDuration > minDisplayMs)
+
+            // Only a non-positive duration is skipped, like the Apply minimum gap dialog.
+            // Guarding on the minimum display duration instead (default 1000 ms) meant
+            // --apply-min-gap silently left the gap unapplied on every short line.
+            if (newDuration > 0)
             {
                 current.EndTime.TotalMilliseconds = newEndMs;
             }
@@ -826,9 +880,9 @@ internal static class LibSEIntegration
             return;
         }
 
-        var paragraphs = subtitle.Paragraphs.Skip(count).ToList();
-        subtitle.Paragraphs.Clear();
-        subtitle.Paragraphs.AddRange(paragraphs);
+        // RemoveRange in place: the copy-out/clear/copy-back shape allocated a second list of
+        // every surviving paragraph just to drop a handful from the front.
+        subtitle.Paragraphs.RemoveRange(0, Math.Min(count, subtitle.Paragraphs.Count));
         subtitle.Renumber();
     }
 
@@ -839,10 +893,8 @@ internal static class LibSEIntegration
             return;
         }
 
-        var keep = Math.Max(0, subtitle.Paragraphs.Count - count);
-        var paragraphs = subtitle.Paragraphs.Take(keep).ToList();
-        subtitle.Paragraphs.Clear();
-        subtitle.Paragraphs.AddRange(paragraphs);
+        var remove = Math.Min(count, subtitle.Paragraphs.Count);
+        subtitle.Paragraphs.RemoveRange(subtitle.Paragraphs.Count - remove, remove);
         subtitle.Renumber();
     }
 
@@ -1153,9 +1205,11 @@ internal static class LibSEIntegration
             "capmaker" or "capmakerplus" => CapMakerPlus.NameOfFormat,
             "ayato" => "Ayato",
             "bluraysup" or "blurayup" or "sup" => "Blu-ray sup",
+            "dvdsup" or "spdvdsup" => "DVD sup",
             "vobsub" => "VobSub",
             "bdnxml" or "bdn-xml" => "BDN-XML",
             "bdnxml8bit" or "bdn-xml8bit" or "bdnxml8-bit" or "bdn-xml8-bit" => "BDN-XML 8-bit",
+            "imscimage" or "imsc-image" => "IMSC image",
             "dost" or "dostimage" => "DOST/image",
             "fcp" or "fcpimage" => "FCP/image",
             "dcinemainterop" or "dcinema-interop" => "D-Cinema interop/png",

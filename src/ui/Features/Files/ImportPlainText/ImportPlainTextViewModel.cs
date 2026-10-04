@@ -13,6 +13,7 @@ using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
 using Nikse.SubtitleEdit.Logic.Media;
 using System;
+using System.Diagnostics;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
@@ -47,6 +48,10 @@ public partial class ImportPlainTextViewModel : ObservableObject, IClosingCleanu
     private readonly IFileHelper _fileHelper;
     private readonly IWindowService _windowService;
     private static readonly string[] TextFileExtensions = { ".txt", ".rtf" };
+
+    // What Se.Settings.Tools.ImportTextSplitting stores - a stable token per SplitAtOptions entry,
+    // in the same order, so the remembered choice does not depend on the UI language.
+    private static readonly string[] SplitAtOptionKeys = { "auto", "blankLines", "oneLineIsOneSubtitle", "twoLinesAreOneSubtitle" };
     private static readonly List<string> TextFilePatterns = TextFileExtensions.Select(e => "*" + e).ToList();
     private bool _dirty;
     private TaskCompletionSource? _previewFlushed;
@@ -66,11 +71,15 @@ public partial class ImportPlainTextViewModel : ObservableObject, IClosingCleanu
             Se.Language.File.Import.OneLineIsOneSubtitle,
             Se.Language.File.Import.TwoLinesAreOneSubtitle,
         };
-        SelectedSplitAtOption = SplitAtOptions[0];
+        var splitIndex = Array.IndexOf(SplitAtOptionKeys, Se.Settings.Tools.ImportTextSplitting);
+        SelectedSplitAtOption = SplitAtOptions[splitIndex > 0 && splitIndex < SplitAtOptions.Count ? splitIndex : 0];
         PlainText = string.Empty;
         MinGapMs = Se.Settings.General.MinimumBetweenLines.GetMilliseconds();
         AlignProgress = string.Empty;
-        FixedDurationMs = (int)Math.Round(Se.Settings.Tools.AdjustDurations.AdjustDurationFixed * 1000.0, MidpointRounding.AwayFromZero);
+        UseFixedDuration = !Se.Settings.Tools.ImportTextDurationAuto;
+        FixedDurationMs = Se.Settings.Tools.ImportTextFixedDuration > 0
+            ? Se.Settings.Tools.ImportTextFixedDuration
+            : (int)Math.Round(Se.Settings.Tools.AdjustDurations.AdjustDurationFixed * 1000.0, MidpointRounding.AwayFromZero);
 
         _timerUpdatePreview = new Timer();
         _timerUpdatePreview.Interval = 250;
@@ -259,6 +268,17 @@ public partial class ImportPlainTextViewModel : ObservableObject, IClosingCleanu
     [RelayCommand]
     private void Ok()
     {
+        // Remember what was picked - reopening the dialog used to come back at "Auto" and the
+        // global default duration every time, while Settings.json carried a dozen SE4-shaped
+        // import keys that nothing read.
+        var splitIndex = SplitAtOptions.IndexOf(SelectedSplitAtOption);
+        Se.Settings.Tools.ImportTextSplitting = splitIndex >= 0 && splitIndex < SplitAtOptionKeys.Length
+            ? SplitAtOptionKeys[splitIndex]
+            : SplitAtOptionKeys[0];
+        Se.Settings.Tools.ImportTextDurationAuto = !UseFixedDuration;
+        Se.Settings.Tools.ImportTextFixedDuration = FixedDurationMs;
+        Se.SaveSettings();
+
         OkPressed = true;
         Close();
     }
@@ -368,10 +388,94 @@ public partial class ImportPlainTextViewModel : ObservableObject, IClosingCleanu
             return;
         }
 
-        await RunForcedAlignerAsync(setupVm.ExecutablePath, setupVm.AlignerModelPath);
+        await RunForcedAlignerAsync(setupVm.ExecutablePath, setupVm.AlignerModelPath, setupVm.EndsFromIsolatedSpeech);
     }
 
-    private async Task RunForcedAlignerAsync(string executable, string alignerPath)
+    /// <summary>
+    /// Separates the speech from the extracted audio and measures how loud it is over time, for
+    /// the end times. Not having it is not an error - the alignment then ends lines by reading
+    /// time, exactly as it does with the option off.
+    /// </summary>
+    private Process? _isolateSpeechProcess;
+    private volatile bool _windowClosing;
+
+    private async Task<SpeechEnvelope?> IsolateSpeechEnvelopeAsync(string executable, string audioFileName, string workFolder)
+    {
+        try
+        {
+            var modelFileName = new CrispAsrParakeet().GetModelForCmdLine(SpeechIsolationModel.FileName);
+            var arguments = SpeechIsolationModel.BuildSeparateArguments(modelFileName, audioFileName, workFolder);
+            Se.WriteToolsLog($"{executable} {arguments}");
+
+            using var process = new Process
+            {
+                StartInfo = new ProcessStartInfo(executable, arguments)
+                {
+                    WorkingDirectory = Path.GetDirectoryName(executable) ?? string.Empty,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                }
+            };
+
+            // The separator's per-chunk lines are its only progress (#15176) - the GPU path
+            // prints none, so the elapsed time stays as the one thing always shown.
+            var progress = new SpeechIsolationProgress(SpeechIsolationProgress.GetChunkCountFromWaveFile(audioFileName));
+            DataReceivedEventHandler onLine = (_, args) => progress.TryUpdate(args.Data);
+            process.OutputDataReceived += onLine;
+            process.ErrorDataReceived += onLine;
+
+#pragma warning disable CA1416
+            process.Start();
+#pragma warning restore CA1416
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+            _isolateSpeechProcess = process;
+
+            var stopwatch = Stopwatch.StartNew();
+            while (!process.HasExited)
+            {
+                var elapsed = new TimeCode(stopwatch.ElapsedMilliseconds).ToShortDisplayString();
+                AlignProgress = string.Format(
+                    Se.Language.File.Import.ForcedAlignerIsolatingSpeech,
+                    progress.Percent is { } percent ? $"{elapsed} - {percent}%" : elapsed);
+                await Task.Delay(250);
+            }
+
+            _isolateSpeechProcess = null;
+            if (_windowClosing)
+            {
+                return null;
+            }
+
+            var stemFileName = SpeechIsolationModel.GetSpeechStemFileName(audioFileName, workFolder);
+            if (process.ExitCode == 0 && File.Exists(stemFileName))
+            {
+                var envelope = await Task.Run(() => SpeechEnvelope.FromWaveFile(stemFileName));
+
+                // Over a gigabyte for a feature film - not something to keep until the work
+                // folder is removed at the end of the alignment.
+                File.Delete(stemFileName);
+                if (envelope != null)
+                {
+                    return envelope;
+                }
+            }
+
+            Se.WriteToolsLog($"Forced aligner: speech isolation failed (exit code {process.ExitCode})", true);
+        }
+        catch (Exception exception)
+        {
+            Se.LogError(exception, "Forced aligner: speech isolation failed");
+        }
+
+        AlignProgress = Se.Language.File.Import.ForcedAlignerIsolatingSpeechFailed;
+        await Task.Delay(1500);
+        return null;
+    }
+
+    private async Task RunForcedAlignerAsync(string executable, string alignerPath, bool endsFromIsolatedSpeech)
     {
         var workFolder = Path.Combine(Path.GetTempPath(), "se-forced-align-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workFolder);
@@ -409,7 +513,10 @@ public partial class ImportPlainTextViewModel : ObservableObject, IClosingCleanu
             var lines = Subtitles.ToList();
             using var audio = new FfmpegWindowAudioSource(GetFfmpegPath(), audioFileName, totalSeconds, workFolder);
             var runner = new CrispAsrAlignOnlyRunner(executable, alignerPath, Se.WriteToolsLog);
-            var forcedAligner = new ForcedAligner(runner, audio);
+            var speechEnvelope = endsFromIsolatedSpeech
+                ? await IsolateSpeechEnvelopeAsync(executable, audioFileName, workFolder)
+                : null;
+            var forcedAligner = new ForcedAligner(runner, audio, speechEnvelope: speechEnvelope);
 
             var progress = new Progress<ForcedAligner.Progress>(p => Dispatcher.UIThread.Post(() =>
             {
@@ -468,9 +575,10 @@ public partial class ImportPlainTextViewModel : ObservableObject, IClosingCleanu
 
     private async Task<bool> ExtractAudioForAlignmentAsync(string audioFileName)
     {
-        // 16 kHz mono PCM - what every CTC aligner expects.
+        // 16 kHz mono PCM - what every CTC aligner expects. "aresample=async=1:first_pts=0" keeps
+        // gaps in the audio timestamps as silence, or the aligned times after a gap come out early (#15385).
         var arguments =
-            $"-hide_banner -nostats -y -i \"{_videoFileName}\" -vn -ar 16000 -ac 1 -acodec pcm_s16le \"{audioFileName}\"";
+            $"-hide_banner -nostats -y -i \"{_videoFileName}\" -vn -af aresample=async=1:first_pts=0 -ar 16000 -ac 1 -acodec pcm_s16le \"{audioFileName}\"";
 
         using var process = new System.Diagnostics.Process
         {
@@ -599,6 +707,23 @@ public partial class ImportPlainTextViewModel : ObservableObject, IClosingCleanu
     public void OnClosingCleanup()
     {
         _timerUpdatePreview.StopAndDispose(TimerUpdatePreviewElapsed);
+
+        // The separation runs for minutes; nothing waits for it once the window is gone.
+        _windowClosing = true;
+        try
+        {
+            var process = _isolateSpeechProcess;
+            if (process != null && !process.HasExited)
+            {
+#pragma warning disable CA1416
+                process.Kill(true);
+#pragma warning restore CA1416
+            }
+        }
+        catch
+        {
+            // already gone or disposed
+        }
     }
 
     internal void KeyDown(object? sender, KeyEventArgs e)
@@ -679,6 +804,25 @@ public partial class ImportPlainTextViewModel : ObservableObject, IClosingCleanu
     internal void Initialize(Subtitle subtitle, string? videoFileName)
     {
         _videoFileName = videoFileName ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Opens the dialog with the text of a file the main window could not parse as a subtitle
+    /// (the "Import plain text" button on the unknown-format prompt, issue #14605).
+    /// </summary>
+    internal void Initialize(Subtitle subtitle, string? videoFileName, string plainTextFileName)
+    {
+        Initialize(subtitle, videoFileName);
+
+        try
+        {
+            PlainText = FileUtil.ReadAllTextShared(plainTextFileName, LanguageAutoDetect.GetEncodingFromFile(plainTextFileName));
+            MarkDirty();
+        }
+        catch
+        {
+            // unreadable file - the user can still pick another one from the dialog
+        }
     }
 
     internal void GapChanged(object? sender, NumericUpDownValueChangedEventArgs e)

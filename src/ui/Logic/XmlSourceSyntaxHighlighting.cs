@@ -10,11 +10,22 @@ namespace Nikse.SubtitleEdit.Logic;
 /// </summary>
 public class XmlSourceSyntaxHighlighting : ISourceSyntaxHighlighter, ISourceSyntaxDocumentFormatter
 {
-    // Color scheme
-    private static readonly Color XmlTagColor = Color.Parse("#569CD6");
-    private static readonly Color XmlAttributeColor = Color.Parse("#9CDCFE");
-    private static readonly Color XmlValueColor = Color.Parse("#CE9178");
-    private static readonly Color CommentColor = Color.Parse("#6A9955");
+    // Color scheme - the dark set is the VS Code dark palette, which is washed out on white, so
+    // light mode gets the same hues a few shades darker (#14457).
+    private static readonly Color XmlTagColorDark = Color.Parse("#569CD6");
+    private static readonly Color XmlTagColorLight = Color.Parse("#1565C0");
+    private static readonly Color XmlAttributeColorDark = Color.Parse("#9CDCFE");
+    private static readonly Color XmlAttributeColorLight = Color.Parse("#006C9B");
+    private static readonly Color XmlValueColorDark = Color.Parse("#CE9178");
+    private static readonly Color XmlValueColorLight = Color.Parse("#A0522D");
+    private static readonly Color CommentColorDark = Color.Parse("#6A9955");
+    private static readonly Color CommentColorLight = Color.Parse("#2E7D32");
+
+    // Resolved per use so a theme switch is picked up
+    private static Color XmlTagColor => UiTheme.IsDarkThemeEnabled() ? XmlTagColorDark : XmlTagColorLight;
+    private static Color XmlAttributeColor => UiTheme.IsDarkThemeEnabled() ? XmlAttributeColorDark : XmlAttributeColorLight;
+    private static Color XmlValueColor => UiTheme.IsDarkThemeEnabled() ? XmlValueColorDark : XmlValueColorLight;
+    private static Color CommentColor => UiTheme.IsDarkThemeEnabled() ? CommentColorDark : CommentColorLight;
 
     /// <summary>
     /// Reflows XML that arrives (almost) all on one line - unreadable to scroll through, and slow
@@ -99,7 +110,10 @@ public class XmlSourceSyntaxHighlighting : ISourceSyntaxHighlighter, ISourceSynt
                 sb.Append(c);
                 if (c == '-' && i + 2 < xml.Length && xml[i + 1] == '-' && xml[i + 2] == '>')
                 {
-                    sb.Append("-->");
+                    // sb.Append(c) above already emitted the first '-', so only the remaining
+                    // two characters belong here - appending "-->" turned every comment's
+                    // terminator into "--->".
+                    sb.Append("->");
                     i += 3;
                     inComment = false;
                     afterCloseTag = true;
@@ -172,9 +186,11 @@ public class XmlSourceSyntaxHighlighting : ISourceSyntaxHighlighter, ISourceSynt
 
                 afterCloseTag = true;
             }
-            else if (!inTag && char.IsWhiteSpace(c))
+            else if (!inTag && afterCloseTag && char.IsWhiteSpace(c))
             {
-                // Skip whitespace between tags
+                // Skip whitespace BETWEEN tags only. afterCloseTag is cleared as soon as real
+                // character data is emitted, so without it this also ate the spaces inside text -
+                // "<p>Hello world</p>" was previewed as "<p>Helloworld</p>".
                 i++;
                 continue;
             }
@@ -206,17 +222,11 @@ public class XmlSourceSyntaxHighlighting : ISourceSyntaxHighlighter, ISourceSynt
             if (c == '<' && i + 3 < len && lineText[i + 1] == '!' && lineText[i + 2] == '-' && lineText[i + 3] == '-')
             {
                 int start = i;
-                i += 4;
+                var close = lineText.IndexOf("-->", i + 4, StringComparison.Ordinal);
 
-                while (i < len - 2)
-                {
-                    if (lineText[i] == '-' && lineText[i + 1] == '-' && lineText[i + 2] == '>')
-                    {
-                        i += 3;
-                        break;
-                    }
-                    i++;
-                }
+                // An unclosed comment runs to the end of the line - stopping the scan two short of
+                // it left the last two characters uncolored.
+                i = close >= 0 ? close + 3 : len;
 
                 styler.Apply(start, i - start, CommentColor);
                 continue;

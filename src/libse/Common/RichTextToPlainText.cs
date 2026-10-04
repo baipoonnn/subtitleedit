@@ -31,7 +31,14 @@ namespace Nikse.SubtitleEdit.Core.Common
             }
         }
 
-        private static readonly Regex RtfRegex = new Regex(@"\\([a-z]{1,32})(-?\d{1,10})?[ ]?|\\'([0-9a-f]{2})|\\([^a-z])|([{}])|[\r\n]+|(.)", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+        // The tokenizer below reads what this regex used to match, one token at a time:
+        //   \\([a-z]{1,32})(-?\d{1,10})?[ ]?|\\'([0-9a-f]{2})|\\([^a-z])|([{}])|[\r\n]+|(.)
+        // with Singleline | IgnoreCase. MatchCollection made one Match object per character of
+        // the document and kept them all alive until the loop ended (a 5 MB RTF took ~7 s just
+        // to be rejected by the RTF formats). Case-insensitive [a-z] also matches a few
+        // non-ASCII letters depending on the culture (U+0130 and U+212A in most), so those are
+        // asked of a regex built with the same options.
+        private static readonly Regex NonAsciiRtfLetter = new Regex("^[a-z]$", RegexOptions.Singleline | RegexOptions.IgnoreCase);
 
         // A set, not a list: ConvertToText probes this once per RTF control word, and an RTF
         // document has thousands of them - a linear scan of ~250 entries per word was the bulk
@@ -117,124 +124,204 @@ namespace Nikse.SubtitleEdit.Core.Common
                 return NativeRtfTextConverter.RtfToText(inputRtf);
             }
 
+            // Opening a file asks every format whether it is theirs, and ~20 RTF based formats
+            // each convert the same document (often twice: IsMine + LoadSubtitle) - a 1.3 MB RTF
+            // took 13 s to open. The conversion is deterministic, so reuse the last result.
+            var cached = _lastConversion;
+            if (cached != null && string.Equals(cached.Item1, inputRtf, StringComparison.Ordinal))
+            {
+                return cached.Item2;
+            }
+
+            var result = ConvertToTextUncached(inputRtf);
+            _lastConversion = Tuple.Create(inputRtf, result);
+            return result;
+        }
+
+        private static volatile Tuple<string, string> _lastConversion;
+
+        private static string ConvertToTextUncached(string inputRtf)
+        {
             var stack = new Stack<StackEntry>();
             bool ignorable = false;              // Whether this group (and all inside it) are "ignorable".
             int ucskip = 1;                      // Number of ASCII characters to skip after a unicode character.
             int curskip = 0;                     // Number of ASCII characters left to skip
             var outText = new StringBuilder(inputRtf.Length); // Output buffer.
-
-            MatchCollection matches = RtfRegex.Matches(inputRtf);
-
-            // The regex's last alternative is "(.)", so every plain character of the document is
-            // its own match. Reading all six group values up front therefore allocated six
-            // substrings per character of the RTF, and collecting the output as a List<string>
-            // added one more per character plus an array copy for the final Join. Take a group's
-            // value only in the branch that actually needs it, and append to a StringBuilder.
-            foreach (Match match in matches)
+            var length = inputRtf.Length;
+            var i = 0;
+            while (i < length)
             {
-                var brace = match.Groups[5];
-                var character = match.Groups[4];
-                var word = match.Groups[1];
-                var hex = match.Groups[3];
-                var tchar = match.Groups[6];
+                var ch = inputRtf[i];
+                if (ch == '\\' && i + 1 < length)
+                {
+                    var next = inputRtf[i + 1];
+                    if (IsRtfLetter(next)) // \foo, with an optional numeric parameter and one optional space
+                    {
+                        var wordStart = i + 1;
+                        var wordEnd = wordStart + 1;
+                        while (wordEnd < length && wordEnd - wordStart < 32 && IsRtfLetter(inputRtf[wordEnd]))
+                        {
+                            wordEnd++;
+                        }
 
-                if (brace.Length > 0)
-                {
-                    curskip = 0;
-                    if (inputRtf[brace.Index] == '{')
-                    {
-                        // Push state
-                        stack.Push(new StackEntry(ucskip, ignorable));
+                        var end = wordEnd;
+                        var parameterEnd = wordEnd;
+                        var digitsStart = end < length && inputRtf[end] == '-' ? end + 1 : end;
+                        var digitsEnd = digitsStart;
+                        while (digitsEnd < length && digitsEnd - digitsStart < 10 && char.IsDigit(inputRtf[digitsEnd]))
+                        {
+                            digitsEnd++;
+                        }
+
+                        if (digitsEnd > digitsStart)
+                        {
+                            parameterEnd = digitsEnd;
+                            end = digitsEnd;
+                        }
+
+                        if (end < length && inputRtf[end] == ' ')
+                        {
+                            end++;
+                        }
+
+                        i = end;
+                        curskip = 0;
+                        var wordValue = inputRtf.Substring(wordStart, wordEnd - wordStart);
+                        if (Destinations.Contains(wordValue))
+                        {
+                            ignorable = true;
+                        }
+                        else if (ignorable)
+                        {
+                        }
+                        else if (SpecialCharacters.TryGetValue(wordValue, out var special))
+                        {
+                            outText.Append(special);
+                        }
+                        else if (wordValue == "uc")
+                        {
+                            ucskip = int.Parse(inputRtf.Substring(wordEnd, parameterEnd - wordEnd));
+                        }
+                        else if (wordValue == "u")
+                        {
+                            int c = int.Parse(inputRtf.Substring(wordEnd, parameterEnd - wordEnd));
+                            if (c < 0)
+                            {
+                                c += 0x10000;
+                            }
+                            outText.Append(char.ConvertFromUtf32(c));
+                            curskip = ucskip;
+                        }
+
+                        continue;
                     }
-                    else
+
+                    if (next == '\'' && i + 3 < length && IsHexDigit(inputRtf[i + 2]) && IsHexDigit(inputRtf[i + 3])) // \'xx
                     {
-                        // Pop state
-                        StackEntry entry = stack.Pop();
-                        ucskip = entry.NumberOfCharactersToSkip;
-                        ignorable = entry.Ignorable;
+                        if (curskip > 0)
+                        {
+                            curskip -= 1;
+                        }
+                        else if (!ignorable)
+                        {
+                            int c = (HexDigit(inputRtf[i + 2]) << 4) | HexDigit(inputRtf[i + 3]);
+                            outText.Append(char.ConvertFromUtf32(c));
+                        }
+
+                        i += 4;
+                        continue;
                     }
-                }
-                else if (character.Length > 0) // \x (not a letter)
-                {
+
+                    // \x (not a letter)
                     curskip = 0;
-                    var c = inputRtf[character.Index];
-                    if (c == '~')
+                    if (next == '~')
                     {
                         if (!ignorable)
                         {
                             outText.Append('\xA0');
                         }
                     }
-                    else if (c == '{' || c == '}' || c == '\\')
+                    else if (next == '{' || next == '}' || next == '\\')
                     {
                         if (!ignorable)
                         {
-                            outText.Append(c);
+                            outText.Append(next);
                         }
                     }
-                    else if (c == '*')
+                    else if (next == '*')
                     {
                         ignorable = true;
                     }
+
+                    i += 2;
+                    continue;
                 }
-                else if (word.Length > 0) // \foo
+
+                if (ch == '{' || ch == '}')
                 {
                     curskip = 0;
-                    var wordValue = word.Value;
-                    if (Destinations.Contains(wordValue))
+                    if (ch == '{')
                     {
-                        ignorable = true;
+                        // Push state
+                        stack.Push(new StackEntry(ucskip, ignorable));
                     }
-                    else if (ignorable)
+                    else if (stack.Count > 0)
                     {
+                        // Pop state
+                        StackEntry entry = stack.Pop();
+                        ucskip = entry.NumberOfCharactersToSkip;
+                        ignorable = entry.Ignorable;
                     }
-                    else if (SpecialCharacters.TryGetValue(wordValue, out var special))
-                    {
-                        outText.Append(special);
-                    }
-                    else if (wordValue == "uc")
-                    {
-                        ucskip = int.Parse(match.Groups[2].Value);
-                    }
-                    else if (wordValue == "u")
-                    {
-                        int c = int.Parse(match.Groups[2].Value);
-                        if (c < 0)
-                        {
-                            c += 0x10000;
-                        }
-                        outText.Append(char.ConvertFromUtf32(c));
-                        curskip = ucskip;
-                    }
+
+                    // else: a '}' with no matching '{'. Popping an empty stack threw
+                    // InvalidOperationException, and because ~20 readers run their input through
+                    // FromRtf(), a single unbalanced brace anywhere aborted format detection for
+                    // the whole file instead of reporting an unknown format. Ignore the brace.
+                    i++;
+                    continue;
                 }
-                else if (hex.Length > 0) // \'xx
+
+                if (ch == '\r' || ch == '\n')
                 {
-                    if (curskip > 0)
+                    // line breaks in the RTF source are not text
+                    while (i < length && (inputRtf[i] == '\r' || inputRtf[i] == '\n'))
                     {
-                        curskip -= 1;
+                        i++;
                     }
-                    else if (!ignorable)
-                    {
-                        // The group is exactly two hex digits, so read them straight out of the
-                        // input - int.Parse would need a substring per escape.
-                        int c = (HexDigit(inputRtf[hex.Index]) << 4) | HexDigit(inputRtf[hex.Index + 1]);
-                        outText.Append(char.ConvertFromUtf32(c));
-                    }
+
+                    continue;
                 }
-                else if (tchar.Length > 0)
+
+                // any other character (also a lone backslash at the very end) is text
+                if (curskip > 0)
                 {
-                    if (curskip > 0)
-                    {
-                        curskip -= 1;
-                    }
-                    else if (!ignorable)
-                    {
-                        outText.Append(inputRtf, tchar.Index, tchar.Length);
-                    }
+                    curskip -= 1;
                 }
+                else if (!ignorable)
+                {
+                    outText.Append(ch);
+                }
+
+                i++;
             }
 
             return outText.ToString();
+        }
+
+        private static bool IsRtfLetter(char c)
+        {
+            if (c < 128)
+            {
+                var lower = c | 0x20;
+                return lower >= 'a' && lower <= 'z';
+            }
+
+            return NonAsciiRtfLetter.IsMatch(c.ToString());
+        }
+
+        private static bool IsHexDigit(char c)
+        {
+            return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
         }
 
         /// <summary>Value of a single hex digit; the regex only ever matches [0-9a-f], either case.</summary>

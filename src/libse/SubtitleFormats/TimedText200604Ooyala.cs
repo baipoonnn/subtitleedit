@@ -17,9 +17,7 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
 
         public override bool IsMine(List<string> lines, string fileName)
         {
-            var sb = new StringBuilder();
-            lines.ForEach(line => sb.AppendLine(line));
-            var xmlAsString = sb.ToString().Replace("http://www.w3.org/2006/04/ttaf1#styling\"xml:lang", "http://www.w3.org/2006/04/ttaf1#styling\" xml:lang").Trim();
+            var xmlAsString = JoinLines(lines).Replace("http://www.w3.org/2006/04/ttaf1#styling\"xml:lang", "http://www.w3.org/2006/04/ttaf1#styling\" xml:lang").Trim();
 
             if (xmlAsString.Contains("http://www.w3.org/2006/10"))
             {
@@ -161,10 +159,8 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
         {
             _errorCount = 0;
 
-            var sb = new StringBuilder();
-            lines.ForEach(line => sb.AppendLine(line));
             var xml = new XmlDocument { XmlResolver = null };
-            xml.LoadXml(sb.ToString().RemoveControlCharactersButWhiteSpace().Trim().Replace("http://www.w3.org/2006/04/ttaf1#styling\"xml:lang", "http://www.w3.org/2006/04/ttaf1#styling\" xml:lang"));
+            xml.LoadXml(JoinLines(lines).RemoveControlCharactersButWhiteSpace().Trim().Replace("http://www.w3.org/2006/04/ttaf1#styling\"xml:lang", "http://www.w3.org/2006/04/ttaf1#styling\" xml:lang"));
 
             var nsmgr = new XmlNamespaceManager(xml.NameTable);
             nsmgr.AddNamespace("ttaf1", xml.DocumentElement.NamespaceURI);
@@ -245,22 +241,10 @@ namespace Nikse.SubtitleEdit.Core.SubtitleFormats
                     _errorCount++;
                 }
             }
-            bool allBelow100 = true;
+            // See TimedText200604: the "all ms < 100 -> x10" pass only corrupted correct times.
             foreach (Paragraph p in subtitle.Paragraphs)
             {
                 p.Text = Utilities.RemoveUnneededSpaces(p.Text, null).Replace(Environment.NewLine + Environment.NewLine, Environment.NewLine);
-                if (p.StartTime.Milliseconds >= 100 || p.EndTime.Milliseconds >= 100)
-                {
-                    allBelow100 = false;
-                }
-            }
-            if (allBelow100)
-            {
-                foreach (Paragraph p in subtitle.Paragraphs)
-                {
-                    p.StartTime.Milliseconds *= 10;
-                    p.EndTime.Milliseconds *= 10;
-                }
             }
             subtitle.Renumber();
         }

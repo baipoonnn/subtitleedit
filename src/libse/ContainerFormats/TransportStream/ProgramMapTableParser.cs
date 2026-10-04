@@ -128,6 +128,25 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.TransportStream
         }
 
         /// <summary>
+        /// Get stream_type per elementary PID
+        /// </summary>
+        public Dictionary<int, int> GetStreamTypes()
+        {
+            var result = new Dictionary<int, int>();
+            foreach (var programMapTable in _programMapTables)
+            {
+                foreach (var stream in programMapTable.Streams)
+                {
+                    if (!result.ContainsKey(stream.ElementaryPid))
+                    {
+                        result.Add(stream.ElementaryPid, stream.StreamType);
+                    }
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
         /// Get data_component_id per elementary PID from ARIB data_component_descriptors (tag 0xFD) -
         /// identifies ISDB caption streams: 0x0008 = ARIB profile A captions, 0x0012 = profile C (one-seg)
         /// </summary>
@@ -148,6 +167,106 @@ namespace Nikse.SubtitleEdit.Core.ContainerFormats.TransportStream
                 }
             }
             return result;
+        }
+
+        /// <summary>
+        /// Video PID of the program that carries the elementary stream <paramref name="packetId"/> -
+        /// in a multi-program stream (e.g. a whole DVB-T mux) every program has its own clock, so a
+        /// subtitle's times must be taken relative to its own program's video.
+        /// </summary>
+        /// <returns>The video PID, or the program's PCR PID if no video stream is listed, or null
+        /// if no program map table lists the stream</returns>
+        public int? GetProgramVideoPacketId(int packetId)
+        {
+            var programMapTable = GetProgramMapTable(packetId);
+            if (programMapTable == null)
+            {
+                return null;
+            }
+
+            foreach (var stream in programMapTable.Streams)
+            {
+                if (IsVideoStreamType(stream.StreamType))
+                {
+                    return stream.ElementaryPid;
+                }
+            }
+
+            return programMapTable.PcrId;
+        }
+
+        /// <summary>
+        /// PCR PID of the program that carries the elementary stream <paramref name="packetId"/>.
+        /// </summary>
+        public int? GetProgramClockReferencePacketId(int packetId)
+        {
+            return GetProgramMapTable(packetId)?.PcrId;
+        }
+
+        private ProgramMapTable GetProgramMapTable(int packetId)
+        {
+            foreach (var programMapTable in _programMapTables)
+            {
+                foreach (var stream in programMapTable.Streams)
+                {
+                    if (stream.ElementaryPid == packetId)
+                    {
+                        return programMapTable;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        public static bool IsVideoStreamType(int streamType)
+        {
+            switch (streamType)
+            {
+                case 0x01: // MPEG-1 video
+                case 0x02: // MPEG-2 video
+                case 0x10: // MPEG-4 part 2 video
+                case 0x1B: // H.264
+                case 0x20: // H.264 MVC sub-bitstream
+                case 0x24: // H.265
+                case 0x33: // H.266
+                case 0x42: // AVS
+                case 0xD1: // Dirac
+                case 0xEA: // VC-1
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// Audio stream types of MPEG-TS/ATSC and Blu-ray. 0x06 (private data, DVB AC-3 and the
+        /// like) needs its descriptors or payload to tell, and 0x82 is DTS on Blu-ray but SCTE 27
+        /// subtitles in ATSC, so a caller must rule out subtitle PIDs.
+        /// </summary>
+        public static bool IsAudioStreamType(int streamType)
+        {
+            switch (streamType)
+            {
+                case 0x03: // MPEG-1 audio
+                case 0x04: // MPEG-2 audio
+                case 0x0F: // AAC (ADTS)
+                case 0x11: // AAC (LATM)
+                case 0x1C: // MPEG-4 audio
+                case 0x80: // Blu-ray LPCM
+                case 0x81: // AC-3
+                case 0x82: // DTS (Blu-ray)
+                case 0x83: // Dolby TrueHD
+                case 0x84: // E-AC-3 (Blu-ray)
+                case 0x85: // DTS-HD
+                case 0x86: // DTS-HD MA
+                case 0x87: // E-AC-3 (ATSC)
+                case 0xA1: // E-AC-3 secondary audio
+                case 0xA2: // DTS-HD secondary audio
+                    return true;
+                default:
+                    return false;
+            }
         }
 
         public string GetSubtitleLanguage(int packetId)

@@ -26,25 +26,6 @@ internal static class SubtitleGridCopyPasteHelper
         await ClipboardHelper.SetTextAsync(window, text);
     }
 
-    internal static async Task Cut(Window window, ObservableCollection<SubtitleLineViewModel> subtitles, List<SubtitleLineViewModel> selectedItems, SubtitleFormat subtitleFormat, Subtitle sourceSubtitle)
-    {
-        var subtitle = new Subtitle();
-        subtitle.Header = sourceSubtitle.Header;
-        subtitle.Footer = sourceSubtitle.Footer;
-        foreach (var item in selectedItems)
-        {
-            subtitle.Paragraphs.Add(item.ToParagraph(subtitleFormat));
-        }
-
-        var text = GetClipboardText(subtitleFormat, subtitle);
-        await ClipboardHelper.SetTextAsync(window, text);
-
-        foreach (var item in selectedItems)
-        {
-            subtitles.Remove(item);
-        }
-    }
-
     // When copying ASSA/SSA lines, only the event lines ("Dialogue:"/"Comment:") belong on the
     // clipboard: Aegisub's paste interprets every other clipboard line (the [Script Info] /
     // [V4+ Styles] file header) as a plain-text subtitle line, so the file headers would be
@@ -98,12 +79,54 @@ internal static class SubtitleGridCopyPasteHelper
         return text;
     }
 
-    internal static async Task Paste(Window window, ObservableCollection<SubtitleLineViewModel> subtitles, int index, SubtitleFormat subtitleFormat)
+    /// <summary>
+    /// Parses clipboard text as a subtitle, or returns null when no format recognizes it - plain
+    /// text lines (translations copied out of a text document) end up here. Both the paste that
+    /// inserts lines and the paste that overwrites the selection have to tell those two apart, so
+    /// they ask the same question here (#13682).
+    /// </summary>
+    internal static Subtitle? ParseClipboardSubtitle(string? text, SubtitleFormat subtitleFormat)
     {
-        var text = await ClipboardHelper.GetTextAsync(window);
         if (string.IsNullOrEmpty(text))
         {
-            return;
+            return null;
+        }
+
+        var lines = text.SplitToLines();
+        var subtitle = Subtitle.Parse(lines, subtitleFormat.Extension);
+        if (subtitle == null)
+        {
+            return null;
+        }
+
+        if (subtitle.Paragraphs.Count > 0)
+        {
+            return subtitle;
+        }
+
+        foreach (SubtitleFormat item in SubtitleFormat.AllSubtitleFormats)
+        {
+            if (item.IsMine(lines, string.Empty))
+            {
+                item.LoadSubtitle(subtitle, lines, string.Empty);
+                subtitle.OriginalFormat = item;
+                return subtitle;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Pastes <paramref name="text"/> into <paramref name="subtitles"/> at <paramref name="index"/>
+    /// and returns the inserted lines in grid order (empty when nothing was pasted), so the caller
+    /// can select and scroll to them like SE4 did (#13705).
+    /// </summary>
+    internal static List<SubtitleLineViewModel> PasteText(ObservableCollection<SubtitleLineViewModel> subtitles, int index, SubtitleFormat subtitleFormat, string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return new List<SubtitleLineViewModel>();
         }
 
         var addTimeMilliseconds = (double)0;
@@ -120,25 +143,16 @@ internal static class SubtitleGridCopyPasteHelper
         }
 
 
-        var lines = text.SplitToLines();
-        var subtitle = Subtitle.Parse(lines, subtitleFormat.Extension);
-        if (subtitle?.Paragraphs.Count > 0)
+        var clipboardSubtitle = ParseClipboardSubtitle(text, subtitleFormat);
+        if (clipboardSubtitle != null)
         {
-            LoadParagraphs(subtitles, index, subtitleFormat, subtitle);
-            return;
-        }
-
-        foreach (SubtitleFormat item in SubtitleFormat.AllSubtitleFormats)
-        {
-            if (item.IsMine(lines, string.Empty) && subtitle != null)
-            {
-                item.LoadSubtitle(subtitle, lines, string.Empty);
-                LoadParagraphs(subtitles, index, subtitleFormat, subtitle);
-                return;
-            }
+            ShiftToAvoidOverlap(subtitles, index, subtitleFormat, clipboardSubtitle);
+            return LoadParagraphs(subtitles, index, subtitleFormat, clipboardSubtitle);
         }
 
         // fallback - plain text
+        var lines = text.SplitToLines();
+        var insertedLines = new List<SubtitleLineViewModel>();
         foreach (var line in lines)
         {
             if (!string.IsNullOrWhiteSpace(line))
@@ -150,18 +164,68 @@ internal static class SubtitleGridCopyPasteHelper
                     Text = line.Trim()
                 };
                 subtitles.Insert(index, p);
+                insertedLines.Add(p);
                 index++;
                 addTimeMilliseconds += Se.Settings.General.NewEmptyDefaultMs + Se.Settings.General.MinimumBetweenLines.GetMilliseconds();
             }
         }
+
+        return insertedLines;
     }
 
-    private static void LoadParagraphs(ObservableCollection<SubtitleLineViewModel> subtitles, int index, SubtitleFormat subtitleFormat, Subtitle subtitle)
+    /// <summary>
+    /// Moves the pasted block in time so it does not overlap the line it is pasted below, the way
+    /// SE4's Ctrl+V did: copying a line and pasting it must produce a line that starts after the
+    /// selected one, not a duplicate on top of it (#14667). The whole block is shifted by one delta
+    /// computed from its first paragraph, so the spacing inside the block is kept - and only when
+    /// it would actually overlap; time codes that already fit are left alone, so pasting lines
+    /// that were copied from elsewhere in the same file keeps their timing.
+    /// ASSA into an ASSA file is the exception, also from SE4: events are pasted as-is.
+    /// </summary>
+    private static void ShiftToAvoidOverlap(ObservableCollection<SubtitleLineViewModel> subtitles, int index, SubtitleFormat subtitleFormat, Subtitle clipboardSubtitle)
     {
+        if (clipboardSubtitle.Paragraphs.Count == 0 || index <= 0 || index > subtitles.Count)
+        {
+            return;
+        }
+
+        // The clipboard payload is bare Dialogue lines (no header, #10476), which parse as plain
+        // SSA rather than ASSA - so the whole SSA family counts here.
+        if (subtitleFormat is AdvancedSubStationAlpha or SubStationAlpha &&
+            clipboardSubtitle.OriginalFormat is AdvancedSubStationAlpha or SubStationAlpha)
+        {
+            return;
+        }
+
+        var previous = subtitles[index - 1];
+        var next = index < subtitles.Count ? subtitles[index] : null;
+        var pastedStart = clipboardSubtitle.Paragraphs[0].StartTime.TotalMilliseconds;
+        var overlapsPrevious = previous.EndTime.TotalMilliseconds > pastedStart;
+        var overlapsNext = next != null && next.StartTime.TotalMilliseconds < pastedStart;
+        if (!overlapsPrevious && !overlapsNext)
+        {
+            return;
+        }
+
+        var addMs = previous.EndTime.TotalMilliseconds - pastedStart + Se.Settings.General.MinimumBetweenLines.GetMilliseconds();
+        foreach (var p in clipboardSubtitle.Paragraphs)
+        {
+            p.StartTime.TotalMilliseconds += addMs;
+            p.EndTime.TotalMilliseconds += addMs;
+        }
+    }
+
+    private static List<SubtitleLineViewModel> LoadParagraphs(ObservableCollection<SubtitleLineViewModel> subtitles, int index, SubtitleFormat subtitleFormat, Subtitle subtitle)
+    {
+        var insertedLines = new List<SubtitleLineViewModel>(subtitle.Paragraphs.Count);
         foreach (var p in subtitle.Paragraphs)
         {
-            subtitles.Insert(index, new SubtitleLineViewModel(p, subtitleFormat));
+            var line = new SubtitleLineViewModel(p, subtitleFormat);
+            subtitles.Insert(index, line);
+            insertedLines.Add(line);
             index++;
         }
+
+        return insertedLines;
     }
 }
