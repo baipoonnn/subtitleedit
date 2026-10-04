@@ -1,6 +1,7 @@
 ﻿using Nikse.SubtitleEdit.Core.Common;
 using Nikse.SubtitleEdit.Logic;
 using Nikse.SubtitleEdit.Logic.Config;
+using Nikse.SubtitleEdit.UiLogic.SpellCheck.Thai;
 using SkiaSharp;
 using System;
 using System.Collections.Generic;
@@ -174,7 +175,7 @@ public class TesseractOcr
         for (var i = 0; i <= token.Length; i++)
         {
             // Same word characters as OcrFixEngine.SplitLine, which produced the unknown words.
-            var isWordChar = i < token.Length && (char.IsLetterOrDigit(token[i]) || token[i] == '\'' || token[i] == '’' || token[i] == '-');
+            var isWordChar = i < token.Length && (ThaiScript.IsWordChar(token[i]) || token[i] == '’');
             if (isWordChar)
             {
                 if (start < 0)

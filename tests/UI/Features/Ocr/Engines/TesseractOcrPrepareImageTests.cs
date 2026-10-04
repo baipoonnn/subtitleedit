@@ -57,6 +57,16 @@ public class TesseractOcrPrepareImageTests
     }
 
     [Fact]
+    public void MergeRetryUnknownWords_MatchesThaiCombiningMarksAndRejectsUnrelatedDigitChange()
+    {
+        const string firstPass = "ทับถมไว๊ 18 months";
+        const string retry = "ทับถมไว้ 718 months";
+
+        Assert.True(TesseractOcr.RetryIntroducesDigit(firstPass, retry));
+        Assert.Equal("ทับถมไว้ 18 months", TesseractOcr.MergeRetryUnknownWords(firstPass, retry, new[] { "ทับถมไว๊" }));
+    }
+
+    [Fact]
     public void MergeRetryUnknownWords_KeepsKnownWordsFromTheFirstPass()
     {
         var merged = TesseractOcr.MergeRetryUnknownWords("It was lime to stop", "It was time to stap", new[] { "lime" });
